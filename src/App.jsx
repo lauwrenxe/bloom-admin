@@ -9,6 +9,7 @@ import CalendarPage from "./CalendarPage.jsx";
 import AnalyticsPage from "./AnalyticsPage.jsx";
 import StudentsPage from "./StudentsPage.jsx";
 import AnnouncementsPage from "./AnnouncementsPage.jsx";
+import AdminProfilePage from "./AdminProfilePage.jsx";
 
 /* ─── palette ─── */
 const G = {
@@ -240,6 +241,7 @@ const ALL_NAV = NAV_SECTIONS.flatMap(s => s.items);
 /* ─── Admin Shell ─── */
 function AdminShell({ onLogout, user }) {
   const [active,      setActive]      = useState("dashboard");
+  const [showProfile, setShowProfile] = useState(false);
   const [pageLoading, setPageLoading] = useState(false);
   const [collapsed,   setCollapsed]   = useState(false);
 
@@ -437,12 +439,16 @@ function AdminShell({ onLogout, user }) {
               background:G.wash, padding:"4px 10px", borderRadius:20 }}>
               🌸 BLOOM
             </div>
-            <div style={{
+            <div onClick={() => setShowProfile(true)}
+            onMouseEnter={e => e.currentTarget.style.transform = "scale(1.08)"}
+            onMouseLeave={e => e.currentTarget.style.transform = ""}
+            style={{
               width:34, height:34, borderRadius:"50%",
               background:`linear-gradient(135deg,${G.base},${G.dark})`,
               display:"flex", alignItems:"center", justifyContent:"center",
               fontSize:13, color:"#fff", fontWeight:700,
               boxShadow:`0 2px 8px rgba(45,74,24,.25)`,
+              cursor:"pointer", transition:"transform .15s",
             }}>{initials}</div>
           </div>
         </div>
@@ -464,6 +470,7 @@ function AdminShell({ onLogout, user }) {
           )}
         </div>
       </main>
+      {showProfile && <AdminProfilePage user={user} onClose={() => setShowProfile(false)} />}
     </div>
   );
 }
