@@ -17,9 +17,10 @@ const G = {
   cream:"#f6f9f0", white:"#fafdf6",
 };
 
-const BloomLogo = ({ light }) => (
-  <div style={{ display:"flex", alignItems:"center", gap:"9px" }}>
-    <svg width="28" height="28" viewBox="0 0 30 30" fill="none">
+/* ─── Logo ─── */
+const BloomLogo = ({ light, small }) => (
+  <div style={{ display:"flex", alignItems:"center", gap: small ? 7 : 9 }}>
+    <svg width={small ? 22 : 28} height={small ? 22 : 28} viewBox="0 0 30 30" fill="none">
       <circle cx="15" cy="15" r="5.5" fill={light ? G.pale : G.base}/>
       <circle cx="15" cy="5"  r="4.2" fill={light ? "#fff" : G.light}/>
       <circle cx="15" cy="25" r="4.2" fill={light ? "#fff" : G.light}/>
@@ -30,11 +31,14 @@ const BloomLogo = ({ light }) => (
       <circle cx="7.5"  cy="22.5" r="3" fill={light ? "rgba(255,255,255,.6)" : G.pale}/>
       <circle cx="22.5" cy="22.5" r="3" fill={light ? "rgba(255,255,255,.6)" : G.pale}/>
     </svg>
-    <span style={{ fontFamily:"'Playfair Display',Georgia,serif", fontWeight:700,
-      fontSize:"20px", color: light ? "#fff" : G.dark, letterSpacing:"1px" }}>BLOOM</span>
+    <span style={{
+      fontFamily:"'Playfair Display',Georgia,serif", fontWeight:700,
+      fontSize: small ? 16 : 20, color: light ? "#fff" : G.dark, letterSpacing:"1px",
+    }}>BLOOM</span>
   </div>
 );
 
+/* ─── Input ─── */
 const Input = ({ label, value, onChange, type="text", placeholder="" }) => (
   <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
     {label && <label style={{ fontSize:"12px", fontWeight:600, color:G.dark,
@@ -50,6 +54,34 @@ const Input = ({ label, value, onChange, type="text", placeholder="" }) => (
   </div>
 );
 
+/* ─── Skeleton loader ─── */
+function Skeleton({ width = "100%", height = 16, radius = 8, style = {} }) {
+  return (
+    <div style={{
+      width, height, borderRadius: radius,
+      background: `linear-gradient(90deg, ${G.wash} 25%, ${G.cream} 50%, ${G.wash} 75%)`,
+      backgroundSize: "200% 100%",
+      animation: "shimmer 1.4s infinite",
+      ...style,
+    }} />
+  );
+}
+
+function PageSkeleton() {
+  return (
+    <div style={{ padding: "28px 32px", display: "flex", flexDirection: "column", gap: 20 }}>
+      <Skeleton width={220} height={28} />
+      <Skeleton width={160} height={14} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginTop: 8 }}>
+        {[1,2,3,4].map(i => <Skeleton key={i} height={90} radius={14} />)}
+      </div>
+      <Skeleton height={200} radius={14} />
+      <Skeleton height={140} radius={14} />
+    </div>
+  );
+}
+
+/* ─── Login ─── */
 function LoginPage({ onLogin }) {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
@@ -170,105 +202,273 @@ function LoginPage({ onLogin }) {
   );
 }
 
-const NAV_ITEMS = [
-  { id:"dashboard",    icon:"🏠", label:"Dashboard"    },
-  { id:"modules",      icon:"📂", label:"Modules"      },
-  { id:"assessments",  icon:"📝", label:"Assessments"  },
-  { id:"analytics",    icon:"📊", label:"Analytics"    },
-  { id:"certificates", icon:"🎓", label:"Certificates" },
-  { id:"seminars",     icon:"🎙️", label:"Seminars"     },
-  { id:"calendar",     icon:"📅", label:"Calendar"     },
-  { id: "students", icon: "👩‍🎓", label: "Students" },
-  { id: "announcements", icon: "📢", label: "Announcements" }
+/* ─── Nav items ─── */
+const NAV_SECTIONS = [
+  {
+    label: "Overview",
+    items: [
+      { id:"dashboard",    icon:"🏠", label:"Dashboard"    },
+      { id:"analytics",    icon:"📊", label:"Analytics"    },
+    ],
+  },
+  {
+    label: "Learning",
+    items: [
+      { id:"modules",      icon:"📂", label:"Modules"      },
+      { id:"assessments",  icon:"📝", label:"Assessments"  },
+      { id:"certificates", icon:"🎓", label:"Certificates" },
+    ],
+  },
+  {
+    label: "Events",
+    items: [
+      { id:"seminars",     icon:"🎙️", label:"Seminars"     },
+      { id:"calendar",     icon:"📅", label:"Calendar"     },
+    ],
+  },
+  {
+    label: "Community",
+    items: [
+      { id:"students",       icon:"👩‍🎓", label:"Students"       },
+      { id:"announcements",  icon:"📢", label:"Announcements"  },
+    ],
+  },
 ];
 
+const ALL_NAV = NAV_SECTIONS.flatMap(s => s.items);
+
+/* ─── Admin Shell ─── */
 function AdminShell({ onLogout, user }) {
-  const [active, setActive] = useState("dashboard");
+  const [active,      setActive]      = useState("dashboard");
+  const [pageLoading, setPageLoading] = useState(false);
+  const [collapsed,   setCollapsed]   = useState(false);
+
+  const navigate = (id) => {
+    if (id === active) return;
+    setPageLoading(true);
+    setActive(id);
+    setTimeout(() => setPageLoading(false), 420);
+  };
+
+  const initials = (user?.email ?? "A").slice(0, 1).toUpperCase();
+  const currentPage = ALL_NAV.find(n => n.id === active);
 
   return (
-    <div style={{ display:"flex", width:"100%", minHeight:"100vh",
+    <div style={{ display:"flex", width:"100%", height:"100vh", overflow:"hidden",
       fontFamily:"'DM Sans','Segoe UI',sans-serif" }}>
 
-      <aside style={{ width:"240px", flexShrink:0,
+      {/* ── Sidebar ── */}
+      <aside style={{
+        width: collapsed ? 68 : 240,
+        flexShrink: 0,
         background:`linear-gradient(180deg,${G.dark} 0%,${G.mid} 100%)`,
         display:"flex", flexDirection:"column",
-        position:"sticky", top:0, height:"100vh", overflowY:"auto" }}>
-        <div style={{ padding:"28px 24px 20px" }}>
-          <BloomLogo light/>
-          <div style={{ marginTop:"8px", fontSize:"10px", color:"rgba(255,255,255,.4)",
-            letterSpacing:"1.5px", textTransform:"uppercase" }}>Admin Portal</div>
+        height:"100vh", overflowY:"auto",
+        overflowX:"hidden",
+        transition:"width .22s cubic-bezier(.4,0,.2,1)",
+      }}>
+
+        {/* Logo + collapse */}
+        <div style={{
+          padding: collapsed ? "24px 0" : "26px 22px 18px",
+          display:"flex", alignItems:"center",
+          justifyContent: collapsed ? "center" : "space-between",
+        }}>
+          {!collapsed && <BloomLogo light />}
+          {collapsed && (
+            <svg width="22" height="22" viewBox="0 0 30 30" fill="none">
+              <circle cx="15" cy="15" r="5.5" fill={G.pale}/>
+              <circle cx="15" cy="5"  r="4.2" fill="#fff"/>
+              <circle cx="15" cy="25" r="4.2" fill="#fff"/>
+              <circle cx="5"  cy="15" r="4.2" fill="#fff"/>
+              <circle cx="25" cy="15" r="4.2" fill="#fff"/>
+            </svg>
+          )}
+          {!collapsed && (
+            <button onClick={() => setCollapsed(true)} style={{
+              background:"rgba(255,255,255,.1)", border:"none", borderRadius:6,
+              color:"rgba(255,255,255,.6)", cursor:"pointer", padding:"4px 7px", fontSize:14,
+            }}>‹</button>
+          )}
         </div>
-        <div style={{ height:"1px", background:"rgba(255,255,255,.1)", margin:"0 20px" }}/>
-        <nav style={{ padding:"16px 12px", flex:1 }}>
-          {NAV_ITEMS.map(item => (
-            <button key={item.id} onClick={()=>setActive(item.id)} style={{
-              display:"flex", alignItems:"center", gap:"12px",
-              width:"100%", padding:"11px 14px", borderRadius:"10px",
-              border:"none", cursor:"pointer", textAlign:"left",
-              fontFamily:"'DM Sans',sans-serif", fontSize:"13.5px", fontWeight:500,
-              marginBottom:"4px", transition:"all .18s",
-              background: active===item.id ? "rgba(255,255,255,.15)" : "transparent",
-              color:      active===item.id ? "#fff" : "rgba(255,255,255,.6)",
-              borderLeft: active===item.id ? `3px solid ${G.pale}` : "3px solid transparent",
-            }}>
-              <span style={{ fontSize:"16px" }}>{item.icon}</span>
-              {item.label}
-            </button>
+
+        {collapsed && (
+          <button onClick={() => setCollapsed(false)} style={{
+            background:"rgba(255,255,255,.1)", border:"none", borderRadius:6, margin:"0 auto 12px",
+            color:"rgba(255,255,255,.6)", cursor:"pointer", padding:"4px 8px", fontSize:14,
+          }}>›</button>
+        )}
+
+        <div style={{ height:"1px", background:"rgba(255,255,255,.1)", margin:"0 16px 8px" }}/>
+
+        {/* Nav sections */}
+        <nav style={{ padding: collapsed ? "8px 6px" : "8px 10px", flex:1 }}>
+          {NAV_SECTIONS.map(section => (
+            <div key={section.label} style={{ marginBottom: collapsed ? 12 : 20 }}>
+              {!collapsed && (
+                <div style={{
+                  fontSize:10, fontWeight:700, letterSpacing:"1.2px",
+                  textTransform:"uppercase", color:"rgba(255,255,255,.3)",
+                  padding:"0 8px", marginBottom:6,
+                }}>{section.label}</div>
+              )}
+              {section.items.map(item => {
+                const isActive = active === item.id;
+                return (
+                  <button key={item.id} onClick={() => navigate(item.id)}
+                    title={collapsed ? item.label : ""}
+                    style={{
+                      display:"flex", alignItems:"center",
+                      gap: collapsed ? 0 : 10,
+                      justifyContent: collapsed ? "center" : "flex-start",
+                      width:"100%", padding: collapsed ? "10px 0" : "9px 12px",
+                      borderRadius:"10px", border:"none", cursor:"pointer",
+                      textAlign:"left", fontFamily:"'DM Sans',sans-serif",
+                      fontSize:"13px", fontWeight: isActive ? 600 : 400,
+                      marginBottom:"2px", transition:"all .15s",
+                      background: isActive
+                        ? "rgba(255,255,255,.16)"
+                        : "transparent",
+                      color: isActive ? "#fff" : "rgba(255,255,255,.55)",
+                      borderLeft: !collapsed
+                        ? `3px solid ${isActive ? G.pale : "transparent"}`
+                        : "none",
+                      boxShadow: isActive && !collapsed
+                        ? "inset 0 0 0 1px rgba(255,255,255,.08)"
+                        : "none",
+                    }}
+                    onMouseEnter={e => {
+                      if (!isActive) {
+                        e.currentTarget.style.background = "rgba(255,255,255,.08)";
+                        e.currentTarget.style.color = "rgba(255,255,255,.85)";
+                      }
+                    }}
+                    onMouseLeave={e => {
+                      if (!isActive) {
+                        e.currentTarget.style.background = "transparent";
+                        e.currentTarget.style.color = "rgba(255,255,255,.55)";
+                      }
+                    }}
+                  >
+                    <span style={{ fontSize:16, flexShrink:0 }}>{item.icon}</span>
+                    {!collapsed && item.label}
+                  </button>
+                );
+              })}
+            </div>
           ))}
         </nav>
-        <div style={{ padding:"16px 20px 28px" }}>
-          <div style={{ background:"rgba(255,255,255,.08)", borderRadius:"12px",
-            padding:"14px 16px", marginBottom:"12px" }}>
-            <div style={{ fontSize:"12px", fontWeight:700, color:"rgba(255,255,255,.9)" }}>
-              GADRC Admin
-            </div>
-            <div style={{ fontSize:"11px", color:"rgba(255,255,255,.45)", marginTop:"2px" }}>
-              {user?.email}
-            </div>
-          </div>
-          <button onClick={onLogout} style={{
-            width:"100%", padding:"9px", borderRadius:"10px",
-            border:"1px solid rgba(255,255,255,.15)", background:"transparent",
-            color:"rgba(255,255,255,.55)", fontSize:"12.5px", cursor:"pointer",
-            fontFamily:"'DM Sans',sans-serif", transition:"all .18s",
-          }}
-          onMouseEnter={e=>{ e.currentTarget.style.background="rgba(255,255,255,.08)"; e.currentTarget.style.color="#fff"; }}
-          onMouseLeave={e=>{ e.currentTarget.style.background="transparent"; e.currentTarget.style.color="rgba(255,255,255,.55)"; }}>
-            Sign Out
-          </button>
+
+        {/* User card */}
+        <div style={{ padding: collapsed ? "12px 6px" : "12px 14px 24px" }}>
+          <div style={{ height:"1px", background:"rgba(255,255,255,.08)", marginBottom:12 }}/>
+          {!collapsed ? (
+            <>
+              <div style={{
+                background:"rgba(255,255,255,.07)", borderRadius:12,
+                padding:"12px 14px", marginBottom:10,
+                border:"1px solid rgba(255,255,255,.08)",
+              }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{
+                    width:32, height:32, borderRadius:"50%",
+                    background:`linear-gradient(135deg,${G.light},${G.base})`,
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    fontSize:13, fontWeight:700, color:"#fff", flexShrink:0,
+                  }}>{initials}</div>
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ fontSize:12, fontWeight:700, color:"rgba(255,255,255,.9)",
+                      overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      GADRC Admin
+                    </div>
+                    <div style={{ fontSize:10, color:"rgba(255,255,255,.4)",
+                      overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {user?.email}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <button onClick={onLogout} style={{
+                width:"100%", padding:"8px", borderRadius:10,
+                border:"1px solid rgba(255,255,255,.12)", background:"transparent",
+                color:"rgba(255,255,255,.5)", fontSize:"12px", cursor:"pointer",
+                fontFamily:"'DM Sans',sans-serif", transition:"all .15s",
+              }}
+              onMouseEnter={e=>{ e.currentTarget.style.background="rgba(255,255,255,.08)"; e.currentTarget.style.color="#fff"; }}
+              onMouseLeave={e=>{ e.currentTarget.style.background="transparent"; e.currentTarget.style.color="rgba(255,255,255,.5)"; }}>
+                Sign Out
+              </button>
+            </>
+          ) : (
+            <button onClick={onLogout} title="Sign Out" style={{
+              width:"100%", padding:"8px 0", borderRadius:10,
+              border:"1px solid rgba(255,255,255,.12)", background:"transparent",
+              color:"rgba(255,255,255,.5)", fontSize:16, cursor:"pointer",
+              transition:"all .15s",
+            }}
+            onMouseEnter={e=>{ e.currentTarget.style.background="rgba(255,255,255,.08)"; e.currentTarget.style.color="#fff"; }}
+            onMouseLeave={e=>{ e.currentTarget.style.background="transparent"; e.currentTarget.style.color="rgba(255,255,255,.5)"; }}>
+              ⏻
+            </button>
+          )}
         </div>
       </aside>
 
-      <main style={{ flex:1, background:G.white, overflowY:"auto" }}>
-        <div style={{ background:"#fff", borderBottom:`1px solid ${G.wash}`,
-          padding:"0 36px", height:"60px", display:"flex", alignItems:"center",
-          justifyContent:"space-between", position:"sticky", top:0, zIndex:50 }}>
-          <div style={{ fontSize:"14px", color:"#888" }}>
-            <span style={{ color:G.base, fontWeight:600 }}>BLOOM</span>
-            <span style={{ margin:"0 8px", color:"#ccc" }}>/</span>
-            {NAV_ITEMS.find(n=>n.id===active)?.label}
+      {/* ── Main ── */}
+      <main style={{ flex:1, background:G.cream, overflowY:"auto", minWidth:0, height:"100vh" }}>
+
+        {/* Topbar */}
+        <div style={{
+          background:G.white, borderBottom:`1px solid ${G.wash}`,
+          padding:"0 32px", height:58,
+          display:"flex", alignItems:"center", justifyContent:"space-between",
+          position:"sticky", top:0, zIndex:50,
+          boxShadow:"0 1px 8px rgba(45,74,24,.05)",
+        }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:18 }}>{currentPage?.icon}</span>
+            <span style={{ fontFamily:"'Playfair Display',serif", fontWeight:700,
+              fontSize:16, color:G.dark }}>{currentPage?.label}</span>
+            <span style={{ fontSize:12, color:G.pale, margin:"0 4px" }}>•</span>
+            <span style={{ fontSize:12, color:"#aaa" }}>GADRC Admin Portal</span>
           </div>
-          <div style={{ width:"36px", height:"36px", borderRadius:"50%",
-            background:`linear-gradient(135deg,${G.base},${G.dark})`,
-            display:"flex", alignItems:"center", justifyContent:"center",
-            fontSize:"14px", color:"#fff", fontWeight:700 }}>A</div>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ fontSize:12, color:G.light, fontWeight:500,
+              background:G.wash, padding:"4px 10px", borderRadius:20 }}>
+              🌸 BLOOM
+            </div>
+            <div style={{
+              width:34, height:34, borderRadius:"50%",
+              background:`linear-gradient(135deg,${G.base},${G.dark})`,
+              display:"flex", alignItems:"center", justifyContent:"center",
+              fontSize:13, color:"#fff", fontWeight:700,
+              boxShadow:`0 2px 8px rgba(45,74,24,.25)`,
+            }}>{initials}</div>
+          </div>
         </div>
-       <div style={{ padding:"36px" }}>
-  {active === "dashboard"    && <DashboardPage />}
-  {active === "modules"      && <ModulesPage />}
-  {active === "assessments"  && <AssessmentsPage />}
-  {active === "seminars" && <SeminarsPage />}
-  {active === "certificates" && <CertificatesPage />}
-  {active === "calendar" && <CalendarPage />}
-  {active === "analytics" && <AnalyticsPage />}
-  {active === "students" && <StudentsPage />}
-  {active === "announcements" && <AnnouncementsPage />}
-</div>
+
+        {/* Page content */}
+        <div>
+          {pageLoading ? <PageSkeleton /> : (
+            <>
+              {active === "dashboard"    && <DashboardPage />}
+              {active === "modules"      && <ModulesPage />}
+              {active === "assessments"  && <AssessmentsPage />}
+              {active === "seminars"     && <SeminarsPage />}
+              {active === "certificates" && <CertificatesPage />}
+              {active === "calendar"     && <CalendarPage />}
+              {active === "analytics"    && <AnalyticsPage />}
+              {active === "students"     && <StudentsPage />}
+              {active === "announcements"&& <AnnouncementsPage />}
+            </>
+          )}
+        </div>
       </main>
     </div>
   );
 }
 
+/* ─── Root ─── */
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [user,     setUser]     = useState(null);
@@ -294,10 +494,16 @@ export default function App() {
 
   if (checking) return (
     <div style={{ width:"100%", height:"100vh", display:"flex",
-      alignItems:"center", justifyContent:"center",
-      background:"#f6f9f0", fontFamily:"'DM Sans',sans-serif",
-      fontSize:"14px", color:"#888" }}>
-      Loading BLOOM…
+      alignItems:"center", justifyContent:"center", flexDirection:"column", gap:16,
+      background:G.cream, fontFamily:"'DM Sans',sans-serif" }}>
+      <svg width="40" height="40" viewBox="0 0 30 30" fill="none">
+        <circle cx="15" cy="15" r="5.5" fill={G.base}/>
+        <circle cx="15" cy="5"  r="4.2" fill={G.light}/>
+        <circle cx="15" cy="25" r="4.2" fill={G.light}/>
+        <circle cx="5"  cy="15" r="4.2" fill={G.light}/>
+        <circle cx="25" cy="15" r="4.2" fill={G.light}/>
+      </svg>
+      <div style={{ fontSize:14, color:G.base, fontWeight:500 }}>Loading BLOOM…</div>
     </div>
   );
 
@@ -309,8 +515,13 @@ export default function App() {
         html,body,#root{width:100%;min-height:100vh;overflow-x:hidden;}
         body{margin:0!important;padding:0!important;}
         ::-webkit-scrollbar{width:6px;}
-        ::-webkit-scrollbar-track{background:#f6f9f0;}
-        ::-webkit-scrollbar-thumb{background:#b5cc8e;border-radius:3px;}
+        ::-webkit-scrollbar-track{background:${G.cream};}
+        ::-webkit-scrollbar-thumb{background:${G.pale};border-radius:3px;}
+        ::-webkit-scrollbar-thumb:hover{background:${G.light};}
+        @keyframes shimmer {
+          0%   { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
       `}</style>
       {loggedIn
         ? <AdminShell onLogout={handleLogout} user={user}/>
