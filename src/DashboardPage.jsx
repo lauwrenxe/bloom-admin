@@ -2,24 +2,34 @@ import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
 
 const G = {
-  dark:  "#2d4a18",
-  mid:   "#3a5a20",
-  base:  "#5a7a3a",
-  light: "#8ab060",
-  pale:  "#b5cc8e",
-  wash:  "#e8f2d8",
-  cream: "#f6f9f0",
-  white: "#fafdf6",
+  dark:  "#2d4a18", mid:   "#3a5a20", base:  "#5a7a3a",
+  light: "#8ab060", pale:  "#b5cc8e", wash:  "#e8f2d8",
+  cream: "#f6f9f0", white: "#fafdf6",
 };
+
+const SHIMMER_CSS = `
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, ${G.wash} 25%, ${G.cream} 50%, ${G.wash} 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 8px;
+}`;
+
+function Shimmer({ w = "100%", h = 16, r = 8, style = {} }) {
+  return <div className="shimmer" style={{ width: w, height: h, borderRadius: r, flexShrink: 0, ...style }} />;
+}
 
 function Card({ children, style = {} }) {
   return (
     <div style={{
       background: G.white, border: `1px solid ${G.pale}`,
-      borderRadius: 14, padding: "24px 28px", ...style,
-    }}>
-      {children}
-    </div>
+      borderRadius: 14, padding: "24px 28px",
+      boxShadow: "0 2px 8px rgba(45,74,24,.06)", ...style,
+    }}>{children}</div>
   );
 }
 
@@ -27,40 +37,30 @@ function StatCard({ emoji, label, value, sub, color }) {
   return (
     <Card style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ fontSize: 28 }}>{emoji}</div>
-      <div style={{ fontSize: 13, color: G.base, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 38, fontWeight: 800, color: color || G.dark, lineHeight: 1 }}>
-        {value}
-      </div>
+      <div style={{ fontSize: 13, color: G.base, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 38, fontWeight: 800, color: color || G.dark, lineHeight: 1 }}>{value}</div>
       {sub && <div style={{ fontSize: 12, color: G.light, marginTop: 2 }}>{sub}</div>}
     </Card>
   );
 }
 
 function SectionTitle({ children }) {
-  return (
-    <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: G.dark, margin: "0 0 14px 0" }}>
-      {children}
-    </h2>
-  );
+  return <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: G.dark, margin: "0 0 14px 0" }}>{children}</h2>;
 }
 
 function Tag({ children, color }) {
-  const colors = {
+  const map = {
     green:  { bg: G.wash,    text: G.dark },
     yellow: { bg: "#fff8e1", text: "#7a5c00" },
     gray:   { bg: "#f0f0f0", text: "#555" },
     blue:   { bg: "#e8f0fe", text: "#1a56a8" },
   };
-  const c = colors[color] || colors.gray;
+  const c = map[color] || map.gray;
   return (
     <span style={{
       background: c.bg, color: c.text, borderRadius: 20, padding: "2px 10px",
       fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase",
-    }}>
-      {children}
-    </span>
+    }}>{children}</span>
   );
 }
 
@@ -76,6 +76,45 @@ function MiniBar({ label, value, max, color }) {
         <div style={{ width: `${pct}%`, height: 8, borderRadius: 6, background: color || G.base, transition: "width .6s ease" }} />
       </div>
     </div>
+  );
+}
+
+function EmptyState({ emoji, title, message }) {
+  return (
+    <div style={{ textAlign: "center", padding: "28px 16px" }}>
+      <div style={{ fontSize: 32, marginBottom: 8 }}>{emoji}</div>
+      {title && <div style={{ fontSize: 14, fontWeight: 600, color: G.base, marginBottom: 4 }}>{title}</div>}
+      <div style={{ fontSize: 13, color: G.light }}>{message}</div>
+    </div>
+  );
+}
+
+// ── Skeleton screens ──────────────────────────────────────────────
+function SkeletonStatCard() {
+  return (
+    <Card style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Shimmer w={32} h={28} r={6} />
+      <Shimmer w="60%" h={11} />
+      <Shimmer w="40%" h={34} r={6} />
+      <Shimmer w="80%" h={11} />
+    </Card>
+  );
+}
+
+function SkeletonListCard({ rows = 4 }) {
+  return (
+    <Card>
+      <Shimmer w="45%" h={18} style={{ marginBottom: 20 }} />
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} style={{ marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <Shimmer w="55%" h={13} />
+            <Shimmer w="12%" h={13} />
+          </div>
+          <Shimmer w="100%" h={8} />
+        </div>
+      ))}
+    </Card>
   );
 }
 
@@ -103,10 +142,8 @@ export default function DashboardPage() {
   useEffect(() => { fetchAll(); }, []);
 
   const fetchAll = async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
 
-    // ── core counts ──────────────────────────────────────────────────
     try {
       const [
         { count: totalModules },
@@ -123,62 +160,40 @@ export default function DashboardPage() {
         supabase.from("certificates").select("*", { count: "exact", head: true }),
         supabase.from("v_module_completion_stats").select("*").limit(5),
       ]);
-
       setStats(prev => ({
         ...prev,
-        totalModules:     totalModules     ?? 0,
-        publishedModules: publishedModules ?? 0,
-        totalAssessments: totalAssessments ?? 0,
-        totalSeminars:    totalSeminars    ?? 0,
-        totalCerts:       totalCerts       ?? 0,
+        totalModules: totalModules ?? 0, publishedModules: publishedModules ?? 0,
+        totalAssessments: totalAssessments ?? 0, totalSeminars: totalSeminars ?? 0,
+        totalCerts: totalCerts ?? 0,
       }));
       setModuleStats(modStats ?? []);
     } catch (err) {
       setError("Failed to load dashboard data: " + err.message);
-      setLoading(false);
-      return;
+      setLoading(false); return;
     }
 
-    // ── student count (two-step) ─────────────────────────────────────
     try {
-      const { data: roleRow } = await supabase
-        .from("roles").select("id").eq("name", "student").single();
+      const { data: roleRow } = await supabase.from("roles").select("id").eq("name", "student").single();
       if (roleRow) {
-        const { count } = await supabase
-          .from("user_roles")
-          .select("*", { count: "exact", head: true })
-          .eq("role_id", roleRow.id);
+        const { count } = await supabase.from("user_roles").select("*", { count: "exact", head: true }).eq("role_id", roleRow.id);
         setStats(prev => ({ ...prev, totalStudents: count ?? 0 }));
       }
     } catch (_) {}
 
-    // ── leaderboard: deduplicate student_badges by user_id ───────────
     try {
-      const { data: lb } = await supabase
-        .from("student_badges")
-        .select("user_id, profiles(full_name)");
-
+      const { data: lb } = await supabase.from("student_badges").select("user_id, profiles(full_name)");
       const map = {};
       (lb ?? []).forEach((row, idx) => {
         const uid = row.user_id ?? `unknown_${idx}`;
-        if (!map[uid]) {
-          map[uid] = { user_id: uid, full_name: row.profiles?.full_name ?? "—", badge_count: 0 };
-        }
+        if (!map[uid]) map[uid] = { user_id: uid, full_name: row.profiles?.full_name ?? "—", badge_count: 0 };
         map[uid].badge_count += 1;
       });
-
-      setLeaderboard(
-        Object.values(map).sort((a, b) => b.badge_count - a.badge_count).slice(0, 5)
-      );
+      setLeaderboard(Object.values(map).sort((a, b) => b.badge_count - a.badge_count).slice(0, 5));
     } catch (_) {}
 
-    // ── activity logs ────────────────────────────────────────────────
     try {
       const { data: logs, error: logErr } = await supabase
-        .from("activity_logs")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(8);
+        .from("activity_logs").select("*").order("created_at", { ascending: false }).limit(8);
       if (!logErr) setActivity(logs ?? []);
     } catch (_) {}
 
@@ -192,10 +207,23 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 320, flexDirection: "column", gap: 12 }}>
-        <div style={{ fontSize: 36 }}>🌸</div>
-        <div style={{ color: G.base, fontSize: 15 }}>Loading dashboard…</div>
-      </div>
+      <>
+        <style>{SHIMMER_CSS}</style>
+        <div style={{ padding: "28px 32px", maxWidth: 1200, margin: "0 auto" }}>
+          <div style={{ marginBottom: 28 }}>
+            <Shimmer w={160} h={32} r={10} style={{ marginBottom: 10 }} />
+            <Shimmer w={300} h={14} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16, marginBottom: 28 }}>
+            {[...Array(5)].map((_, i) => <SkeletonStatCard key={i} />)}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+            <SkeletonListCard rows={4} />
+            <SkeletonListCard rows={4} />
+          </div>
+          <SkeletonListCard rows={5} />
+        </div>
+      </>
     );
   }
 
@@ -210,149 +238,97 @@ export default function DashboardPage() {
   const draftCount = (stats.totalModules ?? 0) - (stats.publishedModules ?? 0);
 
   return (
-    <div style={{ padding: "28px 32px", maxWidth: 1200, margin: "0 auto" }}>
+    <>
+      <style>{SHIMMER_CSS}</style>
+      <div style={{ padding: "28px 32px", maxWidth: 1200, margin: "0 auto" }}>
 
-      {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, fontWeight: 800, color: G.dark, margin: 0 }}>
-          Dashboard
-        </h1>
-        <p style={{ color: G.base, margin: "4px 0 0", fontSize: 14 }}>
-          Welcome back — here's what's happening at GADRC today.
-        </p>
-      </div>
-
-      {/* Stat Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16, marginBottom: 28 }}>
-        <StatCard emoji="📚" label="Total Modules"       value={stats.totalModules ?? 0}
-          sub={`${stats.publishedModules ?? 0} published · ${draftCount} draft`} />
-        <StatCard emoji="📝" label="Assessments"         value={stats.totalAssessments ?? 0} />
-        <StatCard emoji="🎓" label="Seminars"            value={stats.totalSeminars ?? 0} />
-        <StatCard emoji="🏅" label="Certificates Issued" value={stats.totalCerts ?? 0} color={G.mid} />
-        <StatCard emoji="👩‍🎓" label="Students"           value={stats.totalStudents ?? "—"} />
-      </div>
-
-      {/* Middle row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
-
-        {/* Module Completion */}
-        <Card>
-          <SectionTitle>📊 Module Completion (Top 5)</SectionTitle>
-          {moduleStats.length === 0 ? (
-            <p style={{ color: G.light, fontSize: 14 }}>No module data yet.</p>
-          ) : (
-            moduleStats.map((m, i) => (
-              <MiniBar
-                key={m.module_id ?? i}
-                label={m.title ?? "Untitled Module"}
-                value={m.completed_students ?? 0}
-                max={Math.max(m.total_students ?? 0, 1)}
-                color={i === 0 ? G.dark : i === 1 ? G.mid : G.base}
-              />
-            ))
-          )}
-        </Card>
-
-        {/* Leaderboard */}
-        <Card>
-          <SectionTitle>🏆 Student Leaderboard (Top 5)</SectionTitle>
-          {leaderboard.length === 0 ? (
-            <p style={{ color: G.light, fontSize: 14 }}>No leaderboard data yet.</p>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: `2px solid ${G.wash}` }}>
-                  {["Rank", "Name", "Badges"].map(h => (
-                    <th key={h} style={{
-                      textAlign: h === "Rank" ? "center" : "left",
-                      padding: "6px 8px", fontSize: 11, fontWeight: 700,
-                      color: G.base, letterSpacing: ".05em", textTransform: "uppercase",
-                    }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {leaderboard.map((row, i) => (
-                  <tr key={row.user_id} style={{
-                    borderBottom: `1px solid ${G.wash}`,
-                    background: i === 0 ? G.cream : "transparent",
-                  }}>
-                    <td style={{ textAlign: "center", padding: "8px", fontSize: 18 }}>
-                      {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}
-                    </td>
-                    <td style={{ padding: "8px", fontSize: 14, color: G.dark, fontWeight: i === 0 ? 700 : 500 }}>
-                      {row.full_name}
-                    </td>
-                    <td style={{ padding: "8px", fontSize: 14, color: G.base }}>
-                      {row.badge_count}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
-      </div>
-
-      {/* Recent Activity */}
-      <Card>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-          <SectionTitle>🕐 Recent Activity</SectionTitle>
-          <button onClick={fetchAll} style={{
-            background: "none", border: `1px solid ${G.pale}`,
-            borderRadius: 8, padding: "4px 12px",
-            fontSize: 12, color: G.base, cursor: "pointer",
-          }}>
-            ↻ Refresh
-          </button>
+        <div style={{ marginBottom: 28 }}>
+          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, fontWeight: 800, color: G.dark, margin: 0 }}>Dashboard</h1>
+          <p style={{ color: G.base, margin: "4px 0 0", fontSize: 14 }}>Welcome back — here's what's happening at GADRC today.</p>
         </div>
-        {activity.length === 0 ? (
-          <p style={{ color: G.light, fontSize: 14 }}>No recent activity logged.</p>
-        ) : (
-          <div>
-            {activity.map((log, i) => (
-              <div key={log.id ?? i} style={{
-                display: "flex", alignItems: "flex-start", gap: 14,
-                padding: "10px 0",
-                borderBottom: i < activity.length - 1 ? `1px solid ${G.wash}` : "none",
-              }}>
-                <div style={{
-                  width: 36, height: 36, borderRadius: "50%", background: G.wash,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 16, flexShrink: 0,
-                }}>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16, marginBottom: 28 }}>
+          <StatCard emoji="📚" label="Total Modules"       value={stats.totalModules ?? 0} sub={`${stats.publishedModules ?? 0} published · ${draftCount} draft`} />
+          <StatCard emoji="📝" label="Assessments"         value={stats.totalAssessments ?? 0} />
+          <StatCard emoji="🎓" label="Seminars"            value={stats.totalSeminars ?? 0} />
+          <StatCard emoji="🏅" label="Certificates Issued" value={stats.totalCerts ?? 0} color={G.mid} />
+          <StatCard emoji="👩‍🎓" label="Students"           value={stats.totalStudents ?? "—"} />
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+          <Card>
+            <SectionTitle>📊 Module Completion (Top 5)</SectionTitle>
+            {moduleStats.length === 0
+              ? <EmptyState emoji="📊" title="No data yet" message="Module completion will appear here once students start." />
+              : moduleStats.map((m, i) => (
+                <MiniBar key={m.module_id ?? i} label={m.title ?? "Untitled Module"}
+                  value={m.completed_students ?? 0} max={Math.max(m.total_students ?? 0, 1)}
+                  color={i === 0 ? G.dark : i === 1 ? G.mid : G.base} />
+              ))
+            }
+          </Card>
+
+          <Card>
+            <SectionTitle>🏆 Student Leaderboard (Top 5)</SectionTitle>
+            {leaderboard.length === 0
+              ? <EmptyState emoji="🏆" title="No leaderboard yet" message="Students will appear here as they earn badges." />
+              : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: `2px solid ${G.wash}` }}>
+                      {["Rank", "Name", "Badges"].map(h => (
+                        <th key={h} style={{ textAlign: h === "Rank" ? "center" : "left", padding: "6px 8px", fontSize: 11, fontWeight: 700, color: G.base, letterSpacing: ".05em", textTransform: "uppercase" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaderboard.map((row, i) => (
+                      <tr key={row.user_id} style={{ borderBottom: `1px solid ${G.wash}`, background: i === 0 ? G.cream : "transparent" }}>
+                        <td style={{ textAlign: "center", padding: "8px", fontSize: 18 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}</td>
+                        <td style={{ padding: "8px", fontSize: 14, color: G.dark, fontWeight: i === 0 ? 700 : 500 }}>{row.full_name}</td>
+                        <td style={{ padding: "8px", fontSize: 14, color: G.base }}>{row.badge_count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            }
+          </Card>
+        </div>
+
+        <Card>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <SectionTitle>🕐 Recent Activity</SectionTitle>
+            <button onClick={fetchAll} style={{ background: "none", border: `1px solid ${G.pale}`, borderRadius: 8, padding: "4px 12px", fontSize: 12, color: G.base, cursor: "pointer" }}>↻ Refresh</button>
+          </div>
+          {activity.length === 0
+            ? <EmptyState emoji="🕐" title="No activity yet" message="Recent actions across GADRC will appear here." />
+            : activity.map((log, i) => (
+              <div key={log.id ?? i} style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "10px 0", borderBottom: i < activity.length - 1 ? `1px solid ${G.wash}` : "none" }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: G.wash, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>
                   {getActivityEmoji(log.action)}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, color: G.dark, fontWeight: 500 }}>
-                    {log.description ?? log.action ?? "Activity"}
-                  </div>
-                  <div style={{ fontSize: 11, color: G.light, marginTop: 2 }}>
-                    {fmtDate(log.created_at)}
-                  </div>
+                  <div style={{ fontSize: 13, color: G.dark, fontWeight: 500 }}>{log.description ?? log.action ?? "Activity"}</div>
+                  <div style={{ fontSize: 11, color: G.light, marginTop: 2 }}>{fmtDate(log.created_at)}</div>
                 </div>
                 <Tag color="gray">{log.action ?? "event"}</Tag>
               </div>
+            ))
+          }
+        </Card>
+
+        <div style={{ marginTop: 20 }}>
+          <SectionTitle>⚡ Quick Actions</SectionTitle>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {["📚 Manage Modules", "📝 Manage Assessments", "🎓 Manage Seminars", "🏅 Certificates", "📅 Calendar"].map(label => (
+              <div key={label} style={{ background: G.white, border: `1px solid ${G.pale}`, borderRadius: 12, padding: "12px 20px", fontSize: 13, color: G.mid, fontWeight: 600, cursor: "default", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 1px 4px rgba(45,74,24,.05)" }}>
+                {label}
+              </div>
             ))}
           </div>
-        )}
-      </Card>
-
-      {/* Quick Actions */}
-      <div style={{ marginTop: 20 }}>
-        <SectionTitle>⚡ Quick Actions</SectionTitle>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {["📚 Manage Modules", "📝 Manage Assessments", "🎓 Manage Seminars", "🏅 Certificates", "📅 Calendar"].map(label => (
-            <div key={label} style={{
-              background: G.white, border: `1px solid ${G.pale}`, borderRadius: 12,
-              padding: "12px 20px", fontSize: 13, color: G.mid, fontWeight: 600,
-              cursor: "default", display: "flex", alignItems: "center", gap: 8,
-            }}>
-              {label}
-            </div>
-          ))}
         </div>
       </div>
-    </div>
+    </>
   );
 }
