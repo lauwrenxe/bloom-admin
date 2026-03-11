@@ -7,6 +7,8 @@ import SeminarsPage from "./SeminarsPage.jsx";
 import CertificatesPage from "./CertificatesPage.jsx";
 import CalendarPage from "./CalendarPage.jsx";
 import AnalyticsPage from "./AnalyticsPage.jsx";
+import StudentsPage from "./StudentsPage.jsx";
+import AnnouncementsPage from "./AnnouncementsPage.jsx";
 
 /* ─── palette ─── */
 const G = {
@@ -176,6 +178,8 @@ const NAV_ITEMS = [
   { id:"certificates", icon:"🎓", label:"Certificates" },
   { id:"seminars",     icon:"🎙️", label:"Seminars"     },
   { id:"calendar",     icon:"📅", label:"Calendar"     },
+  { id: "students", icon: "👩‍🎓", label: "Students" },
+  { id: "announcements", icon: "📢", label: "Announcements" }
 ];
 
 function AdminShell({ onLogout, user }) {
@@ -257,6 +261,8 @@ function AdminShell({ onLogout, user }) {
   {active === "certificates" && <CertificatesPage />}
   {active === "calendar" && <CalendarPage />}
   {active === "analytics" && <AnalyticsPage />}
+  {active === "students" && <StudentsPage />}
+  {active === "announcements" && <AnnouncementsPage />}
 </div>
       </main>
     </div>
