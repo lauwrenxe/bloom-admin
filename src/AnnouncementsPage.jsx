@@ -199,8 +199,9 @@ export default function AnnouncementsPage() {
     if (form.id) {
       ({ error: err } = await supabase.from("announcements").update(payload).eq("id", form.id));
     } else {
-      ({ error: err } = const { data: { user } } = await supabase.auth.getUser();
-      ({ error: err } = await supabase.from("announcements").insert({ ...payload, created_by: user?.id ?? null })));
+      const result = await supabase.from("announcements").insert({ ...payload, created_by: user?.id ?? null });
+err = result.error;
+      ({ error: err } = await supabase.from("announcements").insert({ ...payload, created_by: user?.id ?? null }));
     }
     setSaving(false);
     if (err) { setError(err.message); return; }
