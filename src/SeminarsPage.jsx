@@ -2,622 +2,543 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
 
 const G = {
-  dark:  "#2d4a18", mid:   "#3a5a20", base:  "#5a7a3a",
-  light: "#8ab060", pale:  "#b5cc8e", wash:  "#e8f2d8",
+  dark: "#2d4a18", mid: "#3a5a20", base: "#5a7a3a",
+  light: "#8ab060", pale: "#b5cc8e", wash: "#e8f2d8",
   cream: "#f6f9f0", white: "#fafdf6",
 };
 
-const SUPABASE_URL = "https://vfpgzuehfebhawlidhsz.supabase.co";
-
-// ── UI Atoms ──────────────────────────────────────────────────────
-
-function Btn({ children, onClick, variant = "primary", small, disabled, style: s = {} }) {
-  const base = {
-    border: "none", borderRadius: 8, cursor: disabled ? "not-allowed" : "pointer",
-    fontFamily: "'DM Sans', sans-serif", fontWeight: 600,
-    padding: small ? "6px 14px" : "9px 20px",
-    fontSize: small ? 12 : 13, opacity: disabled ? 0.5 : 1,
-    transition: "all .15s", ...s,
-  };
-  const variants = {
-    primary:   { background: `linear-gradient(135deg,${G.base},${G.dark})`, color: "#fff" },
-    secondary: { background: G.wash,          color: G.dark },
-    danger:    { background: "#fef2f2",       color: "#c0392b", border: "1px solid #f5c6cb" },
-    ghost:     { background: "transparent",   color: G.base,   border: `1px solid ${G.pale}` },
-  };
-  return <button onClick={onClick} disabled={disabled} style={{ ...base, ...variants[variant] }}>{children}</button>;
+function formatDate(iso) {
+  if (!iso) return "—";
+  const utcStr = iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z";
+  return new Date(utcStr).toLocaleString("en-PH", {
+    timeZone: "Asia/Manila", month: "short", day: "numeric",
+    year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true,
+  });
 }
 
-function Input({ label, value, onChange, placeholder, type = "text", required }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {label && <label style={{ fontSize: 12, fontWeight: 600, color: G.mid, textTransform: "uppercase", letterSpacing: ".4px" }}>
-        {label}{required && " *"}
-      </label>}
-      <input type={type} value={value ?? ""} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-        style={{ border: `1.5px solid ${G.wash}`, borderRadius: 10, padding: "9px 13px",
-          fontSize: 13.5, fontFamily: "'DM Sans', sans-serif", background: "#fff", color: "#222", outline: "none" }}
-        onFocus={e => e.target.style.borderColor = G.base}
-        onBlur={e  => e.target.style.borderColor = G.wash}
-      />
-    </div>
-  );
+function formatDateShort(iso) {
+  if (!iso) return "—";
+  const utcStr = iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z";
+  return new Date(utcStr).toLocaleString("en-PH", {
+    timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric",
+  });
 }
 
-function Textarea({ label, value, onChange, placeholder, rows = 3 }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {label && <label style={{ fontSize: 12, fontWeight: 600, color: G.mid, textTransform: "uppercase", letterSpacing: ".4px" }}>{label}</label>}
-      <textarea value={value ?? ""} onChange={e => onChange(e.target.value)} placeholder={placeholder} rows={rows}
-        style={{ border: `1.5px solid ${G.wash}`, borderRadius: 10, padding: "9px 13px",
-          fontSize: 13.5, fontFamily: "'DM Sans', sans-serif", background: "#fff", color: "#222",
-          outline: "none", resize: "vertical" }}
-        onFocus={e => e.target.style.borderColor = G.base}
-        onBlur={e  => e.target.style.borderColor = G.wash}
-      />
-    </div>
-  );
-}
+const s = {
+  page:         { display: "flex", height: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: G.cream, overflow: "hidden" },
+  sidebar:      { width: 290, minWidth: 290, background: G.dark, display: "flex", flexDirection: "column", overflow: "hidden" },
+  sidebarHdr:   { padding: "20px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.1)" },
+  sidebarTitle: { fontSize: 17, fontWeight: 800, color: "#fff", margin: 0 },
+  sidebarSub:   { fontSize: 12, color: G.pale, marginTop: 2 },
+  list:         { flex: 1, overflowY: "auto", padding: "4px 0" },
+  item:        (a) => ({ padding: "11px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, borderLeft: a ? `3px solid ${G.light}` : "3px solid transparent", background: a ? "rgba(255,255,255,0.1)" : "transparent", transition: "background .15s" }),
+  itemIcon:     { width: 36, height: 36, borderRadius: 8, background: G.mid, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0, overflow: "hidden" },
+  itemTitle:    { fontSize: 13, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  itemMeta:     { fontSize: 11, color: G.pale, marginTop: 1 },
+  pubDot:      (p) => ({ width: 7, height: 7, borderRadius: "50%", background: p ? "#4ade80" : "#facc15", flexShrink: 0, marginLeft: "auto" }),
+  addBtn:       { margin: "12px 16px", padding: "9px 14px", background: G.base, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 },
+  searchInput:  { margin: "0 12px 8px", padding: "8px 12px", background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 8, color: "#fff", fontSize: 12, outline: "none", width: "calc(100% - 24px)", boxSizing: "border-box" },
+  main:         { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
+  topBar:       { background: "#fff", borderBottom: `1px solid ${G.wash}`, padding: "0 24px", height: 58, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 },
+  topTitle:     { fontSize: 17, fontWeight: 700, color: G.dark, flex: 1 },
+  tabBar:       { display: "flex", borderBottom: `1px solid ${G.wash}`, background: "#fff", padding: "0 24px", flexShrink: 0 },
+  tab:         (a) => ({ padding: "11px 18px", fontSize: 13, fontWeight: 600, color: a ? G.dark : "#999", borderBottom: a ? `2px solid ${G.dark}` : "2px solid transparent", cursor: "pointer", marginBottom: -1 }),
+  content:      { flex: 1, overflowY: "auto", padding: 24 },
+  card:         { background: "#fff", borderRadius: 14, padding: 20, border: `1px solid ${G.wash}`, boxShadow: "0 1px 6px rgba(0,0,0,0.04)", marginBottom: 16 },
+  label:        { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
+  input:        { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:       { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  textarea:     { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 80 },
+  fg:           { marginBottom: 16 },
+  row:          { display: "flex", gap: 12 },
+  btnPrimary:   { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnSecondary: { padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnGreen:     { padding: "8px 16px", background: G.base, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 12 },
+  btnDanger:    { padding: "7px 14px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 12 },
+  iconBtn:     (c) => ({ background: "none", border: "none", cursor: "pointer", color: c || "#999", fontSize: 14, padding: "4px 6px", borderRadius: 6 }),
+  tag:         (c) => ({ display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "red" ? "#fee2e2" : c === "yellow" ? "#fef9c3" : c === "blue" ? "#dbeafe" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "red" ? "#dc2626" : c === "yellow" ? "#92400e" : c === "blue" ? "#1d4ed8" : "#555" }),
+  overlay:      { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
+  modal:       (w) => ({ background: "#fff", borderRadius: 16, width: "100%", maxWidth: w || 560, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" }),
+  mHeader:      { padding: "20px 24px 16px", borderBottom: `1px solid ${G.wash}`, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#fff", zIndex: 1 },
+  mTitle:       { fontSize: 17, fontWeight: 700, color: G.dark },
+  mBody:        { padding: "20px 24px" },
+  mFooter:      { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
+  table:        { width: "100%", borderCollapse: "collapse", fontSize: 13 },
+  th:           { padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `2px solid ${G.wash}`, background: G.cream },
+  td:           { padding: "11px 14px", borderBottom: `1px solid ${G.wash}`, color: G.dark, verticalAlign: "middle" },
+  statCard:    (c) => ({ flex: 1, minWidth: 100, background: "#fff", borderRadius: 12, padding: "16px 18px", border: `1px solid ${G.wash}`, borderTop: `3px solid ${c || G.base}` }),
+  statNum:      { fontSize: 28, fontWeight: 900, color: G.dark },
+  statLabel:    { fontSize: 12, color: "#888", marginTop: 2 },
+  emptyBox:     { background: "#fff", borderRadius: 14, border: `2px dashed ${G.pale}`, padding: "50px 20px", textAlign: "center" },
+  coverBox:     { width: "100%", height: 160, borderRadius: 12, background: G.wash, border: `2px dashed ${G.pale}`, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", overflow: "hidden", marginBottom: 16 },
+};
 
-function Select({ label, value, onChange, options = [], required }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {label && <label style={{ fontSize: 12, fontWeight: 600, color: G.mid, textTransform: "uppercase", letterSpacing: ".4px" }}>
-        {label}{required && " *"}
-      </label>}
-      <select value={value ?? ""} onChange={e => onChange(e.target.value)}
-        style={{ border: `1.5px solid ${G.wash}`, borderRadius: 10, padding: "9px 13px",
-          fontSize: 13.5, fontFamily: "'DM Sans', sans-serif", background: "#fff", color: "#222", outline: "none" }}>
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </div>
-  );
-}
-
-function Tag({ children, color }) {
-  const map = {
-    green:  { bg: G.wash,    text: G.dark },
-    yellow: { bg: "#fff8e1", text: "#7a5c00" },
-    gray:   { bg: "#f0f0f0", text: "#555" },
-    red:    { bg: "#fef2f2", text: "#c0392b" },
-    blue:   { bg: "#e8f0fe", text: "#1a56a8" },
-    purple: { bg: "#f3e8ff", text: "#6b21a8" },
-    teal:   { bg: "#e0f7f4", text: "#0f766e" },
-  };
-  const c = map[color] || map.gray;
-  return (
-    <span style={{ background: c.bg, color: c.text, borderRadius: 20, padding: "2px 10px",
-      fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase" }}>
-      {children}
-    </span>
-  );
-}
-
-function Modal({ title, onClose, children, wide }) {
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)",
-      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
-      <div style={{ background: G.white, borderRadius: 20, width: "100%",
-        maxWidth: wide ? 760 : 560, maxHeight: "92vh", overflow: "auto",
-        boxShadow: "0 20px 60px rgba(0,0,0,.2)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "20px 28px", borderBottom: `1px solid ${G.wash}`,
-          position: "sticky", top: 0, background: G.white, zIndex: 1 }}>
-          <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: 19, color: G.dark, margin: 0 }}>{title}</h3>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#aaa" }}>×</button>
-        </div>
-        <div style={{ padding: "24px 28px" }}>{children}</div>
-      </div>
-    </div>
-  );
-}
-
-// ── Cover Image Uploader ──────────────────────────────────────────
-function CoverUploader({ value, onChange }) {
-  const inputRef = useRef();
+// ── Details Tab ───────────────────────────────────────────────────
+function DetailsTab({ seminar, onUpdate }) {
+  const [form, setForm]       = useState({ ...seminar });
+  const [saving, setSaving]   = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadErr, setUploadErr] = useState("");
+  const [error, setError]     = useState("");
+  const coverRef              = useRef();
+  const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  const handleFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) { setUploadErr("Please select an image file."); return; }
-    if (file.size > 5 * 1024 * 1024)    { setUploadErr("Image must be under 5MB."); return; }
-    setUploadErr(""); setUploading(true);
-
-    const ext  = file.name.split(".").pop();
-    const path = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-
-    const { error } = await supabase.storage
-      .from("seminar-covers")
-      .upload(path, file, { upsert: true });
-
-    if (error) { setUploadErr(error.message); setUploading(false); return; }
-
-    const url = `${SUPABASE_URL}/storage/v1/object/public/seminar-covers/${path}`;
-    onChange(url);
+  const uploadCover = async (file) => {
+    setUploading(true);
+    const path = `${seminar.id}/${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
+    const { error: upErr } = await supabase.storage.from("seminar-covers").upload(path, file, { upsert: true });
+    if (upErr) { alert("Upload failed: " + upErr.message); setUploading(false); return; }
+    const { data: { publicUrl } } = supabase.storage.from("seminar-covers").getPublicUrl(path);
+    setF("cover_image_url", publicUrl);
     setUploading(false);
   };
 
+  const save = async () => {
+    if (!form.title?.trim()) { setError("Title is required."); return; }
+    setSaving(true); setError("");
+
+    // Fix dates — convert local datetime-local input to UTC ISO string
+    let scheduledStart = null;
+    let scheduledEnd   = null;
+    if (form.scheduled_start) {
+      scheduledStart = new Date(form.scheduled_start).toISOString();
+    }
+    if (form.scheduled_end) {
+      scheduledEnd = new Date(form.scheduled_end).toISOString();
+    }
+    if (scheduledStart && scheduledEnd && new Date(scheduledEnd) <= new Date(scheduledStart)) {
+      setError("End date/time must be after start date/time."); setSaving(false); return;
+    }
+    if (scheduledStart && !scheduledEnd) {
+      const d = new Date(scheduledStart); d.setHours(d.getHours() + 1);
+      scheduledEnd = d.toISOString();
+    }
+
+    // Fix webinar_platform — strip to null if empty
+    const platform = form.webinar_platform?.trim() || null;
+
+    const payload = {
+      title: form.title.trim(), description: form.description?.trim() || null,
+      seminar_type: form.seminar_type || "webinar", status: form.status || "upcoming",
+      cover_image_url: form.cover_image_url || null,
+      webinar_link: form.webinar_link?.trim() || null,
+      webinar_platform: platform,
+      venue: form.venue?.trim() || null,
+      scheduled_start: scheduledStart,
+      scheduled_end:   scheduledEnd,
+      max_participants: form.max_participants ? Number(form.max_participants) : null,
+      is_public: form.is_public ?? true,
+    };
+    const { error: err } = await supabase.from("seminars").update(payload).eq("id", seminar.id);
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    alert("✅ Seminar saved!");
+    onUpdate();
+  };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <label style={{ fontSize: 12, fontWeight: 600, color: G.mid, textTransform: "uppercase", letterSpacing: ".4px" }}>
-        Cover Image
-      </label>
-      {value ? (
-        <div style={{ position: "relative", width: "100%", height: 160, borderRadius: 10,
-          overflow: "hidden", border: `1.5px solid ${G.pale}` }}>
-          <img src={value} alt="cover" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          <button onClick={() => onChange("")}
-            style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,.55)",
-              color: "#fff", border: "none", borderRadius: "50%", width: 28, height: 28,
-              cursor: "pointer", fontSize: 14 }}>×</button>
+    <div>
+      {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 16 }}>{error}</div>}
+
+      {/* Cover image */}
+      <div style={s.coverBox} onClick={() => !uploading && coverRef.current?.click()}>
+        {form.cover_image_url
+          ? <img src={form.cover_image_url} alt="cover" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          : uploading ? <><div style={{ fontSize: 28 }}>⏳</div><div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Uploading…</div></>
+          : <><div style={{ fontSize: 36 }}>🖼️</div><div style={{ fontSize: 13, color: "#aaa", marginTop: 6 }}>Click to upload cover image</div></>
+        }
+        <input ref={coverRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => { if (e.target.files[0]) uploadCover(e.target.files[0]); e.target.value = ""; }} />
+      </div>
+
+      <div style={s.card}>
+        <div style={s.fg}>
+          <label style={s.label}>Title *</label>
+          <input style={s.input} value={form.title || ""} onChange={e => setF("title", e.target.value)} />
         </div>
-      ) : (
-        <div onClick={() => !uploading && inputRef.current?.click()}
-          style={{ border: `2px dashed ${G.pale}`, borderRadius: 10, padding: "28px 20px",
-            textAlign: "center", cursor: uploading ? "wait" : "pointer", background: G.cream }}
-          onMouseEnter={e => { if (!uploading) e.currentTarget.style.borderColor = G.base; }}
-          onMouseLeave={e => e.currentTarget.style.borderColor = G.pale}>
-          <div style={{ fontSize: 28, marginBottom: 6 }}>{uploading ? "⏳" : "🖼️"}</div>
-          <div style={{ fontSize: 13, color: G.base, fontWeight: 600 }}>
-            {uploading ? "Uploading…" : "Click to upload cover image"}
+        <div style={s.fg}>
+          <label style={s.label}>Description</label>
+          <textarea style={s.textarea} value={form.description || ""} onChange={e => setF("description", e.target.value)} />
+        </div>
+        <div style={{ ...s.row, flexWrap: "wrap" }}>
+          <div style={{ ...s.fg, flex: 1, minWidth: 130 }}>
+            <label style={s.label}>Type</label>
+            <select style={s.select} value={form.seminar_type || "webinar"} onChange={e => setF("seminar_type", e.target.value)}>
+              <option value="webinar">Webinar (Online)</option>
+              <option value="in_person">In Person</option>
+              <option value="hybrid">Hybrid</option>
+            </select>
           </div>
-          <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>PNG, JPG, WebP · max 5MB</div>
+          <div style={{ ...s.fg, flex: 1, minWidth: 130 }}>
+            <label style={s.label}>Status</label>
+            <select style={s.select} value={form.status || "upcoming"} onChange={e => setF("status", e.target.value)}>
+              <option value="upcoming">Upcoming</option>
+              <option value="ongoing">Ongoing</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <div style={{ ...s.fg, flex: 1, minWidth: 130 }}>
+            <label style={s.label}>Max Participants</label>
+            <input style={s.input} type="number" min={1} value={form.max_participants || ""} onChange={e => setF("max_participants", e.target.value)} placeholder="Unlimited" />
+          </div>
         </div>
-      )}
-      <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
-      {uploadErr && <div style={{ fontSize: 12, color: "#c0392b" }}>⚠️ {uploadErr}</div>}
+        <div style={s.row}>
+          <div style={{ ...s.fg, flex: 1 }}>
+            <label style={s.label}>Start Date & Time</label>
+            <input style={s.input} type="datetime-local"
+              value={form.scheduled_start ? (() => { try { const d = new Date(form.scheduled_start); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } catch(_) { return form.scheduled_start.slice(0, 16); } })() : ""}
+              onChange={e => setF("scheduled_start", e.target.value)} />
+          </div>
+          <div style={{ ...s.fg, flex: 1 }}>
+            <label style={s.label}>End Date & Time</label>
+            <input style={s.input} type="datetime-local"
+              value={form.scheduled_end ? (() => { try { const d = new Date(form.scheduled_end); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } catch(_) { return form.scheduled_end.slice(0, 16); } })() : ""}
+              onChange={e => setF("scheduled_end", e.target.value)} />
+          </div>
+        </div>
+        {(form.seminar_type === "webinar" || form.seminar_type === "hybrid") && (
+          <div style={s.row}>
+            <div style={{ ...s.fg, flex: 2 }}>
+              <label style={s.label}>Webinar Link</label>
+              <input style={s.input} value={form.webinar_link || ""} onChange={e => setF("webinar_link", e.target.value)} placeholder="https://zoom.us/j/..." />
+            </div>
+            <div style={{ ...s.fg, flex: 1 }}>
+              <label style={s.label}>Platform</label>
+              <select style={s.select} value={form.webinar_platform || ""} onChange={e => setF("webinar_platform", e.target.value)}>
+                <option value="">— Select —</option>
+                <option value="zoom">Zoom</option>
+                <option value="gmeet">Google Meet</option>
+                <option value="teams">MS Teams</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+          </div>
+        )}
+        {(form.seminar_type === "in_person" || form.seminar_type === "hybrid") && (
+          <div style={s.fg}>
+            <label style={s.label}>Venue</label>
+            <input style={s.input} value={form.venue || ""} onChange={e => setF("venue", e.target.value)} placeholder="e.g. CvSU Main Campus, Room 101" />
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, fontWeight: 600, color: G.dark }}>
+            <input type="checkbox" checked={!!form.is_public} onChange={e => setF("is_public", e.target.checked)} style={{ width: 16, height: 16, accentColor: G.base }} />
+            Visible to students in app
+          </label>
+          <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>{saving ? "Saving…" : "💾 Save Seminar"}</button>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── Helpers ───────────────────────────────────────────────────────
-function statusColor(s) {
-  if (s === "upcoming")  return "blue";
-  if (s === "ongoing")   return "green";
-  if (s === "completed") return "gray";
-  if (s === "cancelled") return "red";
-  return "gray";
-}
+// ── Registrations Tab ─────────────────────────────────────────────
+function RegistrationsTab({ seminar }) {
+  const [regs, setRegs]     = useState([]);
+  const [loading, setLoading] = useState(true);
 
-function typeColor(t) {
-  if (t === "webinar")   return "purple";
-  if (t === "hybrid")    return "teal";
-  return "blue"; // in_person
-}
+  useEffect(() => { load(); }, [seminar.id]);
 
-function typeLabel(t) {
-  if (t === "webinar")   return "Webinar";
-  if (t === "hybrid")    return "Hybrid";
-  return "In-Person";
-}
-
-function fmtDate(iso) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-PH", {
-    month: "short", day: "numeric", year: "numeric",
-    hour: "2-digit", minute: "2-digit",
-  });
-}
-
-function fmtDateOnly(iso) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
-}
-
-// datetime-local input needs "YYYY-MM-DDTHH:MM" format
-function toLocalInput(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const pad = n => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-const STATUS_OPTIONS = [
-  { value: "upcoming",  label: "Upcoming" },
-  { value: "ongoing",   label: "Ongoing" },
-  { value: "completed", label: "Completed" },
-  { value: "cancelled", label: "Cancelled" },
-];
-
-const TYPE_OPTIONS = [
-  { value: "in_person", label: "In-Person" },
-  { value: "webinar",   label: "Webinar" },
-  { value: "hybrid",    label: "Hybrid" },
-];
-
-const PLATFORM_OPTIONS = [
-  { value: "",       label: "— None —" },
-  { value: "zoom",   label: "Zoom" },
-  { value: "gmeet",  label: "Google Meet" },
-  { value: "teams",  label: "Microsoft Teams" },
-  { value: "other",  label: "Other" },
-];
-
-// ══════════════════════════════════════════════════════════════════
-// MAIN PAGE
-// ══════════════════════════════════════════════════════════════════
-export default function SeminarsPage() {
-  const [seminars,      setSeminars]      = useState([]);
-  const [loading,       setLoading]       = useState(true);
-  const [modal,         setModal]         = useState(null);
-  const [form,          setForm]          = useState({});
-  const [saving,        setSaving]        = useState(false);
-  const [error,         setError]         = useState(null);
-  const [selected,      setSelected]      = useState(null);
-  const [search,        setSearch]        = useState("");
-  const [filterStatus,  setFilterStatus]  = useState("");
-  const [userId,        setUserId]        = useState(null);
-
-  const [registrations, setRegistrations] = useState([]);
-  const [regLoading,    setRegLoading]    = useState(false);
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUserId(data?.user?.id ?? null));
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      setLoading(true);
-      const { data } = await supabase.from("seminars").select("*");
-      if (!cancelled) {
-        const sorted = (data ?? []).sort((a, b) =>
-          (b.scheduled_start ?? b.created_at) > (a.scheduled_start ?? a.created_at) ? 1 : -1
-        );
-        setSeminars(sorted);
-        setLoading(false);
-      }
-    };
-    load();
-    return () => { cancelled = true; };
-  }, []);
-
-  const fetchData = async () => {
-    const { data } = await supabase.from("seminars").select("*");
-    const sorted = (data ?? []).sort((a, b) =>
-      (b.scheduled_start ?? b.created_at) > (a.scheduled_start ?? a.created_at) ? 1 : -1
-    );
-    setSeminars(sorted);
-  };
-
-  // ── Save ─────────────────────────────────────────────────────
-  const save = async () => {
-    if (!form.title?.trim())      { setError("Title is required."); return; }
-    if (!form.scheduled_start)    { setError("Start date & time is required."); return; }
-    if (!form.scheduled_end)      { setError("End date & time is required."); return; }
-    setSaving(true); setError(null);
-
-    const payload = {
-      title:              form.title.trim(),
-      description:        form.description?.trim()   || null,
-      seminar_type:       form.seminar_type           || "in_person",
-      status:             form.status                 || "upcoming",
-      cover_image_url:    form.cover_image_url        || null,
-      venue:              form.venue?.trim()          || null,
-      webinar_link:       form.webinar_link?.trim()   || null,
-      webinar_platform:   form.webinar_platform       || null,
-      scheduled_start:    new Date(form.scheduled_start).toISOString(),
-      scheduled_end:      new Date(form.scheduled_end).toISOString(),
-      max_participants:   form.max_participants ? Number(form.max_participants) : null,
-      is_public:          form.is_public !== false,
-    };
-
-    // Clear platform if not webinar/hybrid
-    if (payload.seminar_type === "in_person") {
-      payload.webinar_link     = null;
-      payload.webinar_platform = null;
-    }
-
-    let err;
-    if (form.id) {
-      ({ error: err } = await supabase.from("seminars").update(payload).eq("id", form.id));
-    } else {
-      ({ error: err } = await supabase.from("seminars").insert({ ...payload, created_by: userId }));
-    }
-
-    setSaving(false);
-    if (err) { setError(err.message); return; }
-    setModal(null); setForm({});
-    fetchData();
-  };
-
-  // ── Delete ────────────────────────────────────────────────────
-  const remove = async (id) => {
-    if (!window.confirm("Delete this seminar? All registrations will also be removed.")) return;
-    await supabase.from("seminars").delete().eq("id", id);
-    fetchData();
-  };
-
-  // ── Open edit ─────────────────────────────────────────────────
-  const openEdit = (s) => {
-    setForm({
-      id:               s.id,
-      title:            s.title,
-      description:      s.description     ?? "",
-      seminar_type:     s.seminar_type,
-      status:           s.status,
-      cover_image_url:  s.cover_image_url ?? "",
-      venue:            s.venue           ?? "",
-      webinar_link:     s.webinar_link    ?? "",
-      webinar_platform: s.webinar_platform ?? "",
-      scheduled_start:  toLocalInput(s.scheduled_start),
-      scheduled_end:    toLocalInput(s.scheduled_end),
-      max_participants: s.max_participants ?? "",
-      is_public:        s.is_public !== false,
-    });
-    setError(null); setModal("edit");
-  };
-
-  // ── Attendees ─────────────────────────────────────────────────
-  const openAttendees = async (s) => {
-    setSelected(s); setModal("attendees"); setRegLoading(true);
+  const load = async () => {
+    setLoading(true);
     const { data } = await supabase
       .from("seminar_registrations")
-      .select("*, profiles(full_name, email)")
-      .eq("seminar_id", s.id);
-    // Sort by registered_at in JS to avoid unknown column issues
-    const sorted = (data ?? []).sort((a, b) =>
-      (b.registered_at ?? b.created_at ?? "") > (a.registered_at ?? a.created_at ?? "") ? 1 : -1
-    );
-    setRegistrations(sorted);
-    setRegLoading(false);
+      .select("*, profiles(full_name, student_id, email, department, year_level)")
+      .eq("seminar_id", seminar.id)
+      .order("registered_at", { ascending: false });
+    setRegs(data || []);
+    setLoading(false);
   };
 
-  const toggleAttendance = async (reg) => {
-    const newStatus = reg.status === "attended" ? "registered" : "attended";
-    await supabase.from("seminar_registrations").update({ status: newStatus }).eq("id", reg.id);
-    setRegistrations(prev => prev.map(r => r.id === reg.id ? { ...r, status: newStatus } : r));
+  const updateStatus = async (id, status) => {
+    await supabase.from("seminar_registrations").update({ status }).eq("id", id);
+    setRegs(r => r.map(x => x.id === id ? { ...x, status } : x));
   };
 
-  // ── Filter ────────────────────────────────────────────────────
-  const filtered = seminars.filter(s => {
-    const matchSearch = !search ||
-      s.title?.toLowerCase().includes(search.toLowerCase()) ||
-      s.venue?.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = !filterStatus || s.status === filterStatus;
-    return matchSearch && matchStatus;
-  });
+  const statusColor = (s) => s === "registered" ? "green" : s === "waitlisted" ? "yellow" : s === "cancelled" ? "red" : "blue";
 
-  const isWebinarType = form.seminar_type === "webinar" || form.seminar_type === "hybrid";
-  const isVenueType   = form.seminar_type === "in_person" || form.seminar_type === "hybrid";
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
 
-  // ════════════════════════════════════════════════════════════════
-  // RENDER
-  // ════════════════════════════════════════════════════════════════
+  const confirmed = regs.filter(r => r.status === "registered").length;
+
   return (
-    <div style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto" }}>
-
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between",
-        marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, fontWeight: 800, color: G.dark, margin: 0 }}>
-            Seminars
-          </h1>
-          <p style={{ color: G.base, margin: "4px 0 0", fontSize: 14 }}>
-            Manage GAD seminars, attendance, and registrations.
-          </p>
-        </div>
-        <Btn onClick={() => {
-          setForm({ seminar_type: "in_person", status: "upcoming", is_public: true });
-          setError(null); setModal("add");
-        }}>+ New Seminar</Btn>
-      </div>
-
-      {/* Filters */}
+    <div>
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-        <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="🔍  Search seminars…"
-          style={{ border: `1px solid ${G.pale}`, borderRadius: 10, padding: "9px 14px",
-            fontSize: 13, fontFamily: "'DM Sans', sans-serif", background: G.white,
-            color: G.dark, outline: "none", width: 280 }} />
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-          style={{ border: `1px solid ${G.pale}`, borderRadius: 10, padding: "9px 14px",
-            fontSize: 13, fontFamily: "'DM Sans', sans-serif", background: G.white, color: G.dark, outline: "none" }}>
-          <option value="">All Statuses</option>
-          {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        {[
+          { label: "Total Registered", value: regs.length, color: G.base },
+          { label: "Registered", value: confirmed, color: "#16a34a" },
+          { label: "Waitlisted", value: regs.filter(r => r.status === "waitlisted").length, color: "#f59e0b" },
+          { label: "Capacity", value: seminar.max_participants ? `${regs.length}/${seminar.max_participants}` : "Unlimited", color: "#2563eb" },
+        ].map(stat => (
+          <div key={stat.label} style={s.statCard(stat.color)}>
+            <div style={{ ...s.statNum, color: stat.color, fontSize: 22 }}>{stat.value}</div>
+            <div style={s.statLabel}>{stat.label}</div>
+          </div>
+        ))}
       </div>
 
-      {/* List */}
-      {loading ? (
-        <div style={{ textAlign: "center", padding: 80, color: G.base }}>🌸 Loading…</div>
-      ) : filtered.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "80px 40px", color: "#aaa" }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>🎙️</div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: G.dark, marginBottom: 8 }}>
-            {search || filterStatus ? "No seminars match your filters." : "No seminars yet."}
-          </div>
-          {!search && !filterStatus && (
-            <Btn onClick={() => { setForm({ seminar_type: "in_person", status: "upcoming", is_public: true }); setError(null); setModal("add"); }}>
-              + New Seminar
-            </Btn>
-          )}
+      {regs.length === 0 ? (
+        <div style={s.emptyBox}>
+          <div style={{ fontSize: 40, marginBottom: 10 }}>👥</div>
+          <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No registrations yet</div>
+          <div style={{ fontSize: 13, color: "#aaa" }}>Students who register from the app will appear here.</div>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {filtered.map(s => (
-            <div key={s.id} style={{ background: G.white, border: `1px solid ${G.pale}`,
-              borderRadius: 14, overflow: "hidden",
-              display: "flex", alignItems: "stretch", gap: 0 }}>
-
-              {/* Cover image strip */}
-              {s.cover_image_url ? (
-                <div style={{ width: 90, flexShrink: 0 }}>
-                  <img src={s.cover_image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                </div>
-              ) : (
-                <div style={{ width: 90, flexShrink: 0, background: G.wash,
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>🎙️</div>
-              )}
-
-              {/* Content */}
-              <div style={{ flex: 1, padding: "16px 20px", display: "flex", alignItems: "flex-start",
-                justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-                <div style={{ flex: 1, minWidth: 240 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-                    <span style={{ fontWeight: 700, color: G.dark, fontSize: 15 }}>{s.title}</span>
-                    <Tag color={statusColor(s.status)}>{s.status || "upcoming"}</Tag>
-                    <Tag color={typeColor(s.seminar_type)}>{typeLabel(s.seminar_type)}</Tag>
-                    {!s.is_public && <Tag color="gray">Private</Tag>}
-                  </div>
-                  <div style={{ fontSize: 12, color: G.light, display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 4 }}>
-                    {s.scheduled_start && <span>📅 {fmtDate(s.scheduled_start)}</span>}
-                    {s.venue           && <span>📍 {s.venue}</span>}
-                    {s.webinar_link    && <span>🔗 <a href={s.webinar_link} target="_blank" rel="noreferrer" style={{ color: G.base }}>Join Link</a></span>}
-                    {s.webinar_platform && <span>💻 {s.webinar_platform}</span>}
-                    {s.max_participants && <span>🪑 {s.max_participants} slots</span>}
-                  </div>
-                  {s.description && (
-                    <div style={{ fontSize: 12, color: "#aaa", maxWidth: 500,
-                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {s.description}
+        <div style={{ background: "#fff", borderRadius: 14, border: `1px solid ${G.wash}`, overflow: "hidden" }}>
+          <table style={s.table}>
+            <thead>
+              <tr>
+                <th style={s.th}>Student</th>
+                <th style={s.th}>Department</th>
+                <th style={s.th}>Registered</th>
+                <th style={s.th}>Status</th>
+                <th style={s.th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {regs.map(r => (
+                <tr key={r.id}>
+                  <td style={s.td}>
+                    <div style={{ fontWeight: 600, color: G.dark }}>{r.profiles?.full_name || "—"}</div>
+                    <div style={{ fontSize: 11, color: "#aaa" }}>{r.profiles?.student_id} · {r.profiles?.email}</div>
+                  </td>
+                  <td style={s.td}>{r.profiles?.department || "—"} · Year {r.profiles?.year_level || "—"}</td>
+                  <td style={s.td}>{formatDate(r.registered_at)}</td>
+                  <td style={s.td}><span style={s.tag(statusColor(r.status))}>{r.status || "registered"}</span></td>
+                  <td style={s.td}>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <select value={r.status || "registered"} onChange={e => updateStatus(r.id, e.target.value)}
+                        style={{ padding: "5px 8px", border: `1px solid ${G.pale}`, borderRadius: 6, fontSize: 12, outline: "none", cursor: "pointer" }}>
+                        <option value="registered">Registered</option>
+                        
+                        
+                        <option value="cancelled">Cancelled</option>
+                      </select>
                     </div>
-                  )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Evaluations Tab ───────────────────────────────────────────────
+function EvaluationsTab({ seminar }) {
+  const [evals, setEvals] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { load(); }, [seminar.id]);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("seminar_evaluations")
+      .select("*, profiles(full_name, student_id)")
+      .eq("seminar_id", seminar.id)
+      .order("submitted_at", { ascending: false });
+    setEvals(data || []);
+    setLoading(false);
+  };
+
+  const avgRating = evals.length > 0 ? (evals.reduce((s, e) => s + (e.rating || 0), 0) / evals.length).toFixed(1) : "—";
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+        <div style={s.statCard(G.base)}>
+          <div style={{ ...s.statNum, color: G.base }}>{evals.length}</div>
+          <div style={s.statLabel}>Total Evaluations</div>
+        </div>
+        <div style={s.statCard("#f59e0b")}>
+          <div style={{ ...s.statNum, color: "#f59e0b" }}>⭐ {avgRating}</div>
+          <div style={s.statLabel}>Average Rating</div>
+        </div>
+      </div>
+
+      {evals.length === 0 ? (
+        <div style={s.emptyBox}>
+          <div style={{ fontSize: 40, marginBottom: 10 }}>⭐</div>
+          <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No evaluations yet</div>
+          <div style={{ fontSize: 13, color: "#aaa" }}>Student feedback will appear here after the seminar.</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {evals.map(e => (
+            <div key={e.id} style={s.card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: G.dark }}>{e.profiles?.full_name || "Anonymous"}</div>
+                  <div style={{ fontSize: 11, color: "#aaa" }}>{e.profiles?.student_id} · {formatDate(e.submitted_at)}</div>
                 </div>
-                <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
-                  <Btn small variant="secondary" onClick={() => openAttendees(s)}>👥 Attendees</Btn>
-                  <Btn small variant="ghost"     onClick={() => openEdit(s)}>Edit</Btn>
-                  <Btn small variant="danger"    onClick={() => remove(s.id)}>Delete</Btn>
-                </div>
+                <div style={{ fontSize: 20 }}>{"⭐".repeat(e.rating || 0)}</div>
               </div>
+              {e.comments && <div style={{ marginTop: 10, fontSize: 13, color: "#555", lineHeight: 1.5, background: G.cream, borderRadius: 8, padding: "10px 14px" }}>{e.comments}</div>}
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* ── Add / Edit Modal ── */}
-      {(modal === "add" || modal === "edit") && (
-        <Modal title={modal === "add" ? "New Seminar" : "Edit Seminar"} onClose={() => setModal(null)} wide>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+// ── Main Page ─────────────────────────────────────────────────────
+export default function SeminarsPage() {
+  const [seminars, setSeminars] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [tab, setTab]           = useState("details");
+  const [loading, setLoading]   = useState(true);
+  const [search, setSearch]     = useState("");
+  const [showAdd, setShowAdd]   = useState(false);
+  const [addForm, setAddForm]   = useState({});
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError]   = useState("");
 
-            <CoverUploader value={form.cover_image_url} onChange={v => setForm(f => ({ ...f, cover_image_url: v }))} />
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setLoading(true);
+      const { data, error } = await supabase.from("seminars")
+        .select("*, seminar_registrations(count)")
+        .order("created_at", { ascending: false });
+      if (error) console.error("Seminars load error:", error.message);
+      if (active) { setSeminars(data || []); if (data?.length) setSelected(data[0]); setLoading(false); }
+    })();
+    return () => { active = false; };
+  }, []);
 
-            <Input label="Title" value={form.title}
-              onChange={v => setForm(f => ({ ...f, title: v }))} required />
-            <Textarea label="Description" value={form.description}
-              onChange={v => setForm(f => ({ ...f, description: v }))} rows={2} />
+  const reload = async () => {
+    const { data } = await supabase.from("seminars").select("*, seminar_registrations(count)").order("created_at", { ascending: false });
+    setSeminars(data || []);
+    if (selected) setSelected(data?.find(s => s.id === selected.id) || data?.[0] || null);
+  };
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <Select label="Type" value={form.seminar_type || "in_person"}
-                onChange={v => setForm(f => ({ ...f, seminar_type: v }))} options={TYPE_OPTIONS} />
-              <Select label="Status" value={form.status || "upcoming"}
-                onChange={v => setForm(f => ({ ...f, status: v }))} options={STATUS_OPTIONS} />
+  const createSeminar = async () => {
+    if (!addForm.title?.trim()) { setAddError("Title is required."); return; }
+    setAddSaving(true); setAddError("");
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data, error: err } = await supabase.from("seminars").insert({
+      title: addForm.title.trim(),
+      seminar_type: addForm.seminar_type || "webinar",
+      status: "upcoming", is_public: true, created_by: user?.id,
+    }).select("*, seminar_registrations(count)").single();
+    setAddSaving(false);
+    if (err) { setAddError(err.message); return; }
+    setSeminars(s => [data, ...s]);
+    setSelected(data); setTab("details");
+    setShowAdd(false); setAddForm({});
+  };
+
+  const deleteSeminar = async () => {
+    if (!selected || !confirm(`Delete "${selected.title}"?`)) return;
+    await supabase.from("seminars").delete().eq("id", selected.id);
+    const rest = seminars.filter(s => s.id !== selected.id);
+    setSeminars(rest); setSelected(rest[0] || null);
+  };
+
+  const statusColor = (s) => s === "ongoing" ? "green" : s === "completed" ? "blue" : s === "cancelled" ? "red" : "yellow";
+  const regCount = (s) => s?.seminar_registrations?.[0]?.count || 0;
+  const filtered = seminars.filter(s => (s.title || "").toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div style={s.page}>
+      {/* Sidebar */}
+      <div style={s.sidebar}>
+        <div style={s.sidebarHdr}>
+          <div style={s.sidebarTitle}>🎓 Seminars</div>
+          <div style={s.sidebarSub}>{seminars.length} total</div>
+        </div>
+        <button style={s.addBtn} onClick={() => { setAddForm({ seminar_type: "webinar" }); setAddError(""); setShowAdd(true); }}>＋ New Seminar</button>
+        <input style={s.searchInput} placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} />
+        <div style={s.list}>
+          {loading ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>Loading…</div>
+            : filtered.length === 0 ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>No seminars found</div>
+            : filtered.map(sem => (
+              <div key={sem.id} style={s.item(selected?.id === sem.id)} onClick={() => { setSelected(sem); setTab("details"); }}>
+                <div style={s.itemIcon}>
+                  {sem.cover_image_url ? <img src={sem.cover_image_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "🎓"}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={s.itemTitle}>{sem.title}</div>
+                  <div style={s.itemMeta}>{formatDateShort(sem.scheduled_start)} · {regCount(sem)} registered</div>
+                </div>
+                <div style={s.pubDot(sem.is_public)} />
+              </div>
+            ))
+          }
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={s.main}>
+        {!selected ? (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", flex: 1, gap: 12, color: "#aaa" }}>
+            <span style={{ fontSize: 52 }}>🎓</span>
+            <span style={{ fontWeight: 700, color: G.dark, fontSize: 16 }}>Select a seminar or create a new one</span>
+          </div>
+        ) : (
+          <>
+            <div style={s.topBar}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={s.topTitle}>{selected.title}</div>
+                <div style={{ fontSize: 12, color: "#aaa" }}>
+                  {selected.seminar_type} · {formatDate(selected.scheduled_start)} · {regCount(selected)} registered
+                </div>
+              </div>
+              <span style={s.tag(statusColor(selected.status))}>{selected.status || "upcoming"}</span>
+              <span style={s.tag(selected.is_public ? "green" : "yellow")}>{selected.is_public ? "✅ Public" : "🔒 Private"}</span>
+              <button style={s.btnDanger} onClick={deleteSeminar}>🗑️ Delete</button>
             </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <Input label="Start Date & Time" type="datetime-local" value={form.scheduled_start}
-                onChange={v => setForm(f => ({ ...f, scheduled_start: v }))} required />
-              <Input label="End Date & Time" type="datetime-local" value={form.scheduled_end}
-                onChange={v => setForm(f => ({ ...f, scheduled_end: v }))} required />
+            <div style={s.tabBar}>
+              {[["details", "📋 Details"], ["registrations", "👥 Registrations"], ["evaluations", "⭐ Evaluations"]].map(([v, l]) => (
+                <div key={v} style={s.tab(tab === v)} onClick={() => setTab(v)}>{l}</div>
+              ))}
             </div>
+            <div style={s.content}>
+              {tab === "details"       && <DetailsTab       key={selected.id + "_d"} seminar={selected} onUpdate={reload} />}
+              {tab === "registrations" && <RegistrationsTab key={selected.id + "_r"} seminar={selected} />}
+              {tab === "evaluations"   && <EvaluationsTab   key={selected.id + "_e"} seminar={selected} />}
+            </div>
+          </>
+        )}
+      </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <Input label="Max Participants" type="number" value={form.max_participants}
-                onChange={v => setForm(f => ({ ...f, max_participants: v }))} placeholder="e.g. 50" />
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: G.mid, textTransform: "uppercase", letterSpacing: ".4px" }}>
-                  Visibility
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: G.dark, cursor: "pointer", paddingTop: 9 }}>
-                  <input type="checkbox" checked={form.is_public !== false}
-                    onChange={e => setForm(f => ({ ...f, is_public: e.target.checked }))}
-                    style={{ width: 16, height: 16, accentColor: G.base }} />
-                  Public seminar (visible to students)
-                </label>
+      {/* Create Modal */}
+      {showAdd && (
+        <div style={s.overlay}>
+          <div style={s.modal(480)}>
+            <div style={s.mHeader}>
+              <span style={s.mTitle}>Create New Seminar</span>
+              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}>✕</button>
+            </div>
+            <div style={s.mBody}>
+              {addError && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{addError}</div>}
+              <div style={s.fg}>
+                <label style={s.label}>Title *</label>
+                <input style={s.input} value={addForm.title || ""} onChange={e => setAddForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Gender Sensitivity Seminar" autoFocus />
+              </div>
+              <div style={s.fg}>
+                <label style={s.label}>Type</label>
+                <select style={s.select} value={addForm.seminar_type || "webinar"} onChange={e => setAddForm(f => ({ ...f, seminar_type: e.target.value }))}>
+                  <option value="webinar">Webinar (Online)</option>
+                  <option value="in_person">In Person</option>
+                  <option value="hybrid">Hybrid</option>
+                </select>
+              </div>
+              <div style={{ background: G.wash, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: G.dark }}>
+                💡 Fill in the full details (date, link, venue) after creating.
               </div>
             </div>
-
-            {/* Venue — shown for in_person and hybrid */}
-            {isVenueType && (
-              <Input label="Venue / Location" value={form.venue}
-                onChange={v => setForm(f => ({ ...f, venue: v }))} placeholder="e.g. CvSU AVR, Building A" />
-            )}
-
-            {/* Webinar fields — shown for webinar and hybrid */}
-            {isWebinarType && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <Input label="Webinar Link" value={form.webinar_link}
-                  onChange={v => setForm(f => ({ ...f, webinar_link: v }))} placeholder="https://meet.google.com/…" />
-                <Select label="Platform" value={form.webinar_platform || ""}
-                  onChange={v => setForm(f => ({ ...f, webinar_platform: v }))} options={PLATFORM_OPTIONS} />
-              </div>
-            )}
-
-            {error && <div style={{ color: "#c0392b", fontSize: 13, background: "#fdecea",
-              padding: "10px 14px", borderRadius: 10, border: "1px solid #f5c6cb" }}>⚠️ {error}</div>}
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 4 }}>
-              <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
-              <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : modal === "add" ? "Create Seminar" : "Save Changes"}</Btn>
+            <div style={s.mFooter}>
+              <button style={s.btnSecondary} onClick={() => setShowAdd(false)}>Cancel</button>
+              <button style={{ ...s.btnPrimary, opacity: addSaving ? 0.7 : 1 }} onClick={createSeminar} disabled={addSaving}>{addSaving ? "Creating…" : "Create Seminar"}</button>
             </div>
           </div>
-        </Modal>
-      )}
-
-      {/* ── Attendees Modal ── */}
-      {modal === "attendees" && selected && (
-        <Modal title={`Attendees — ${selected.title}`} onClose={() => { setModal(null); setSelected(null); }} wide>
-          <div>
-            <div style={{ background: G.cream, borderRadius: 10, padding: "12px 16px",
-              marginBottom: 16, fontSize: 13, color: G.base, display: "flex", gap: 20, flexWrap: "wrap" }}>
-              {selected.scheduled_start && <span>📅 {fmtDate(selected.scheduled_start)}</span>}
-              {selected.venue           && <span>📍 {selected.venue}</span>}
-              {selected.webinar_link    && <span>🔗 <a href={selected.webinar_link} target="_blank" rel="noreferrer" style={{ color: G.base }}>Join Link</a></span>}
-              <span>🪑 {registrations.length} registered</span>
-              <span>✅ {registrations.filter(r => r.status === "attended").length} attended</span>
-            </div>
-
-            {regLoading ? (
-              <div style={{ textAlign: "center", padding: 40, color: G.base }}>🌸 Loading…</div>
-            ) : registrations.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 40, color: "#aaa" }}>
-                <div style={{ fontSize: 32, marginBottom: 8 }}>👥</div>
-                No registrations yet.
-              </div>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ borderBottom: `2px solid ${G.wash}` }}>
-                    {["Name", "Email", "Registered", "Status", "Mark"].map(h => (
-                      <th key={h} style={{ textAlign: "left", padding: "8px 10px",
-                        fontSize: 11, fontWeight: 700, color: G.base,
-                        letterSpacing: ".05em", textTransform: "uppercase" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {registrations.map(reg => (
-                    <tr key={reg.id} style={{ borderBottom: `1px solid ${G.wash}`,
-                      background: reg.status === "attended" ? G.cream : "transparent" }}>
-                      <td style={{ padding: "10px", fontSize: 13, color: G.dark, fontWeight: 500 }}>
-                        {reg.profiles?.full_name ?? "—"}
-                      </td>
-                      <td style={{ padding: "10px", fontSize: 12, color: G.light }}>
-                        {reg.profiles?.email ?? "—"}
-                      </td>
-                      <td style={{ padding: "10px", fontSize: 12, color: G.light }}>
-                        {fmtDateOnly(reg.registered_at ?? reg.created_at)}
-                      </td>
-                      <td style={{ padding: "10px" }}>
-                        <Tag color={reg.status === "attended" ? "green" : reg.status === "cancelled" ? "red" : "yellow"}>
-                          {reg.status || "registered"}
-                        </Tag>
-                      </td>
-                      <td style={{ padding: "10px" }}>
-                        <Btn small variant={reg.status === "attended" ? "danger" : "secondary"}
-                          onClick={() => toggleAttendance(reg)}>
-                          {reg.status === "attended" ? "Unmark" : "✓ Attended"}
-                        </Btn>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </Modal>
+        </div>
       )}
     </div>
   );

@@ -19,62 +19,60 @@ const SHIMMER_CSS = `
   border-radius: 8px;
 }`;
 
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const utcStr = iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z";
+  return new Date(utcStr).toLocaleString("en-PH", {
+    timeZone: "Asia/Manila", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  });
+}
+
 function Shimmer({ w = "100%", h = 16, r = 8, style = {} }) {
   return <div className="shimmer" style={{ width: w, height: h, borderRadius: r, flexShrink: 0, ...style }} />;
 }
 
 function Card({ children, style = {} }) {
   return (
-    <div style={{
-      background: G.white, border: `1px solid ${G.pale}`,
-      borderRadius: 14, padding: "24px 28px",
-      boxShadow: "0 2px 8px rgba(45,74,24,.06)", ...style,
-    }}>{children}</div>
+    <div style={{ background: G.white, border: `1px solid ${G.pale}`, borderRadius: 14, padding: "24px 28px", boxShadow: "0 2px 8px rgba(45,74,24,.06)", ...style }}>
+      {children}
+    </div>
   );
 }
 
-function StatCard({ emoji, label, value, sub, color }) {
+function StatCard({ emoji, label, value, sub, color, border }) {
   return (
-    <Card style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <Card style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: border ? `3px solid ${border}` : undefined }}>
       <div style={{ fontSize: 28 }}>{emoji}</div>
-      <div style={{ fontSize: 13, color: G.base, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 38, fontWeight: 800, color: color || G.dark, lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 11, color: G.base, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 36, fontWeight: 900, color: color || G.dark, lineHeight: 1 }}>{value ?? "—"}</div>
       {sub && <div style={{ fontSize: 12, color: G.light, marginTop: 2 }}>{sub}</div>}
     </Card>
   );
 }
 
 function SectionTitle({ children }) {
-  return <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: G.dark, margin: "0 0 14px 0" }}>{children}</h2>;
+  return <h2 style={{ fontFamily: "'Segoe UI', sans-serif", fontSize: 16, fontWeight: 800, color: G.dark, margin: "0 0 16px 0" }}>{children}</h2>;
 }
 
 function Tag({ children, color }) {
-  const map = {
-    green:  { bg: G.wash,    text: G.dark },
-    yellow: { bg: "#fff8e1", text: "#7a5c00" },
-    gray:   { bg: "#f0f0f0", text: "#555" },
-    blue:   { bg: "#e8f0fe", text: "#1a56a8" },
-  };
+  const map = { green: { bg: G.wash, text: G.dark }, yellow: { bg: "#fff8e1", text: "#7a5c00" }, gray: { bg: "#f0f0f0", text: "#555" }, blue: { bg: "#e8f0fe", text: "#1a56a8" } };
   const c = map[color] || map.gray;
-  return (
-    <span style={{
-      background: c.bg, color: c.text, borderRadius: 20, padding: "2px 10px",
-      fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase",
-    }}>{children}</span>
-  );
+  return <span style={{ background: c.bg, color: c.text, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase" }}>{children}</span>;
 }
 
-function MiniBar({ label, value, max, color }) {
-  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+function MiniBar({ label, value, max, color, sub }) {
+  const pct = max > 0 ? Math.min(Math.round((value / max) * 100), 100) : 0;
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: G.mid, marginBottom: 4 }}>
-        <span style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        <span style={{ fontWeight: 700 }}>{value}</span>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: G.mid, marginBottom: 5 }}>
+        <span style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{label}</span>
+        <span style={{ fontWeight: 700, color: G.dark }}>{value}<span style={{ fontWeight: 400, color: "#aaa" }}>/{max}</span></span>
       </div>
       <div style={{ background: G.wash, borderRadius: 6, height: 8 }}>
         <div style={{ width: `${pct}%`, height: 8, borderRadius: 6, background: color || G.base, transition: "width .6s ease" }} />
       </div>
+      {sub && <div style={{ fontSize: 11, color: "#aaa", marginTop: 3 }}>{sub}</div>}
     </div>
   );
 }
@@ -89,7 +87,6 @@ function EmptyState({ emoji, title, message }) {
   );
 }
 
-// ── Skeleton screens ──────────────────────────────────────────────
 function SkeletonStatCard() {
   return (
     <Card style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -123,64 +120,74 @@ function getActivityEmoji(action) {
   const a = action.toLowerCase();
   if (a.includes("module"))      return "📚";
   if (a.includes("seminar"))     return "🎓";
-  if (a.includes("certificate")) return "🏅";
-  if (a.includes("assessment"))  return "📝";
+  if (a.includes("certificate")) return "🏆";
+  if (a.includes("assessment") || a.includes("quiz")) return "📝";
   if (a.includes("login"))       return "🔑";
-  if (a.includes("register"))    return "✍️";
-  if (a.includes("badge"))       return "⭐";
+  if (a.includes("register"))    return "✏️";
+  if (a.includes("badge"))       return "🏅";
+  if (a.includes("file"))        return "📄";
+  if (a.includes("forum"))       return "💬";
   return "📌";
 }
 
 export default function DashboardPage() {
-  const [stats,       setStats]       = useState(null);
-  const [moduleStats, setModuleStats] = useState([]);
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [activity,    setActivity]    = useState([]);
-  const [loading,     setLoading]     = useState(true);
-  const [error,       setError]       = useState(null);
+  const [stats,        setStats]        = useState(null);
+  const [moduleStats,  setModuleStats]  = useState([]);
+  const [seminarStats, setSeminarStats] = useState([]);
+  const [leaderboard,  setLeaderboard]  = useState([]);
+  const [activity,     setActivity]     = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState(null);
 
   useEffect(() => { fetchAll(); }, []);
 
   const fetchAll = async () => {
     setLoading(true); setError(null);
-
     try {
+      // ── Core counts ──
       const [
         { count: totalModules },
         { count: publishedModules },
         { count: totalAssessments },
+        { count: publishedAssessments },
         { count: totalSeminars },
         { count: totalCerts },
+        { count: totalBadgesAwarded },
         { data: modStats },
+        { data: semStats },
       ] = await Promise.all([
         supabase.from("modules").select("*", { count: "exact", head: true }),
         supabase.from("modules").select("*", { count: "exact", head: true }).eq("status", "published"),
         supabase.from("assessments").select("*", { count: "exact", head: true }),
+        supabase.from("assessments").select("*", { count: "exact", head: true }).eq("is_published", true),
         supabase.from("seminars").select("*", { count: "exact", head: true }),
-        supabase.from("certificates").select("*", { count: "exact", head: true }),
-        supabase.from("v_module_completion_stats").select("*").limit(5),
+        supabase.from("certificates").select("*", { count: "exact", head: true }).eq("is_revoked", false),
+        supabase.from("student_badges").select("*", { count: "exact", head: true }),
+        supabase.from("v_module_completion_stats").select("*").order("completion_rate_percent", { ascending: false }).limit(5),
+        supabase.from("v_seminar_attendance_summary").select("*").order("scheduled_start", { ascending: false }).limit(5),
       ]);
+
       setStats(prev => ({
         ...prev,
-        totalModules: totalModules ?? 0, publishedModules: publishedModules ?? 0,
-        totalAssessments: totalAssessments ?? 0, totalSeminars: totalSeminars ?? 0,
-        totalCerts: totalCerts ?? 0,
+        totalModules:         totalModules ?? 0,
+        publishedModules:     publishedModules ?? 0,
+        totalAssessments:     totalAssessments ?? 0,
+        publishedAssessments: publishedAssessments ?? 0,
+        totalSeminars:        totalSeminars ?? 0,
+        totalCerts:           totalCerts ?? 0,
+        totalBadgesAwarded:   totalBadgesAwarded ?? 0,
       }));
       setModuleStats(modStats ?? []);
-    } catch (err) {
-      setError("Failed to load dashboard data: " + err.message);
-      setLoading(false); return;
-    }
+      setSeminarStats(semStats ?? []);
 
-    try {
+      // ── Student count (role-based) ──
       const { data: roleRow } = await supabase.from("roles").select("id").eq("name", "student").single();
       if (roleRow) {
         const { count } = await supabase.from("user_roles").select("*", { count: "exact", head: true }).eq("role_id", roleRow.id);
         setStats(prev => ({ ...prev, totalStudents: count ?? 0 }));
       }
-    } catch (_) {}
 
-    try {
+      // ── Badge leaderboard ──
       const { data: lb } = await supabase.from("student_badges").select("user_id, profiles(full_name)");
       const map = {};
       (lb ?? []).forEach((row, idx) => {
@@ -189,22 +196,19 @@ export default function DashboardPage() {
         map[uid].badge_count += 1;
       });
       setLeaderboard(Object.values(map).sort((a, b) => b.badge_count - a.badge_count).slice(0, 5));
-    } catch (_) {}
 
-    try {
-      const { data: logs, error: logErr } = await supabase
-        .from("activity_logs").select("*").order("created_at", { ascending: false }).limit(8);
-      if (!logErr) setActivity(logs ?? []);
-    } catch (_) {}
+      // ── Recent activity logs ──
+      const { data: logs } = await supabase
+        .from("activity_logs").select("*").order("created_at", { ascending: false }).limit(10);
+      setActivity(logs ?? []);
 
+    } catch (err) {
+      setError("Failed to load dashboard: " + err.message);
+    }
     setLoading(false);
   };
 
-  const fmtDate = (iso) => {
-    if (!iso) return "—";
-    return new Date(iso).toLocaleDateString("en-PH", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  };
-
+  // ── Loading skeleton ──
   if (loading) {
     return (
       <>
@@ -215,24 +219,23 @@ export default function DashboardPage() {
             <Shimmer w={300} h={14} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16, marginBottom: 28 }}>
-            {[...Array(5)].map((_, i) => <SkeletonStatCard key={i} />)}
+            {[...Array(6)].map((_, i) => <SkeletonStatCard key={i} />)}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
             <SkeletonListCard rows={4} />
             <SkeletonListCard rows={4} />
           </div>
-          <SkeletonListCard rows={5} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+            <SkeletonListCard rows={4} />
+            <SkeletonListCard rows={5} />
+          </div>
         </div>
       </>
     );
   }
 
   if (error) {
-    return (
-      <div style={{ padding: 40, color: "#c0392b", background: "#fff5f5", borderRadius: 12, margin: 24 }}>
-        ⚠️ {error}
-      </div>
-    );
+    return <div style={{ padding: 40, color: "#c0392b", background: "#fff5f5", borderRadius: 12, margin: 24 }}>⚠️ {error}</div>;
   }
 
   const draftCount = (stats.totalModules ?? 0) - (stats.publishedModules ?? 0);
@@ -242,51 +245,85 @@ export default function DashboardPage() {
       <style>{SHIMMER_CSS}</style>
       <div style={{ padding: "28px 32px", maxWidth: 1200, margin: "0 auto" }}>
 
-        <div style={{ marginBottom: 28 }}>
-          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, fontWeight: 800, color: G.dark, margin: 0 }}>Dashboard</h1>
-          <p style={{ color: G.base, margin: "4px 0 0", fontSize: 14 }}>Welcome back — here's what's happening at GADRC today.</p>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 28 }}>
+          <div>
+            <h1 style={{ fontFamily: "'Segoe UI', sans-serif", fontSize: 26, fontWeight: 900, color: G.dark, margin: 0 }}>📊 Dashboard</h1>
+            <p style={{ color: G.base, margin: "4px 0 0", fontSize: 14 }}>Welcome back — here's what's happening at GADRC today.</p>
+          </div>
+          <button onClick={fetchAll} style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 8, padding: "8px 16px", fontSize: 13, color: G.base, cursor: "pointer", fontWeight: 600 }}>↻ Refresh</button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16, marginBottom: 28 }}>
-          <StatCard emoji="📚" label="Total Modules"       value={stats.totalModules ?? 0} sub={`${stats.publishedModules ?? 0} published · ${draftCount} draft`} />
-          <StatCard emoji="📝" label="Assessments"         value={stats.totalAssessments ?? 0} />
-          <StatCard emoji="🎓" label="Seminars"            value={stats.totalSeminars ?? 0} />
-          <StatCard emoji="🏅" label="Certificates Issued" value={stats.totalCerts ?? 0} color={G.mid} />
-          <StatCard emoji="👩‍🎓" label="Students"           value={stats.totalStudents ?? "—"} />
+        {/* Stat cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(175px, 1fr))", gap: 14, marginBottom: 24 }}>
+          <StatCard emoji="👩‍🎓" label="Students"           value={stats.totalStudents ?? "—"} color={G.dark}    border={G.dark} />
+          <StatCard emoji="📚"   label="Modules"            value={stats.totalModules ?? 0}    sub={`${stats.publishedModules ?? 0} published · ${draftCount} draft`} border={G.base} />
+          <StatCard emoji="📝"   label="Assessments"        value={stats.totalAssessments ?? 0} sub={`${stats.publishedAssessments ?? 0} published`} border="#2563eb" color="#2563eb" />
+          <StatCard emoji="🎓"   label="Seminars"           value={stats.totalSeminars ?? 0}   border="#7c3aed" color="#7c3aed" />
+          <StatCard emoji="🏅"   label="Badges Awarded"     value={stats.totalBadgesAwarded ?? 0} border="#f59e0b" color="#f59e0b" />
+          <StatCard emoji="🏆"   label="Certificates"       value={stats.totalCerts ?? 0}      border="#16a34a" color="#16a34a" />
         </div>
 
+        {/* Module + Seminar completion */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
           <Card>
-            <SectionTitle>📊 Module Completion (Top 5)</SectionTitle>
+            <SectionTitle>📊 Module Completion Rate (Top 5)</SectionTitle>
             {moduleStats.length === 0
-              ? <EmptyState emoji="📊" title="No data yet" message="Module completion will appear here once students start." />
+              ? <EmptyState emoji="📊" title="No data yet" message="Completion stats appear once students start modules." />
               : moduleStats.map((m, i) => (
-                <MiniBar key={m.module_id ?? i} label={m.title ?? "Untitled Module"}
-                  value={m.completed_students ?? 0} max={Math.max(m.total_students ?? 0, 1)}
-                  color={i === 0 ? G.dark : i === 1 ? G.mid : G.base} />
+                <MiniBar
+                  key={m.module_id ?? i}
+                  label={m.module_title ?? "Untitled"}
+                  value={m.completed_count ?? 0}
+                  max={m.total_students ?? 1}
+                  color={i === 0 ? G.dark : i === 1 ? G.mid : G.base}
+                  sub={`${m.completion_rate_percent ?? 0}% completion · ${m.in_progress_count ?? 0} in progress`}
+                />
               ))
             }
           </Card>
 
           <Card>
-            <SectionTitle>🏆 Student Leaderboard (Top 5)</SectionTitle>
+            <SectionTitle>🎓 Seminar Attendance (Recent 5)</SectionTitle>
+            {seminarStats.length === 0
+              ? <EmptyState emoji="🎓" title="No seminars yet" message="Attendance stats appear after seminars are held." />
+              : seminarStats.map((s, i) => (
+                <MiniBar
+                  key={s.seminar_id ?? i}
+                  label={s.seminar_title ?? "Untitled"}
+                  value={s.attended_count ?? 0}
+                  max={s.registered_count ?? 1}
+                  color={i === 0 ? "#7c3aed" : i === 1 ? "#2563eb" : G.base}
+                  sub={`${s.attendance_rate_percent ?? 0}% attendance · ${s.registered_count ?? 0} registered`}
+                />
+              ))
+            }
+          </Card>
+        </div>
+
+        {/* Leaderboard + Activity */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <Card>
+            <SectionTitle>🏆 Badge Leaderboard (Top 5)</SectionTitle>
             {leaderboard.length === 0
-              ? <EmptyState emoji="🏆" title="No leaderboard yet" message="Students will appear here as they earn badges." />
+              ? <EmptyState emoji="🏆" title="No leaderboard yet" message="Students appear here as they earn badges." />
               : (
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ borderBottom: `2px solid ${G.wash}` }}>
-                      {["Rank", "Name", "Badges"].map(h => (
-                        <th key={h} style={{ textAlign: h === "Rank" ? "center" : "left", padding: "6px 8px", fontSize: 11, fontWeight: 700, color: G.base, letterSpacing: ".05em", textTransform: "uppercase" }}>{h}</th>
+                      {["Rank", "Student", "Badges"].map(h => (
+                        <th key={h} style={{ textAlign: h === "Rank" ? "center" : "left", padding: "6px 8px", fontSize: 11, fontWeight: 700, color: G.base, textTransform: "uppercase", letterSpacing: ".05em" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {leaderboard.map((row, i) => (
                       <tr key={row.user_id} style={{ borderBottom: `1px solid ${G.wash}`, background: i === 0 ? G.cream : "transparent" }}>
-                        <td style={{ textAlign: "center", padding: "8px", fontSize: 18 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}</td>
-                        <td style={{ padding: "8px", fontSize: 14, color: G.dark, fontWeight: i === 0 ? 700 : 500 }}>{row.full_name}</td>
-                        <td style={{ padding: "8px", fontSize: 14, color: G.base }}>{row.badge_count}</td>
+                        <td style={{ textAlign: "center", padding: "10px 8px", fontSize: 18 }}>
+                          {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}
+                        </td>
+                        <td style={{ padding: "10px 8px", fontSize: 14, color: G.dark, fontWeight: i === 0 ? 700 : 500 }}>{row.full_name}</td>
+                        <td style={{ padding: "10px 8px", fontSize: 14, color: "#f59e0b", fontWeight: 700 }}>🏅 {row.badge_count}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -294,40 +331,30 @@ export default function DashboardPage() {
               )
             }
           </Card>
-        </div>
 
-        <Card>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <Card>
             <SectionTitle>🕐 Recent Activity</SectionTitle>
-            <button onClick={fetchAll} style={{ background: "none", border: `1px solid ${G.pale}`, borderRadius: 8, padding: "4px 12px", fontSize: 12, color: G.base, cursor: "pointer" }}>↻ Refresh</button>
-          </div>
-          {activity.length === 0
-            ? <EmptyState emoji="🕐" title="No activity yet" message="Recent actions across GADRC will appear here." />
-            : activity.map((log, i) => (
-              <div key={log.id ?? i} style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "10px 0", borderBottom: i < activity.length - 1 ? `1px solid ${G.wash}` : "none" }}>
-                <div style={{ width: 36, height: 36, borderRadius: "50%", background: G.wash, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>
-                  {getActivityEmoji(log.action)}
+            {activity.length === 0
+              ? <EmptyState emoji="🕐" title="No activity yet" message="Recent student actions will appear here." />
+              : activity.map((log, i) => (
+                <div key={log.id ?? i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 0", borderBottom: i < activity.length - 1 ? `1px solid ${G.wash}` : "none" }}>
+                  <div style={{ width: 34, height: 34, borderRadius: "50%", background: G.wash, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>
+                    {getActivityEmoji(log.action_type)}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, color: G.dark, fontWeight: 500 }}>
+                      {log.action_type?.replace(/_/g, " ") ?? "Activity"}
+                      {log.reference_type ? <span style={{ color: "#aaa", fontWeight: 400 }}> · {log.reference_type}</span> : ""}
+                    </div>
+                    <div style={{ fontSize: 11, color: G.light, marginTop: 2 }}>{fmtDate(log.created_at)}</div>
+                  </div>
+                  <Tag color="gray">{log.action_type?.split("_")[0] ?? "event"}</Tag>
                 </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, color: G.dark, fontWeight: 500 }}>{log.description ?? log.action ?? "Activity"}</div>
-                  <div style={{ fontSize: 11, color: G.light, marginTop: 2 }}>{fmtDate(log.created_at)}</div>
-                </div>
-                <Tag color="gray">{log.action ?? "event"}</Tag>
-              </div>
-            ))
-          }
-        </Card>
-
-        <div style={{ marginTop: 20 }}>
-          <SectionTitle>⚡ Quick Actions</SectionTitle>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            {["📚 Manage Modules", "📝 Manage Assessments", "🎓 Manage Seminars", "🏅 Certificates", "📅 Calendar"].map(label => (
-              <div key={label} style={{ background: G.white, border: `1px solid ${G.pale}`, borderRadius: 12, padding: "12px 20px", fontSize: 13, color: G.mid, fontWeight: 600, cursor: "default", display: "flex", alignItems: "center", gap: 8, boxShadow: "0 1px 4px rgba(45,74,24,.05)" }}>
-                {label}
-              </div>
-            ))}
-          </div>
+              ))
+            }
+          </Card>
         </div>
+
       </div>
     </>
   );

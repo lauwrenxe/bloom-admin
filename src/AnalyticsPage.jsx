@@ -22,37 +22,29 @@ const SHIMMER_CSS = `
 function Shimmer({ w = "100%", h = 16, r = 8, style = {} }) {
   return <div className="shimmer" style={{ width: w, height: h, borderRadius: r, flexShrink: 0, ...style }} />;
 }
-
 function Card({ children, style = {} }) {
-  return (
-    <div style={{ background: G.white, border: `1px solid ${G.pale}`, borderRadius: 14, padding: "22px 26px", boxShadow: "0 2px 8px rgba(45,74,24,.06)", ...style }}>
-      {children}
-    </div>
-  );
+  return <div style={{ background: G.white, border: `1px solid ${G.pale}`, borderRadius: 14, padding: "22px 26px", boxShadow: "0 2px 8px rgba(45,74,24,.06)", ...style }}>{children}</div>;
 }
-
 function SectionTitle({ children }) {
-  return <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 16, fontWeight: 700, color: G.dark, margin: "0 0 16px 0" }}>{children}</h2>;
+  return <h2 style={{ fontFamily: "'Segoe UI', sans-serif", fontSize: 16, fontWeight: 800, color: G.dark, margin: "0 0 16px 0" }}>{children}</h2>;
 }
-
-function StatCard({ emoji, label, value, sub, color }) {
+function StatCard({ emoji, label, value, sub, color, border }) {
   return (
-    <Card style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+    <Card style={{ display: "flex", flexDirection: "column", gap: 5, borderTop: border ? `3px solid ${border}` : undefined }}>
       <div style={{ fontSize: 26 }}>{emoji}</div>
-      <div style={{ fontSize: 12, color: G.base, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 34, fontWeight: 800, color: color || G.dark, lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 11, color: G.base, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 34, fontWeight: 900, color: color || G.dark, lineHeight: 1 }}>{value ?? "—"}</div>
       {sub && <div style={{ fontSize: 11, color: G.light, marginTop: 1 }}>{sub}</div>}
     </Card>
   );
 }
-
-function MiniBar({ label, value, max, color, sub }) {
+function MiniBar({ label, value, displayValue, max, color, sub }) {
   const pct = max > 0 ? Math.min(Math.round((value / max) * 100), 100) : 0;
   return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: G.mid, marginBottom: 4 }}>
-        <span style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        <span style={{ fontWeight: 700, flexShrink: 0, marginLeft: 8 }}>{value}{sub ? ` ${sub}` : ""}</span>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: G.mid, marginBottom: 5 }}>
+        <span style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{label}</span>
+        <span style={{ fontWeight: 700, color: G.dark, flexShrink: 0, marginLeft: 8 }}>{displayValue ?? value}{sub ? ` ${sub}` : ""}</span>
       </div>
       <div style={{ background: G.wash, borderRadius: 6, height: 8 }}>
         <div style={{ width: `${pct}%`, height: 8, borderRadius: 6, background: color || G.base, transition: "width .7s ease" }} />
@@ -60,16 +52,9 @@ function MiniBar({ label, value, max, color, sub }) {
     </div>
   );
 }
-
 function EmptyState({ emoji, message }) {
-  return (
-    <div style={{ textAlign: "center", padding: "32px 16px" }}>
-      <div style={{ fontSize: 32, marginBottom: 8 }}>{emoji}</div>
-      <div style={{ fontSize: 13, color: G.light }}>{message}</div>
-    </div>
-  );
+  return <div style={{ textAlign: "center", padding: "32px 16px" }}><div style={{ fontSize: 32, marginBottom: 8 }}>{emoji}</div><div style={{ fontSize: 13, color: G.light }}>{message}</div></div>;
 }
-
 function DonutChart({ segments, size = 120 }) {
   const r = 40, cx = 60, cy = 60, circumference = 2 * Math.PI * r;
   const total = segments.reduce((s, seg) => s + seg.value, 0);
@@ -77,37 +62,30 @@ function DonutChart({ segments, size = 120 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 120 120">
       <circle cx={cx} cy={cy} r={r} fill="none" stroke={G.wash} strokeWidth={18} />
-      {total === 0 ? null : segments.map((seg, i) => {
+      {total > 0 && segments.map((seg, i) => {
         const dash = (seg.value / total) * circumference;
         const gap  = circumference - dash;
-        const el = (
-          <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={seg.color} strokeWidth={18}
-            strokeDasharray={`${dash} ${gap}`} strokeDashoffset={-offset}
-            style={{ transform: "rotate(-90deg)", transformOrigin: "60px 60px", transition: "stroke-dasharray .7s" }} />
-        );
+        const el = <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={seg.color} strokeWidth={18}
+          strokeDasharray={`${dash} ${gap}`} strokeDashoffset={-offset}
+          style={{ transform: "rotate(-90deg)", transformOrigin: "60px 60px" }} />;
         offset += dash;
         return el;
       })}
-      <text x={cx} y={cy + 5} textAnchor="middle" fontSize="16" fontWeight="800" fill={G.dark}>{total}</text>
+      <text x={cx} y={cy + 6} textAnchor="middle" fontSize="16" fontWeight="800" fill={G.dark}>{total}</text>
     </svg>
   );
 }
-
-// ── Skeleton screens ──────────────────────────────────────────────
 function SkeletonStatGrid() {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 14, marginBottom: 28 }}>
       {[...Array(6)].map((_, i) => (
         <Card key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <Shimmer w={28} h={26} r={6} />
-          <Shimmer w="60%" h={11} />
-          <Shimmer w="40%" h={30} r={6} />
+          <Shimmer w={28} h={26} r={6} /><Shimmer w="60%" h={11} /><Shimmer w="40%" h={30} r={6} />
         </Card>
       ))}
     </div>
   );
 }
-
 function SkeletonBarCard({ rows = 4 }) {
   return (
     <Card>
@@ -115,8 +93,7 @@ function SkeletonBarCard({ rows = 4 }) {
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} style={{ marginBottom: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-            <Shimmer w="50%" h={13} />
-            <Shimmer w="15%" h={13} />
+            <Shimmer w="50%" h={13} /><Shimmer w="15%" h={13} />
           </div>
           <Shimmer w="100%" h={8} />
         </div>
@@ -139,17 +116,36 @@ export default function AnalyticsPage() {
 
   const fetchAll = async (isRefresh = false) => {
     isRefresh ? setRefreshing(true) : setLoading(true);
-    await Promise.allSettled([fetchOverview(), fetchModuleStats(), fetchSeminarStats(), fetchLeaderboard(), fetchCertStats(), fetchAssessStats()]);
+    await Promise.allSettled([
+      fetchOverview(),
+      fetchModuleStats(),
+      fetchSeminarStats(),
+      fetchLeaderboard(),
+      fetchCertStats(),
+      fetchAssessStats(),
+    ]);
     isRefresh ? setRefreshing(false) : setLoading(false);
   };
 
   const fetchOverview = async () => {
-    const [{ count: modules }, { count: published }, { count: assessments }, { count: seminars }, { count: certificates }] = await Promise.all([
+    const [
+      { count: modules },
+      { count: published },
+      { count: assessments },
+      { count: publishedAssess },
+      { count: seminars },
+      { count: certificates },
+      { count: badgesAwarded },
+      { count: attempts },
+    ] = await Promise.all([
       supabase.from("modules").select("*", { count: "exact", head: true }),
       supabase.from("modules").select("*", { count: "exact", head: true }).eq("status", "published"),
       supabase.from("assessments").select("*", { count: "exact", head: true }),
+      supabase.from("assessments").select("*", { count: "exact", head: true }).eq("is_published", true),
       supabase.from("seminars").select("*", { count: "exact", head: true }),
-      supabase.from("certificates").select("*", { count: "exact", head: true }),
+      supabase.from("certificates").select("*", { count: "exact", head: true }).eq("is_revoked", false),
+      supabase.from("student_badges").select("*", { count: "exact", head: true }),
+      supabase.from("assessment_attempts").select("*", { count: "exact", head: true }),
     ]);
     let students = 0;
     try {
@@ -159,136 +155,118 @@ export default function AnalyticsPage() {
         students = count ?? 0;
       }
     } catch (_) {}
-    setOverview({ modules: modules ?? 0, published: published ?? 0, assessments: assessments ?? 0, seminars: seminars ?? 0, certificates: certificates ?? 0, attempts: 0, students });
+    setOverview({
+      modules: modules ?? 0, published: published ?? 0,
+      assessments: assessments ?? 0, publishedAssess: publishedAssess ?? 0,
+      seminars: seminars ?? 0, certificates: certificates ?? 0,
+      badgesAwarded: badgesAwarded ?? 0, attempts: attempts ?? 0, students,
+    });
   };
 
   const fetchModuleStats = async () => {
-    try {
-      const { data } = await supabase.from("v_module_completion_stats").select("*");
-      setModuleStats(data ?? []);
-    } catch (_) {
-      try {
-        const { data: mods } = await supabase.from("modules").select("id, title, status").eq("status", "published");
-        const { data: prog } = await supabase.from("student_progress").select("module_id, status");
-        const map = {};
-        (mods ?? []).forEach(m => { map[m.id] = { title: m.title, total: 0, completed: 0 }; });
-        (prog ?? []).forEach(p => { if (map[p.module_id]) { map[p.module_id].total++; if (p.status === "completed") map[p.module_id].completed++; } });
-        setModuleStats(Object.values(map).map(m => ({ title: m.title, total_students: m.total, completed_students: m.completed })));
-      } catch (_) {}
-    }
+    const { data } = await supabase.from("v_module_completion_stats").select("*").order("completion_rate_percent", { ascending: false });
+    setModuleStats(data ?? []);
   };
 
   const fetchSeminarStats = async () => {
-    try {
-      const { data } = await supabase.from("v_seminar_attendance_summary").select("*");
-      setSeminarStats(data ?? []);
-    } catch (_) {
-      try {
-        const { data: sems } = await supabase.from("seminars").select("id, title");
-        const { data: regs } = await supabase.from("seminar_registrations").select("seminar_id, status");
-        const map = {};
-        (sems ?? []).forEach(s => { map[s.id] = { title: s.title, registered: 0, attended: 0 }; });
-        (regs ?? []).forEach(r => { if (map[r.seminar_id]) { map[r.seminar_id].registered++; if (r.status === "attended") map[r.seminar_id].attended++; } });
-        setSeminarStats(Object.values(map).map(s => ({ title: s.title, total_registered: s.registered, total_attended: s.attended })));
-      } catch (_) {}
-    }
+    const { data } = await supabase.from("v_seminar_attendance_summary").select("*").order("scheduled_start", { ascending: false });
+    setSeminarStats(data ?? []);
   };
 
   const fetchLeaderboard = async () => {
-    try {
-      const { data: lb } = await supabase.from("student_badges").select("user_id, profiles(full_name)");
-      const map = {};
-      (lb ?? []).forEach((row, idx) => {
-        const uid = row.user_id ?? `u_${idx}`;
-        if (!map[uid]) map[uid] = { user_id: uid, full_name: row.profiles?.full_name ?? "—", badge_count: 0 };
-        map[uid].badge_count += 1;
-      });
-      setLeaderboard(Object.values(map).sort((a, b) => b.badge_count - a.badge_count).slice(0, 8));
-    } catch (_) {}
+    const { data: lb } = await supabase.from("student_badges").select("user_id, profiles(full_name)");
+    const map = {};
+    (lb ?? []).forEach((row, idx) => {
+      const uid = row.user_id ?? `u_${idx}`;
+      if (!map[uid]) map[uid] = { user_id: uid, full_name: row.profiles?.full_name ?? "—", badge_count: 0 };
+      map[uid].badge_count += 1;
+    });
+    setLeaderboard(Object.values(map).sort((a, b) => b.badge_count - a.badge_count).slice(0, 8));
   };
 
   const fetchCertStats = async () => {
-    try {
-      const { data, error } = await supabase.from("certificates").select("*");
-      if (error || !data) { setCertStats({}); return; }
-      const byType = {}; let valid = 0, revoked = 0;
-      data.forEach(c => {
-        const t = c.certificate_type ?? c.type ?? c.cert_type ?? "other";
-        byType[t] = (byType[t] ?? 0) + 1;
-        const isRev = c.is_revoked ?? c.revoked ?? false;
-        if (isRev) revoked++; else valid++;
-      });
-      setCertStats({ byType, valid, revoked, total: data.length });
-    } catch (_) { setCertStats({}); }
+    const { data } = await supabase.from("certificates").select("reference_type, is_revoked");
+    if (!data) { setCertStats({}); return; }
+    const byType = {}; let valid = 0, revoked = 0;
+    data.forEach(c => {
+      const t = c.reference_type ?? "manual";
+      byType[t] = (byType[t] ?? 0) + 1;
+      if (c.is_revoked) revoked++; else valid++;
+    });
+    setCertStats({ byType, valid, revoked, total: data.length });
   };
 
-  const fetchAssessStats = async () => { setAssessStats({}); };
+  const fetchAssessStats = async () => {
+    const { data } = await supabase.from("assessment_attempts").select("score, passed");
+    if (!data || data.length === 0) { setAssessStats({}); return; }
+    const total    = data.length;
+    const passed   = data.filter(a => a.passed).length;
+    const scores   = data.map(a => a.score ?? 0);
+    const avg      = Math.round(scores.reduce((s, v) => s + v, 0) / total);
+    const passRate = Math.round((passed / total) * 100);
+    setAssessStats({ total, passed, failed: total - passed, avg, passRate });
+  };
 
-  const certTypeColors = { module: G.base, seminar: "#3b82f6", course: "#ca8a04", other: "#888" };
-  const certSegments = Object.entries(certStats.byType ?? {}).map(([type, value]) => ({ label: type, value, color: certTypeColors[type] ?? "#888" }));
+  const certTypeColors = { manual: G.base, module: "#2563eb", seminar: "#7c3aed", assessment: "#f59e0b", other: "#888" };
+  const certSegments   = Object.entries(certStats.byType ?? {}).map(([type, value]) => ({ label: type, value, color: certTypeColors[type] ?? "#888" }));
 
   if (loading) {
     return (
       <>
         <style>{SHIMMER_CSS}</style>
         <div style={{ padding: "28px 32px", maxWidth: 1200, margin: "0 auto" }}>
-          <div style={{ marginBottom: 28 }}>
-            <Shimmer w={140} h={32} r={10} style={{ marginBottom: 10 }} />
-            <Shimmer w={320} h={14} />
-          </div>
+          <div style={{ marginBottom: 28 }}><Shimmer w={140} h={32} r={10} style={{ marginBottom: 10 }} /><Shimmer w={320} h={14} /></div>
           <SkeletonStatGrid />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
-            <SkeletonBarCard rows={5} />
-            <SkeletonBarCard rows={5} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
-            <SkeletonBarCard rows={3} />
-            <SkeletonBarCard rows={3} />
-          </div>
-          <SkeletonBarCard rows={2} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}><SkeletonBarCard rows={5} /><SkeletonBarCard rows={5} /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}><SkeletonBarCard rows={3} /><SkeletonBarCard rows={3} /></div>
+          <SkeletonBarCard rows={3} />
         </div>
       </>
     );
   }
-
-  const maxModuleStudents = Math.max(...moduleStats.map(m => m.total_students ?? 0), 1);
-  const maxSeminarReg     = Math.max(...seminarStats.map(s => s.total_registered ?? 0), 1);
 
   return (
     <>
       <style>{SHIMMER_CSS}</style>
       <div style={{ padding: "28px 32px", maxWidth: 1200, margin: "0 auto" }}>
 
+        {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
           <div>
-            <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, fontWeight: 800, color: G.dark, margin: 0 }}>Analytics</h1>
+            <h1 style={{ fontFamily: "'Segoe UI', sans-serif", fontSize: 26, fontWeight: 900, color: G.dark, margin: 0 }}>📈 Analytics</h1>
             <p style={{ color: G.base, margin: "4px 0 0", fontSize: 14 }}>Live insights across modules, seminars, assessments, and students.</p>
           </div>
           <button onClick={() => fetchAll(true)} disabled={refreshing}
-            style={{ background: "none", border: `1px solid ${G.pale}`, borderRadius: 8, padding: "8px 16px", fontSize: 13, color: G.base, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, opacity: refreshing ? 0.6 : 1 }}>
+            style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 8, padding: "8px 16px", fontSize: 13, color: G.base, cursor: "pointer", fontWeight: 600, opacity: refreshing ? 0.6 : 1 }}>
             {refreshing ? "Refreshing…" : "↻ Refresh"}
           </button>
         </div>
 
+        {/* Stat cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 14, marginBottom: 28 }}>
-          <StatCard emoji="👩‍🎓" label="Students"     value={overview.students ?? "—"} />
-          <StatCard emoji="📚" label="Modules"       value={overview.modules ?? 0} sub={`${overview.published ?? 0} published`} />
-          <StatCard emoji="📝" label="Assessments"   value={overview.assessments ?? 0} />
-          <StatCard emoji="🎓" label="Seminars"      value={overview.seminars ?? 0} />
-          <StatCard emoji="🏅" label="Certificates"  value={overview.certificates ?? 0} color={G.mid} />
-          <StatCard emoji="✏️" label="Quiz Attempts" value={overview.attempts ?? 0} />
+          <StatCard emoji="👩‍🎓" label="Students"       value={overview.students ?? "—"}        border={G.dark} />
+          <StatCard emoji="📚"   label="Modules"         value={overview.modules ?? 0}            sub={`${overview.published ?? 0} published`} border={G.base} />
+          <StatCard emoji="📝"   label="Assessments"     value={overview.assessments ?? 0}        sub={`${overview.publishedAssess ?? 0} published`} border="#2563eb" color="#2563eb" />
+          <StatCard emoji="🎓"   label="Seminars"        value={overview.seminars ?? 0}           border="#7c3aed" color="#7c3aed" />
+          <StatCard emoji="🏅"   label="Badges Awarded"  value={overview.badgesAwarded ?? 0}      border="#f59e0b" color="#f59e0b" />
+          <StatCard emoji="✏️"   label="Quiz Attempts"   value={overview.attempts ?? 0}           border="#16a34a" color="#16a34a" />
         </div>
 
+        {/* Module + Seminar */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
           <Card>
             <SectionTitle>📚 Module Completion Rate</SectionTitle>
             {moduleStats.length === 0
               ? <EmptyState emoji="📚" message="No module progress data yet." />
               : moduleStats.slice(0, 6).map((m, i) => {
-                  const completed = m.completed_students ?? 0;
-                  const total     = m.total_students     ?? 0;
-                  const pct       = total > 0 ? Math.round((completed / total) * 100) : 0;
-                  return <MiniBar key={m.module_id ?? i} label={m.title ?? "Untitled"} value={`${pct}%`} max={100} color={pct >= 75 ? G.dark : pct >= 40 ? G.base : G.light} sub={`(${completed}/${total})`} />;
+                  const completed = m.completed_count ?? 0;
+                  const total     = m.total_students  ?? 0;
+                  const pct       = m.completion_rate_percent ?? 0;
+                  return <MiniBar key={m.module_id ?? i}
+                    label={m.module_title ?? "Untitled"}
+                    value={pct} displayValue={`${pct}%`} max={100}
+                    color={pct >= 75 ? G.dark : pct >= 40 ? G.base : G.light}
+                    sub={`(${completed}/${total} students)`} />;
                 })
             }
           </Card>
@@ -298,15 +276,20 @@ export default function AnalyticsPage() {
             {seminarStats.length === 0
               ? <EmptyState emoji="🎓" message="No seminar attendance data yet." />
               : seminarStats.slice(0, 6).map((s, i) => {
-                  const attended   = s.total_attended   ?? 0;
-                  const registered = s.total_registered ?? 0;
-                  const pct        = registered > 0 ? Math.round((attended / registered) * 100) : 0;
-                  return <MiniBar key={s.seminar_id ?? i} label={s.title ?? s.seminar_title ?? "Untitled"} value={`${pct}%`} max={100} color={pct >= 75 ? G.mid : pct >= 40 ? G.base : G.light} sub={`(${attended}/${registered})`} />;
+                  const attended   = s.attended_count   ?? 0;
+                  const registered = s.registered_count ?? 0;
+                  const pct        = s.attendance_rate_percent ?? 0;
+                  return <MiniBar key={s.seminar_id ?? i}
+                    label={s.seminar_title ?? "Untitled"}
+                    value={pct} displayValue={`${pct}%`} max={100}
+                    color={pct >= 75 ? "#7c3aed" : pct >= 40 ? "#2563eb" : G.light}
+                    sub={`(${attended}/${registered} registered)`} />;
                 })
             }
           </Card>
         </div>
 
+        {/* Assessment + Certificates */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
           <Card>
             <SectionTitle>✏️ Assessment Performance</SectionTitle>
@@ -315,38 +298,62 @@ export default function AnalyticsPage() {
               : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    {[{ label: "Total Attempts", value: assessStats.total, emoji: "✏️" }, { label: "Avg Score", value: `${assessStats.avg}%`, emoji: "📊" }, { label: "Passed", value: assessStats.passed, emoji: "✅" }, { label: "Pass Rate", value: `${assessStats.passRate}%`, emoji: "🎯" }].map(({ label, value, emoji }) => (
-                      <div key={label} style={{ background: G.cream, borderRadius: 10, padding: "12px 14px", textAlign: "center" }}>
-                        <div style={{ fontSize: 20, marginBottom: 4 }}>{emoji}</div>
-                        <div style={{ fontSize: 20, fontWeight: 800, color: G.dark }}>{value}</div>
-                        <div style={{ fontSize: 11, color: G.base, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</div>
+                    {[
+                      { label: "Total Attempts", value: assessStats.total,    emoji: "✏️" },
+                      { label: "Avg Score",       value: `${assessStats.avg}%`, emoji: "📊" },
+                      { label: "Passed",          value: assessStats.passed,   emoji: "✅" },
+                      { label: "Pass Rate",       value: `${assessStats.passRate}%`, emoji: "🎯" },
+                    ].map(({ label, value, emoji }) => (
+                      <div key={label} style={{ background: G.cream, borderRadius: 10, padding: "14px", textAlign: "center" }}>
+                        <div style={{ fontSize: 22, marginBottom: 4 }}>{emoji}</div>
+                        <div style={{ fontSize: 22, fontWeight: 900, color: G.dark }}>{value}</div>
+                        <div style={{ fontSize: 11, color: G.base, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</div>
                       </div>
                     ))}
                   </div>
-                  <MiniBar label="Pass Rate" value={assessStats.passRate} max={100} color={assessStats.passRate >= 70 ? G.dark : "#e67e22"} sub="%" />
+                  <MiniBar label="Overall Pass Rate" value={assessStats.passRate} displayValue={`${assessStats.passRate}%`} max={100}
+                    color={assessStats.passRate >= 70 ? G.dark : assessStats.passRate >= 50 ? G.base : "#e67e22"} />
+                  <div style={{ display: "flex", gap: 12 }}>
+                    <div style={{ flex: 1, background: "#dcfce7", borderRadius: 8, padding: "10px 14px", textAlign: "center" }}>
+                      <div style={{ fontSize: 18, fontWeight: 900, color: "#16a34a" }}>{assessStats.passed}</div>
+                      <div style={{ fontSize: 11, color: "#16a34a", fontWeight: 700 }}>PASSED</div>
+                    </div>
+                    <div style={{ flex: 1, background: "#fee2e2", borderRadius: 8, padding: "10px 14px", textAlign: "center" }}>
+                      <div style={{ fontSize: 18, fontWeight: 900, color: "#dc2626" }}>{assessStats.failed}</div>
+                      <div style={{ fontSize: 11, color: "#dc2626", fontWeight: 700 }}>FAILED</div>
+                    </div>
+                  </div>
                 </div>
               )
             }
           </Card>
 
           <Card>
-            <SectionTitle>🏅 Certificates by Type</SectionTitle>
+            <SectionTitle>🏆 Certificates by Type</SectionTitle>
             {!certStats.total
-              ? <EmptyState emoji="🏅" message="No certificates issued yet." />
+              ? <EmptyState emoji="🏆" message="No certificates issued yet." />
               : (
-                <div style={{ display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
-                  <DonutChart segments={certSegments} size={120} />
-                  <div style={{ flex: 1, minWidth: 140 }}>
-                    {certSegments.map(seg => (
-                      <div key={seg.label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 13 }}>
-                        <div style={{ width: 10, height: 10, borderRadius: "50%", background: seg.color, flexShrink: 0 }} />
-                        <span style={{ color: G.dark, fontWeight: 500, textTransform: "capitalize" }}>{seg.label}</span>
-                        <span style={{ marginLeft: "auto", fontWeight: 700, color: G.mid }}>{seg.value}</span>
-                      </div>
-                    ))}
-                    <div style={{ borderTop: `1px solid ${G.wash}`, paddingTop: 8, marginTop: 4, fontSize: 12, color: G.light, display: "flex", gap: 16 }}>
-                      <span>✅ Valid: {certStats.valid ?? 0}</span>
-                      <span>❌ Revoked: {certStats.revoked ?? 0}</span>
+                <div>
+                  <div style={{ display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+                    <DonutChart segments={certSegments} size={120} />
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      {certSegments.map(seg => (
+                        <div key={seg.label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 13 }}>
+                          <div style={{ width: 10, height: 10, borderRadius: "50%", background: seg.color, flexShrink: 0 }} />
+                          <span style={{ color: G.dark, fontWeight: 500, textTransform: "capitalize" }}>{seg.label}</span>
+                          <span style={{ marginLeft: "auto", fontWeight: 700, color: G.mid }}>{seg.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 12 }}>
+                    <div style={{ flex: 1, background: "#dcfce7", borderRadius: 8, padding: "10px 14px", textAlign: "center" }}>
+                      <div style={{ fontSize: 18, fontWeight: 900, color: "#16a34a" }}>{certStats.valid ?? 0}</div>
+                      <div style={{ fontSize: 11, color: "#16a34a", fontWeight: 700 }}>VALID</div>
+                    </div>
+                    <div style={{ flex: 1, background: "#fee2e2", borderRadius: 8, padding: "10px 14px", textAlign: "center" }}>
+                      <div style={{ fontSize: 18, fontWeight: 900, color: "#dc2626" }}>{certStats.revoked ?? 0}</div>
+                      <div style={{ fontSize: 11, color: "#dc2626", fontWeight: 700 }}>REVOKED</div>
                     </div>
                   </div>
                 </div>
@@ -355,6 +362,7 @@ export default function AnalyticsPage() {
           </Card>
         </div>
 
+        {/* Leaderboard */}
         <Card>
           <SectionTitle>🏆 Student Leaderboard — Top Badge Earners</SectionTitle>
           {leaderboard.length === 0
@@ -366,7 +374,7 @@ export default function AnalyticsPage() {
                     <div style={{ fontSize: 22, flexShrink: 0 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, color: G.dark, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.full_name}</div>
-                      <div style={{ fontSize: 11, color: G.base }}>⭐ {row.badge_count} badge{row.badge_count !== 1 ? "s" : ""}</div>
+                      <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700 }}>🏅 {row.badge_count} badge{row.badge_count !== 1 ? "s" : ""}</div>
                     </div>
                   </div>
                 ))}
@@ -374,6 +382,7 @@ export default function AnalyticsPage() {
             )
           }
         </Card>
+
       </div>
     </>
   );
