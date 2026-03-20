@@ -62,17 +62,26 @@ function CertificatesTab() {
     let active = true;
     (async () => {
       setLoading(true);
-      const [{ data: c }, { data: s }] = await Promise.all([
-        supabase.from("certificates").select("*, profiles(full_name, student_id, email)").order("issued_at", { ascending: false }),
-        supabase.from("profiles").select("id, full_name, student_id").order("full_name"),
+      const [{ data: c, error: certErr }, { data: s }] = await Promise.all([
+        supabase.from("certificates").select("*, profiles!certificates_user_id_fkey(full_name, student_id, email)").order("issued_at", { ascending: false }),
+        supabase.from("user_roles").select("user_id, roles(name)"),
       ]);
-      if (active) { setCerts(c || []); setStudents(s || []); setLoading(false); }
+      if (certErr) console.error("Certs load error:", certErr.message);
+      console.log("Certs loaded:", c?.length, c);
+      // Filter to only student role users
+      const studentIds = (s || []).filter(r => r.roles?.name === "student").map(r => r.user_id);
+      let studentsData = [];
+      if (studentIds.length > 0) {
+        const { data: profiles } = await supabase.from("profiles").select("id, full_name, student_id").in("id", studentIds).order("full_name");
+        studentsData = profiles || [];
+      }
+      if (active) { setCerts(c || []); setStudents(studentsData); setLoading(false); }
     })();
     return () => { active = false; };
   }, []);
 
   const reload = async () => {
-    const { data } = await supabase.from("certificates").select("*, profiles(full_name, student_id, email)").order("issued_at", { ascending: false });
+    const { data } = await supabase.from("certificates").select("*, profiles!certificates_user_id_fkey(full_name, student_id, email)").order("issued_at", { ascending: false });
     setCerts(data || []);
   };
 
