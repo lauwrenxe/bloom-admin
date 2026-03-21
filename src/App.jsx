@@ -39,19 +39,37 @@ const BloomLogo = ({ light, small }) => (
   </div>
 );
 
-/* ─── Input ─── */
-const Input = ({ label, value, onChange, type="text", placeholder="" }) => (
+/* ─── Input — supports hasError for field highlighting (BLOOM-W-AUTH-03) ─── */
+const Input = ({ label, value, onChange, type="text", placeholder="", hasError=false }) => (
   <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
-    {label && <label style={{ fontSize:"12px", fontWeight:600, color:G.dark,
-      letterSpacing:".4px", textTransform:"uppercase" }}>{label}</label>}
-    <input type={type} value={value} onChange={e => onChange(e.target.value)}
+    {label && (
+      <label style={{
+        fontSize:"12px", fontWeight:600,
+        color: hasError ? "#c0392b" : G.dark,
+        letterSpacing:".4px", textTransform:"uppercase",
+      }}>{label}</label>
+    )}
+    <input
+      type={type}
+      value={value}
+      onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
-      style={{ border:`1.5px solid ${G.wash}`, borderRadius:"10px", padding:"10px 14px",
-        fontSize:"13.5px", fontFamily:"'DM Sans',sans-serif", outline:"none",
-        background:"#fff", color:"#222", transition:"border .18s" }}
-      onFocus={e => e.target.style.borderColor = G.base}
-      onBlur={e  => e.target.style.borderColor = G.wash}
+      style={{
+        border: `1.5px solid ${hasError ? "#e74c3c" : G.wash}`,
+        borderRadius:"10px", padding:"10px 14px",
+        fontSize:"13.5px", fontFamily:"'DM Sans',sans-serif",
+        outline:"none",
+        background: hasError ? "#fff8f8" : "#fff",
+        color:"#222", transition:"border .18s",
+      }}
+      onFocus={e => e.target.style.borderColor = hasError ? "#e74c3c" : G.base}
+      onBlur={e  => e.target.style.borderColor = hasError ? "#e74c3c" : G.wash}
     />
+    {hasError && (
+      <span style={{ fontSize:"11px", color:"#c0392b", fontWeight:600, marginTop:"2px" }}>
+        This field is required
+      </span>
+    )}
   </div>
 );
 
@@ -84,14 +102,26 @@ function PageSkeleton() {
 
 /* ─── Login ─── */
 function LoginPage({ onLogin }) {
-  const [email,    setEmail]    = useState("");
-  const [password, setPassword] = useState("");
-  const [error,    setError]    = useState("");
-  const [loading,  setLoading]  = useState(false);
+  const [email,         setEmail]         = useState("");
+  const [password,      setPassword]      = useState("");
+  const [error,         setError]         = useState("");
+  const [loading,       setLoading]       = useState(false);
+  const [emailError,    setEmailError]    = useState(false);
+  const [passwordError, setPasswordError] = useState(false);
 
   const submit = async () => {
     setError("");
-    if (!email || !password) { setError("Please enter your credentials."); return; }
+    setEmailError(false);
+    setPasswordError(false);
+
+    // Field validation with visual highlighting (BLOOM-W-AUTH-03)
+    if (!email || !password) {
+      if (!email)    setEmailError(true);
+      if (!password) setPasswordError(true);
+      setError("Please enter your credentials.");
+      return;
+    }
+
     setLoading(true);
 
     const { data, error: authError } =
@@ -172,10 +202,22 @@ function LoginPage({ onLogin }) {
           <p style={{ fontSize:"13.5px", color:"#888" }}>Sign in to your GADRC admin account.</p>
         </div>
         <div style={{ display:"flex", flexDirection:"column", gap:"18px" }} onKeyDown={onKey}>
-          <Input label="Email Address" value={email} onChange={setEmail}
-            type="email" placeholder="gadrc.admin@cvsu.edu.ph"/>
-          <Input label="Password" value={password} onChange={setPassword}
-            type="password" placeholder="••••••••"/>
+          <Input
+            label="Email Address"
+            value={email}
+            onChange={v => { setEmail(v); if (v) setEmailError(false); }}
+            type="email"
+            placeholder="gadrc.admin@cvsu.edu.ph"
+            hasError={emailError}
+          />
+          <Input
+            label="Password"
+            value={password}
+            onChange={v => { setPassword(v); if (v) setPasswordError(false); }}
+            type="password"
+            placeholder="••••••••"
+            hasError={passwordError}
+          />
           {error && (
             <div style={{ background:"#fdecea", border:"1px solid #f5c6cb",
               borderRadius:"10px", padding:"10px 14px", fontSize:"12.5px", color:"#c0392b" }}>
@@ -269,8 +311,6 @@ function AdminShell({ onLogout, user }) {
         overflowX:"hidden",
         transition:"width .22s cubic-bezier(.4,0,.2,1)",
       }}>
-
-        {/* Logo + collapse */}
         <div style={{
           padding: collapsed ? "24px 0" : "26px 22px 18px",
           display:"flex", alignItems:"center",
@@ -303,7 +343,6 @@ function AdminShell({ onLogout, user }) {
 
         <div style={{ height:"1px", background:"rgba(255,255,255,.1)", margin:"0 16px 8px" }}/>
 
-        {/* Nav sections */}
         <nav style={{ padding: collapsed ? "8px 6px" : "8px 10px", flex:1 }}>
           {NAV_SECTIONS.map(section => (
             <div key={section.label} style={{ marginBottom: collapsed ? 12 : 20 }}>
@@ -328,9 +367,7 @@ function AdminShell({ onLogout, user }) {
                       textAlign:"left", fontFamily:"'DM Sans',sans-serif",
                       fontSize:"13px", fontWeight: isActive ? 600 : 400,
                       marginBottom:"2px", transition:"all .15s",
-                      background: isActive
-                        ? "rgba(255,255,255,.16)"
-                        : "transparent",
+                      background: isActive ? "rgba(255,255,255,.16)" : "transparent",
                       color: isActive ? "#fff" : "rgba(255,255,255,.55)",
                       borderLeft: !collapsed
                         ? `3px solid ${isActive ? G.pale : "transparent"}`
@@ -361,7 +398,6 @@ function AdminShell({ onLogout, user }) {
           ))}
         </nav>
 
-        {/* User card */}
         <div style={{ padding: collapsed ? "12px 6px" : "12px 14px 24px" }}>
           <div style={{ height:"1px", background:"rgba(255,255,255,.08)", marginBottom:12 }}/>
           {!collapsed ? (
@@ -418,8 +454,6 @@ function AdminShell({ onLogout, user }) {
 
       {/* ── Main ── */}
       <main style={{ flex:1, background:G.cream, overflowY:"auto", minWidth:0, height:"100vh" }}>
-
-        {/* Topbar */}
         <div style={{
           background:G.white, borderBottom:`1px solid ${G.wash}`,
           padding:"0 32px", height:58,
@@ -440,36 +474,36 @@ function AdminShell({ onLogout, user }) {
               🌸 BLOOM
             </div>
             <div onClick={() => setShowProfile(true)}
-            onMouseEnter={e => e.currentTarget.style.transform = "scale(1.08)"}
-            onMouseLeave={e => e.currentTarget.style.transform = ""}
-            style={{
-              width:34, height:34, borderRadius:"50%",
-              background:`linear-gradient(135deg,${G.base},${G.dark})`,
-              display:"flex", alignItems:"center", justifyContent:"center",
-              fontSize:13, color:"#fff", fontWeight:700,
-              boxShadow:`0 2px 8px rgba(45,74,24,.25)`,
-              cursor:"pointer", transition:"transform .15s",
-            }}>{initials}</div>
+              onMouseEnter={e => e.currentTarget.style.transform = "scale(1.08)"}
+              onMouseLeave={e => e.currentTarget.style.transform = ""}
+              style={{
+                width:34, height:34, borderRadius:"50%",
+                background:`linear-gradient(135deg,${G.base},${G.dark})`,
+                display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:13, color:"#fff", fontWeight:700,
+                boxShadow:`0 2px 8px rgba(45,74,24,.25)`,
+                cursor:"pointer", transition:"transform .15s",
+              }}>{initials}</div>
           </div>
         </div>
 
-        {/* Page content */}
         <div>
           {pageLoading ? <PageSkeleton /> : (
             <>
-              {active === "dashboard"    && <DashboardPage />}
-              {active === "modules"      && <ModulesPage />}
-              {active === "assessments"  && <AssessmentsPage />}
-              {active === "seminars"     && <SeminarsPage />}
-              {active === "certificates" && <CertificatesPage />}
-              {active === "calendar"     && <CalendarPage />}
-              {active === "analytics"    && <AnalyticsPage />}
-              {active === "students"     && <StudentsPage />}
-              {active === "announcements"&& <AnnouncementsPage />}
+              {active === "dashboard"     && <DashboardPage />}
+              {active === "modules"       && <ModulesPage />}
+              {active === "assessments"   && <AssessmentsPage />}
+              {active === "seminars"      && <SeminarsPage />}
+              {active === "certificates"  && <CertificatesPage />}
+              {active === "calendar"      && <CalendarPage />}
+              {active === "analytics"     && <AnalyticsPage />}
+              {active === "students"      && <StudentsPage />}
+              {active === "announcements" && <AnnouncementsPage />}
             </>
           )}
         </div>
       </main>
+
       {showProfile && <AdminProfilePage user={user} onClose={() => setShowProfile(false)} />}
     </div>
   );
