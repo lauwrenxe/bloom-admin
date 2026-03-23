@@ -6,7 +6,7 @@ import DashboardPage from "./DashboardPage.jsx";
 import SeminarsPage from "./SeminarsPage.jsx";
 import CertificatesPage from "./CertificatesPage.jsx";
 import CalendarPage from "./CalendarPage.jsx";
-import AnalyticsPage from "./AnalyticsPage.jsx";
+import ReportsPage from "./ReportsPage.jsx";
 import StudentsPage from "./StudentsPage.jsx";
 import AnnouncementsPage from "./AnnouncementsPage.jsx";
 import AdminProfilePage from "./AdminProfilePage.jsx";
@@ -251,7 +251,7 @@ const NAV_SECTIONS = [
     label: "Overview",
     items: [
       { id:"dashboard",    icon:"🏠", label:"Dashboard"    },
-      { id:"analytics",    icon:"📊", label:"Analytics"    },
+      { id:"reports",      icon:"📋", label:"Reports"      },
     ],
   },
   {
@@ -496,7 +496,7 @@ function AdminShell({ onLogout, user }) {
               {active === "seminars"      && <SeminarsPage />}
               {active === "certificates"  && <CertificatesPage />}
               {active === "calendar"      && <CalendarPage />}
-              {active === "analytics"     && <AnalyticsPage />}
+              {active === "reports"       && <ReportsPage />}
               {active === "students"      && <StudentsPage />}
               {active === "announcements" && <AnnouncementsPage />}
             </>
