@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
 
 const G = {
-  dark: "#2d4a18", mid: "#3a5a20", base: "#5a7a3a",
-  light: "#8ab060", pale: "#b5cc8e", wash: "#e8f2d8",
-  cream: "#f6f9f0", white: "#fafdf6",
+  dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
+  light: "#4CAF50", pale:  "#C8E6C9", wash:  "#E8F5E9",
+  cream: "#F5F7F5", white: "#FFFFFF",
 };
 
 const EVENT_COLORS = ["#5a7a3a", "#2563eb", "#dc2626", "#f59e0b", "#7c3aed", "#0891b2"];
@@ -27,7 +27,7 @@ const s = {
   calMonth:{ fontSize: 16, fontWeight: 700, color: "#fff" },
   dayGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)" },
   dayHdr:  { padding: "10px 0", textAlign: "center", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase" },
-  dayCell: (today, otherMonth, hasEvent) => ({
+  dayCell: (today, otherMonth) => ({
     minHeight: 72, padding: "6px 4px", border: `1px solid ${G.wash}`, cursor: "pointer",
     background: today ? G.wash : "#fff",
     opacity: otherMonth ? 0.35 : 1,

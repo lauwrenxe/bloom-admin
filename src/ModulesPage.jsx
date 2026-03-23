@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
 
 const G = {
-  dark: "#2d4a18", mid: "#3a5a20", base: "#5a7a3a",
-  light: "#8ab060", pale: "#b5cc8e", wash: "#e8f2d8",
-  cream: "#f6f9f0", white: "#fafdf6",
+  dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
+  light: "#4CAF50", pale:  "#C8E6C9", wash:  "#E8F5E9",
+  cream: "#F5F7F5", white: "#FFFFFF",
 };
 
 // ── File type helpers ────────────────────────────────────────────
@@ -36,7 +36,7 @@ function formatSize(kb) {
 
 // ── Shared styles ─────────────────────────────────────────────────
 const s = {
-  page:          { display: "flex", height: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: G.cream, overflow: "hidden" },
+  page:          { display: "flex", height: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", overflow: "hidden" },
   sidebar:       { width: 280, minWidth: 280, background: G.dark, display: "flex", flexDirection: "column", color: "#fff", overflow: "hidden" },
   sidebarHeader: { padding: "20px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.1)" },
   sidebarTitle:  { fontSize: 18, fontWeight: 700, color: "#fff", margin: 0 },
@@ -365,7 +365,7 @@ function AssessmentPanel({ module }) {
             const opts = q.options || q.question_options || [];
             return (
               <div key={q.id} style={{ background: "#fff", borderRadius: 12, border: `1px solid ${G.wash}`, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-                <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${G.wash}`, background: G.cream, gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${G.wash}`, background: "#F5F7F5", gap: 8 }}>
                   <span style={{ fontSize: 12, fontWeight: 800, color: G.base }}>Q{i + 1}</span>
                   <span style={{ fontSize: 11, background: G.wash, color: G.dark, padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>
                     {QICONS[q.question_type]} {QLABELS[q.question_type]}

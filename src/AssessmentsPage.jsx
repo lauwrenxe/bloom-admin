@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
 
 const G = {
-  dark: "#2d4a18", mid: "#3a5a20", base: "#5a7a3a",
-  light: "#8ab060", pale: "#b5cc8e", wash: "#e8f2d8",
-  cream: "#f6f9f0", white: "#fafdf6",
+  dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
+  light: "#4CAF50", pale:  "#C8E6C9", wash:  "#E8F5E9",
+  cream: "#F5F7F5", white: "#FFFFFF",
 };
 
 function formatDate(iso) {
@@ -14,7 +14,7 @@ function formatDate(iso) {
 
 // ── Styles ───────────────────────────────────────────────────────
 const s = {
-  page:         { display: "flex", height: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: G.cream, overflow: "hidden" },
+  page:         { display: "flex", height: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", overflow: "hidden" },
   sidebar:      { width: 290, minWidth: 290, background: G.dark, display: "flex", flexDirection: "column", overflow: "hidden" },
   sidebarHdr:   { padding: "20px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.1)" },
   sidebarTitle: { fontSize: 17, fontWeight: 800, color: "#fff", margin: 0 },
@@ -56,7 +56,7 @@ const s = {
   statNum:      { fontSize: 28, fontWeight: 900, color: G.dark },
   statLabel:    { fontSize: 12, color: "#888", marginTop: 2 },
   table:        { width: "100%", borderCollapse: "collapse", fontSize: 13 },
-  th:           { padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `2px solid ${G.wash}`, background: G.cream },
+  th:           { padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `2px solid ${G.wash}`, background: "#F5F7F5" },
   td:           { padding: "11px 14px", borderBottom: `1px solid ${G.wash}`, color: G.dark, verticalAlign: "middle" },
   emptyBox:     { background: "#fff", borderRadius: 14, border: `2px dashed ${G.pale}`, padding: "50px 20px", textAlign: "center" },
 };
@@ -80,8 +80,7 @@ function QuestionsTab({ assessment }) {
   const [correct, setCorrect] = useState(0);
   const [tfAns, setTfAns]   = useState("true");
 
-  useEffect(() => { load(); }, [assessment.id]);
-
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const load = async () => {
     setLoading(true);
     const { data } = await supabase
@@ -275,8 +274,6 @@ function ResultsTab({ assessment }) {
   const [loading, setLoading]   = useState(true);
   const [selected, setSelected] = useState(null); // attempt detail modal
 
-  useEffect(() => { load(); }, [assessment.id]);
-
   const load = async () => {
     setLoading(true);
     const { data } = await supabase
@@ -287,6 +284,9 @@ function ResultsTab({ assessment }) {
     setAttempts(data || []);
     setLoading(false);
   };
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [assessment.id]);
 
   const loadDetail = async (attempt) => {
     const { data: answers } = await supabase
@@ -434,7 +434,7 @@ function SettingsTab({ assessment, modules, badges, onSaved }) {
   const save = async () => {
     if (!form.title?.trim()) { setError("Title is required."); return; }
     setSaving(true); setError("");
-    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.auth.getUser();
     const payload = {
       title:              form.title.trim(),
       description:        form.description?.trim() || null,
@@ -557,14 +557,14 @@ export default function AssessmentsPage() {
   const createAssessment = async () => {
     if (!addForm.title?.trim()) { setAddError("Title is required."); return; }
     setAddSaving(true); setAddError("");
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
     const { data, error: err } = await supabase.from("assessments").insert({
       title:              addForm.title.trim(),
       module_id:          addForm.module_id || null,
       passing_score:      Number(addForm.passing_score) || 75,
       time_limit_minutes: Number(addForm.time_limit_minutes) || 30,
       is_published:       false,
-      created_by:         user?.id,
+      created_by:         currentUser?.id,
     }).select("*, modules(title)").single();
     setAddSaving(false);
     if (err) { setAddError(err.message); return; }

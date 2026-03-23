@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
 
 const G = {
-  dark:  "#2d4a18", mid:   "#3a5a20", base:  "#5a7a3a",
-  light: "#8ab060", pale:  "#b5cc8e", wash:  "#e8f2d8",
-  cream: "#f6f9f0", white: "#fafdf6",
+  dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
+  light: "#4CAF50", pale:  "#C8E6C9", wash:  "#E8F5E9",
+  cream: "#F5F7F5", white: "#FFFFFF",
 };
 
 // ── UI Atoms ──────────────────────────────────────────────────────
