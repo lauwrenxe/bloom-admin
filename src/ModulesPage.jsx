@@ -18,11 +18,11 @@ function normalizeFileType(filename) {
 }
 
 const FILE_META = {
-  pdf:   { icon: "📄", bg: "#fee2e2" },
-  video: { icon: "🎬", bg: "#dbeafe" },
-  image: { icon: "🖼️", bg: "#fef9c3" },
-  audio: { icon: "🎵", bg: "#f3e8ff" },
-  other: { icon: "📎", bg: "#f3f4f6" },
+  pdf:   { icon: "", bg: "#fee2e2" },
+  video: { icon: "", bg: "#dbeafe" },
+  image: { icon: "️", bg: "#fef9c3" },
+  audio: { icon: "", bg: "#f3e8ff" },
+  other: { icon: "", bg: "#f3f4f6" },
 };
 
 function getExtLabel(filename) {
@@ -36,15 +36,15 @@ function formatSize(kb) {
 
 // ── Shared styles ─────────────────────────────────────────────────
 const s = {
-  page:          { display: "flex", height: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", overflow: "hidden" },
+  page:          { display: "flex", height: "100vh", fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", overflow: "hidden" },
   sidebar:       { width: 280, minWidth: 280, background: G.dark, display: "flex", flexDirection: "column", color: "#fff", overflow: "hidden" },
   sidebarHeader: { padding: "20px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.1)" },
   sidebarTitle:  { fontSize: 18, fontWeight: 700, color: "#fff", margin: 0 },
   sidebarSub:    { fontSize: 12, color: G.pale, marginTop: 2 },
-  addBtn:        { margin: "12px 16px", padding: "9px 14px", background: G.base, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 },
+  addBtn:        { margin: "12px 16px", padding: "9px 14px", background: G.base, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 },
   moduleList:    { flex: 1, overflowY: "auto", padding: "4px 0" },
   moduleItem:   (active) => ({ padding: "10px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, borderLeft: active ? `3px solid ${G.light}` : "3px solid transparent", background: active ? "rgba(255,255,255,0.12)" : "transparent", transition: "background .15s" }),
-  moduleIcon:    { width: 34, height: 34, borderRadius: 8, background: G.mid, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 },
+  moduleIcon:    { width: 34, height: 34, borderRadius: 6, background: G.mid, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 },
   modTitle:      { fontSize: 13, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   modMeta:       { fontSize: 11, color: G.pale, marginTop: 1 },
   statusDot:    (st) => ({ width: 7, height: 7, borderRadius: "50%", background: st === "published" ? "#4ade80" : "#facc15", flexShrink: 0, marginLeft: "auto" }),
@@ -56,24 +56,24 @@ const s = {
   content:       { flex: 1, overflowY: "auto", padding: 24 },
   emptyState:    { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 12, color: "#aaa" },
   overlay:       { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
-  modal:        (w) => ({ background: "#fff", borderRadius: 16, width: "100%", maxWidth: w || 540, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" }),
+  modal:        (w) => ({ background: "#fff", borderRadius: 10, width: "100%", maxWidth: w || 540, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" }),
   mHeader:       { padding: "20px 24px 16px", borderBottom: `1px solid ${G.wash}`, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#fff", zIndex: 1 },
   mTitle:        { fontSize: 17, fontWeight: 700, color: G.dark },
   mBody:         { padding: "20px 24px" },
   mFooter:       { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
   label:         { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
-  input:         { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:        { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  textarea:      { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 80 },
+  input:         { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:        { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  textarea:      { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 80 },
   fg:            { marginBottom: 16 },
   row:           { display: "flex", gap: 12 },
-  btnPrimary:    { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13 },
-  btnSecondary:  { padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13 },
-  btnDanger:     { padding: "9px 20px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13 },
-  btnGreen:      { padding: "9px 18px", background: G.base, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13 },
+  btnPrimary:    { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 },
+  btnSecondary:  { padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 },
+  btnDanger:     { padding: "9px 20px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 },
+  btnGreen:      { padding: "9px 18px", background: G.base, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 },
   iconBtn:      (c) => ({ background: "none", border: "none", cursor: "pointer", color: c || "#999", fontSize: 15, padding: "4px 6px", borderRadius: 6 }),
-  tag:          (c) => ({ display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "yellow" ? "#fef9c3" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "yellow" ? "#a16207" : "#555" }),
-  badge:         { background: G.wash, color: G.base, borderRadius: 12, padding: "1px 8px", fontSize: 11, fontWeight: 700 },
+  tag:          (c) => ({ display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "yellow" ? "#fef9c3" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "yellow" ? "#a16207" : "#555" }),
+  badge:         { background: G.wash, color: G.base, borderRadius: 10, padding: "1px 8px", fontSize: 11, fontWeight: 700 },
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -117,9 +117,9 @@ function QuestionModal({ onSave, onClose, initial, num }) {
   };
 
   const TYPE_BTNS = [
-    { v: "multiple_choice", label: "🔘 Multiple Choice" },
-    { v: "true_false",      label: "✅ True / False"    },
-    { v: "short_answer",    label: "✏️ Short Answer"    },
+    { v: "multiple_choice", label: " Multiple Choice" },
+    { v: "true_false",      label: "True / False"    },
+    { v: "short_answer",    label: "Short Answer"    },
   ];
 
   return (
@@ -127,7 +127,7 @@ function QuestionModal({ onSave, onClose, initial, num }) {
       <div style={s.modal(600)}>
         <div style={s.mHeader}>
           <span style={s.mTitle}>{initial ? `Edit Question ${num}` : "Add Question"}</span>
-          <button style={s.iconBtn()} onClick={onClose}>✕</button>
+          <button style={s.iconBtn()} onClick={onClose}>×</button>
         </div>
         <div style={s.mBody}>
           {/* Type picker */}
@@ -136,7 +136,7 @@ function QuestionModal({ onSave, onClose, initial, num }) {
             <div style={{ display: "flex", gap: 8 }}>
               {TYPE_BTNS.map(t => (
                 <button key={t.v} onClick={() => setQType(t.v)} style={{
-                  flex: 1, padding: "9px 6px", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 12,
+                  flex: 1, padding: "9px 6px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12,
                   border: `2px solid ${qType === t.v ? G.base : G.pale}`,
                   background: qType === t.v ? G.wash : "#fff",
                   color: qType === t.v ? G.dark : "#888",
@@ -161,9 +161,9 @@ function QuestionModal({ onSave, onClose, initial, num }) {
                     width: 24, height: 24, borderRadius: "50%", border: `2px solid ${opt.is_correct ? G.base : G.pale}`,
                     background: opt.is_correct ? G.base : "#fff", cursor: "pointer", flexShrink: 0,
                     display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13,
-                  }}>{opt.is_correct ? "✓" : ""}</button>
+                  }}>{opt.is_correct ? "" : ""}</button>
                   <input style={{ ...s.input, flex: 1 }} value={opt.option_text} onChange={e => updateText(i, e.target.value)} placeholder={`Option ${i + 1}`} />
-                  <button style={s.iconBtn(opts.length > 2 ? "#dc2626" : "#ccc")} onClick={() => removeOpt(i)} disabled={opts.length <= 2}>✕</button>
+                  <button style={s.iconBtn(opts.length > 2 ? "#dc2626" : "#ccc")} onClick={() => removeOpt(i)} disabled={opts.length <= 2}>×</button>
                 </div>
               ))}
               {opts.length < 6 && (
@@ -182,7 +182,7 @@ function QuestionModal({ onSave, onClose, initial, num }) {
                     flex: 1, padding: 14, borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 15,
                     border: `2px solid ${tfAns === v ? G.base : G.pale}`,
                     background: tfAns === v ? G.wash : "#fff", color: tfAns === v ? G.dark : "#888",
-                  }}>{v === "true" ? "✅ True" : "❌ False"}</button>
+                  }}>{v === "true" ? "True" : "False"}</button>
                 ))}
               </div>
             </div>
@@ -288,7 +288,7 @@ function AssessmentPanel({ module }) {
       }
     }
     setSaving(false);
-    alert(`✅ Assessment saved! ${questions.length} questions · Passing: ${form.passingScore}%`);
+    alert(`<i className="bi bi-check-circle-fill me-1"/> Assessment saved! ${questions.length} questions · Passing: ${form.passingScore}%`);
   };
 
   const addQ    = (d) => { setQuestions(qs => [...qs, { ...d, _new: true, id: `tmp_${Date.now()}` }]); setShowAdd(false); };
@@ -297,15 +297,15 @@ function AssessmentPanel({ module }) {
   const moveQ   = (i, dir) => { const qs = [...questions]; const t = i + dir; if (t < 0 || t >= qs.length) return; [qs[i], qs[t]] = [qs[t], qs[i]]; setQuestions(qs); };
 
   const QLABELS = { multiple_choice: "Multiple Choice", true_false: "True / False", short_answer: "Short Answer" };
-  const QICONS  = { multiple_choice: "🔘", true_false: "✅", short_answer: "✏️" };
+  const QICONS  = { multiple_choice: "", true_false: "", short_answer: "" };
 
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
 
   return (
     <div>
       {/* Settings */}
-      <div style={{ background: "#fff", borderRadius: 14, padding: "20px 24px", marginBottom: 20, border: `1px solid ${G.wash}`, boxShadow: "0 1px 6px rgba(0,0,0,0.04)" }}>
-        <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 16 }}>⚙️ Assessment Settings</div>
+      <div style={{ background: "#fff", borderRadius: 14, padding: "20px 24px", marginBottom: 20, border: "1px solid #DDE8DD", boxShadow: "0 1px 6px rgba(0,0,0,0.04)" }}>
+        <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 16 }}><i className="bi bi-gear me-1"/> Assessment Settings</div>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           <div style={{ flex: 3, minWidth: 200 }}>
             <label style={s.label}>Title</label>
@@ -323,21 +323,21 @@ function AssessmentPanel({ module }) {
 
         {/* Badge award */}
         <div style={{ marginTop: 14 }}>
-          <label style={s.label}>🏅 Auto-award badge when student passes</label>
+          <label style={s.label}><i className="bi bi-award me-1"/> Auto-award badge when student passes</label>
           <select style={s.select} value={form.badgeId} onChange={e => setF("badgeId", e.target.value)}>
             <option value="">— No badge award —</option>
             {badges.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
           {form.badgeId && (
             <div style={{ marginTop: 8, fontSize: 12, color: G.base, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-              ✅ Badge will be automatically awarded to students who achieve {form.passingScore}% or higher.
+              <i className="bi bi-check-circle-fill me-1"/> Badge will be automatically awarded to students who achieve {form.passingScore}% or higher.
             </div>
           )}
         </div>
 
         <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
           <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>
-            {saving ? "Saving…" : "💾 Save Assessment"}
+            {saving ? "Saving…" : "Save Assessment"}
           </button>
         </div>
       </div>
@@ -354,7 +354,7 @@ function AssessmentPanel({ module }) {
       {/* Empty */}
       {questions.length === 0 ? (
         <div style={{ background: "#fff", borderRadius: 14, border: `2px dashed ${G.pale}`, padding: "40px 20px", textAlign: "center" }}>
-          <div style={{ fontSize: 44, marginBottom: 10 }}>📝</div>
+          <div style={{ fontSize: 44, marginBottom: 10 }}><i className="bi bi-clipboard-check me-1"/></div>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No questions yet</div>
           <div style={{ fontSize: 13, color: "#aaa", marginBottom: 18 }}>Add multiple choice, true/false, or short answer questions</div>
           <button style={s.btnGreen} onClick={() => setShowAdd(true)}>+ Add First Question</button>
@@ -364,7 +364,7 @@ function AssessmentPanel({ module }) {
           {questions.map((q, i) => {
             const opts = q.options || q.question_options || [];
             return (
-              <div key={q.id} style={{ background: "#fff", borderRadius: 12, border: `1px solid ${G.wash}`, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+              <div key={q.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #DDE8DD", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
                 <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${G.wash}`, background: "#F5F7F5", gap: 8 }}>
                   <span style={{ fontSize: 12, fontWeight: 800, color: G.base }}>Q{i + 1}</span>
                   <span style={{ fontSize: 11, background: G.wash, color: G.dark, padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>
@@ -373,19 +373,19 @@ function AssessmentPanel({ module }) {
                   <div style={{ marginLeft: "auto", display: "flex", gap: 2 }}>
                     <button style={s.iconBtn("#aaa")} onClick={() => moveQ(i, -1)} disabled={i === 0} title="Move up">↑</button>
                     <button style={s.iconBtn("#aaa")} onClick={() => moveQ(i, 1)} disabled={i === questions.length - 1} title="Move down">↓</button>
-                    <button style={s.iconBtn(G.base)} onClick={() => { setEditQ(q); setEditQIdx(i); }} title="Edit">✏️</button>
-                    <button style={s.iconBtn("#dc2626")} onClick={() => deleteQ(i)} title="Delete">🗑️</button>
+                    <button style={s.iconBtn(G.base)} onClick={() => { setEditQ(q); setEditQIdx(i); }} title="Edit"><i className="bi bi-pencil me-1"/></button>
+                    <button style={s.iconBtn("#dc2626")} onClick={() => deleteQ(i)} title="Delete"><i className="bi bi-trash me-1"/></button>
                   </div>
                 </div>
                 <div style={{ padding: "14px 16px" }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: G.dark, marginBottom: 10, lineHeight: 1.5 }}>{q.question_text}</div>
                   {q.question_type === "short_answer" ? (
-                    <div style={{ background: G.wash, borderRadius: 8, padding: "9px 14px", fontSize: 12, color: "#999", fontStyle: "italic" }}>✏️ Students will type a written response</div>
+                    <div style={{ background: G.wash, borderRadius: 6, padding: "9px 14px", fontSize: 12, color: "#999", fontStyle: "italic" }}><i className="bi bi-pencil me-1"/> Students will type a written response</div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                       {opts.map((o, j) => (
-                        <div key={j} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderRadius: 8, background: o.is_correct ? "#dcfce7" : "#f9fafb", border: `1px solid ${o.is_correct ? "#86efac" : "#e5e7eb"}`, fontSize: 13 }}>
-                          {o.is_correct ? "✅" : "⬜"}
+                        <div key={j} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderRadius: 6, background: o.is_correct ? "#dcfce7" : "#f9fafb", border: `1px solid ${o.is_correct ? "#86efac" : "#e5e7eb"}`, fontSize: 13 }}>
+                          {o.is_correct ? "" : "⬜"}
                           <span style={{ color: o.is_correct ? "#16a34a" : G.dark, fontWeight: o.is_correct ? 700 : 400 }}>{o.option_text}</span>
                           {o.is_correct && <span style={{ marginLeft: "auto", fontSize: 11, color: "#16a34a", fontWeight: 700 }}>Correct answer</span>}
                         </div>
@@ -471,7 +471,7 @@ function FilesPanel({ module }) {
           </>
         ) : (
           <>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>📤</div>
+            <div style={{ fontSize: 40, marginBottom: 8 }}><i className="bi bi-upload me-1"/></div>
             <div style={{ fontWeight: 700, color: G.dark, fontSize: 15 }}>Drop files here or click to upload</div>
             <div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>PDF · Video (MP4, MOV) · Images · Audio · PowerPoint · Word · Excel · ZIP</div>
           </>
@@ -488,7 +488,7 @@ function FilesPanel({ module }) {
           {files.map(file => {
             const ft = FILE_META[file.file_type] || FILE_META.other;
             return (
-              <div key={file.id} style={{ background: "#fff", borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 1px 4px rgba(0,0,0,0.05)", border: `1px solid ${G.wash}` }}>
+              <div key={file.id} style={{ background: "#fff", borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 1px 4px rgba(0,0,0,0.05)", border: "1px solid #DDE8DD" }}>
                 <div style={{ width: 42, height: 42, borderRadius: 10, background: ft.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>{ft.icon}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: G.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{file.file_name}</div>
@@ -498,8 +498,8 @@ function FilesPanel({ module }) {
                   </div>
                 </div>
                 <a href={file.file_url} target="_blank" rel="noreferrer"
-                  style={{ ...s.btnSecondary, textDecoration: "none", fontSize: 12, padding: "6px 12px", display: "inline-flex", alignItems: "center", gap: 4 }}>👁️ View</a>
-                <button style={s.iconBtn("#dc2626")} onClick={() => del(file)} title="Delete">🗑️</button>
+                  style={{ ...s.btnSecondary, textDecoration: "none", fontSize: 12, padding: "6px 12px", display: "inline-flex", alignItems: "center", gap: 4 }}><i className="bi bi-eye me-1"/>️ View</a>
+                <button style={s.iconBtn("#dc2626")} onClick={() => del(file)} title="Delete"><i className="bi bi-trash me-1"/></button>
               </div>
             );
           })}
@@ -520,7 +520,7 @@ function ModuleModal({ initial, categories, onSave, onClose }) {
       <div style={s.modal(520)}>
         <div style={s.mHeader}>
           <span style={s.mTitle}>{initial ? "Edit Module" : "Create New Module"}</span>
-          <button style={s.iconBtn()} onClick={onClose}>✕</button>
+          <button style={s.iconBtn()} onClick={onClose}>×</button>
         </div>
         <div style={s.mBody}>
           <div style={s.fg}>
@@ -542,13 +542,13 @@ function ModuleModal({ initial, categories, onSave, onClose }) {
             <div style={{ ...s.fg, flex: 1 }}>
               <label style={s.label}>Status</label>
               <select style={s.select} value={form.status} onChange={e => set("status", e.target.value)}>
-                <option value="draft">📝 Draft</option>
-                <option value="published">✅ Published</option>
+                <option value="draft"><i className="bi bi-clipboard-check me-1"/> Draft</option>
+                <option value="published"><i className="bi bi-check-circle-fill me-1"/> Published</option>
               </select>
             </div>
           </div>
-          <div style={{ background: G.wash, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-            💡 Set to <strong>Published</strong> so students can see this module in the app.
+          <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
+            <i className="bi bi-lightbulb me-1"/> Set to <strong>Published</strong> so students can see this module in the app.
           </div>
         </div>
         <div style={s.mFooter}>
@@ -629,7 +629,7 @@ export default function ModulesPage() {
       {/* SIDEBAR */}
       <div style={s.sidebar}>
         <div style={s.sidebarHeader}>
-          <div style={s.sidebarTitle}>📚 Modules</div>
+          <div style={s.sidebarTitle}><i className="bi bi-book me-1"/> Modules</div>
           <div style={s.sidebarSub}>{modules.length} module{modules.length !== 1 ? "s" : ""}</div>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search modules…"
             style={{ ...s.input, marginTop: 10, background: "rgba(255,255,255,0.1)", border: "none", color: "#fff", fontSize: 12 }} />
@@ -640,10 +640,10 @@ export default function ModulesPage() {
             : !filtered.length ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>{search ? "No results" : "No modules yet"}</div>
             : filtered.map(mod => (
               <div key={mod.id} style={s.moduleItem(selected?.id === mod.id)} onClick={() => { setSelected(mod); setTab("files"); }}>
-                <div style={s.moduleIcon}>📗</div>
+                <div style={s.moduleIcon}><i className="bi bi-book me-1"/></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={s.modTitle}>{mod.title}</div>
-                  <div style={s.modMeta}>{mod.categories?.name || "Uncategorized"} · {fileCount(mod)} file{fileCount(mod) !== 1 ? "s" : ""}{hasAssess(mod) ? " · 📝" : ""}</div>
+                  <div style={s.modMeta}>{mod.categories?.name || "Uncategorized"} · {fileCount(mod)} file{fileCount(mod) !== 1 ? "s" : ""}{hasAssess(mod) ? " · Quiz" : ""}</div>
                 </div>
                 <div style={s.statusDot(mod.status)} title={mod.status} />
               </div>
@@ -656,7 +656,7 @@ export default function ModulesPage() {
       <div style={s.main}>
         {!selected ? (
           <div style={{ ...s.emptyState, flex: 1 }}>
-            <span style={{ fontSize: 52 }}>📚</span>
+            <span style={{ fontSize: 52 }}><i className="bi bi-book me-1"/></span>
             <span style={{ fontWeight: 700, color: G.dark, fontSize: 16 }}>Select a module to get started</span>
             <span style={{ fontSize: 13 }}>or create a new one using the button on the left</span>
           </div>
@@ -671,21 +671,21 @@ export default function ModulesPage() {
                 </div>
               </div>
               <span style={s.tag(selected.status === "published" ? "green" : "yellow")}>
-                {selected.status === "published" ? "✅ Published" : "📝 Draft"}
+                {selected.status === "published" ? "Published" : "Draft"}
               </span>
               <button style={{ ...s.btnSecondary, fontSize: 12, padding: "7px 14px" }} onClick={e => togglePublish(selected, e)}>
                 {selected.status === "published" ? "Unpublish" : "Publish"}
               </button>
-              <button style={{ ...s.btnSecondary, fontSize: 12, padding: "7px 14px" }} onClick={() => { setEditMod(selected); setShowModal(true); }}>✏️ Edit</button>
-              <button style={{ ...s.btnDanger, fontSize: 12, padding: "7px 14px" }} onClick={deleteMod}>🗑️</button>
+              <button style={{ ...s.btnSecondary, fontSize: 12, padding: "7px 14px" }} onClick={() => { setEditMod(selected); setShowModal(true); }}><i className="bi bi-pencil me-1"/> Edit</button>
+              <button style={{ ...s.btnDanger, fontSize: 12, padding: "7px 14px" }} onClick={deleteMod}><i className="bi bi-trash me-1"/></button>
             </div>
 
             <div style={s.tabBar}>
               <div style={s.tab(tab === "files")} onClick={() => setTab("files")}>
-                📁 Files {fileCount(selected) > 0 && <span style={s.badge}>{fileCount(selected)}</span>}
+                <i className="bi bi-folder me-1"/> Files {fileCount(selected) > 0 && <span style={s.badge}>{fileCount(selected)}</span>}
               </div>
               <div style={s.tab(tab === "assessment")} onClick={() => setTab("assessment")}>
-                📝 Assessment {hasAssess(selected) && <span style={{ ...s.badge, background: "#dcfce7", color: "#16a34a" }}>✓</span>}
+                <i className="bi bi-clipboard-check me-1"/> Assessment {hasAssess(selected) && <span style={{ ...s.badge, background: "#dcfce7", color: "#16a34a" }}><i className="bi bi-check"></i></span>}
               </div>
             </div>
 

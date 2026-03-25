@@ -16,29 +16,29 @@ function formatDate(iso) {
 }
 
 const s = {
-  page:      { padding: "28px 32px", fontFamily: "'Segoe UI', system-ui, sans-serif", background: G.cream, minHeight: "100vh" },
+  page:      { padding: "28px 32px", fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", minHeight: "100vh" },
   header:    { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 },
   title:     { fontSize: 22, fontWeight: 800, color: G.dark, margin: 0 },
   toolbar:   { display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" },
-  searchBar: { padding: "9px 14px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 13, outline: "none", background: "#fff", width: 260 },
-  select:    { padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 13, outline: "none", background: "#fff", color: G.dark },
+  searchBar: { padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", width: 260 },
+  select:    { padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", color: G.dark },
   table:     { width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 6px rgba(0,0,0,0.05)" },
-  th:        { padding: "12px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `2px solid ${G.wash}`, background: G.cream },
+  th:        { padding: "12px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `2px solid ${G.wash}`, background: "#F5F7F5" },
   td:        { padding: "13px 16px", borderBottom: `1px solid ${G.wash}`, color: G.dark, verticalAlign: "middle" },
   avatar:    { width: 36, height: 36, borderRadius: "50%", background: G.mid, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#fff", flexShrink: 0, overflow: "hidden" },
   tag:      (c) => ({ display: "inline-flex", alignItems: "center", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "red" ? "#fee2e2" : c === "yellow" ? "#fef9c3" : c === "blue" ? "#dbeafe" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "red" ? "#dc2626" : c === "yellow" ? "#92400e" : c === "blue" ? "#1d4ed8" : "#555" }),
   overlay:   { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
-  modal:     { background: "#fff", borderRadius: 16, width: "100%", maxWidth: 660, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
+  modal:     { background: "#fff", borderRadius: 10, width: "100%", maxWidth: 660, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
   mHeader:   { padding: "20px 24px 16px", borderBottom: `1px solid ${G.wash}`, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#fff", zIndex: 1 },
   mTitle:    { fontSize: 17, fontWeight: 700, color: G.dark },
   mBody:     { padding: "20px 24px" },
   mFooter:   { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
   iconBtn:  (c) => ({ background: "none", border: "none", cursor: "pointer", color: c || "#999", fontSize: 14, padding: "4px 6px", borderRadius: 6 }),
-  statCard: (c) => ({ flex: 1, minWidth: 100, background: "#fff", borderRadius: 12, padding: "14px 16px", border: `1px solid ${G.wash}`, borderTop: `3px solid ${c || G.base}` }),
+  statCard: (c) => ({ flex: 1, minWidth: 100, background: "#fff", borderRadius: 10, padding: "14px 16px", border: "1px solid #DDE8DD", borderTop: `3px solid ${c || G.base}` }),
   statNum:   { fontSize: 24, fontWeight: 900, color: G.dark },
   statLabel: { fontSize: 12, color: "#888", marginTop: 2 },
   secTitle:  { fontSize: 13, fontWeight: 700, color: G.dark, marginBottom: 10, marginTop: 20, display: "flex", alignItems: "center", gap: 8 },
-  card:      { background: G.cream, borderRadius: 10, padding: "12px 16px", border: `1px solid ${G.wash}`, marginBottom: 8 },
+  card:      { background: "#F5F7F5", borderRadius: 10, padding: "12px 16px", border: "1px solid #DDE8DD", marginBottom: 8 },
   emptyBox:  { background: "#fff", borderRadius: 14, border: `2px dashed ${G.pale}`, padding: "50px 20px", textAlign: "center" },
 };
 
@@ -116,7 +116,7 @@ export default function StudentsPage() {
     <div style={s.page}>
       <div style={s.header}>
         <div>
-          <div style={s.title}>👩‍🎓 Students</div>
+          <div style={s.title}><i className="bi bi-person me-1"/>‍<i className="bi bi-mortarboard me-1"/> Students</div>
           <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{students.length} registered students</div>
         </div>
       </div>
@@ -155,7 +155,7 @@ export default function StudentsPage() {
         <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading students…</div>
       ) : filtered.length === 0 ? (
         <div style={s.emptyBox}>
-          <div style={{ fontSize: 40, marginBottom: 10 }}>👩‍🎓</div>
+          <div style={{ fontSize: 40, marginBottom: 10 }}><i className="bi bi-person me-1"/>‍<i className="bi bi-mortarboard me-1"/></div>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No students found</div>
           <div style={{ fontSize: 13, color: "#aaa" }}>Try adjusting your search or filters</div>
         </div>
@@ -202,15 +202,15 @@ export default function StudentsPage() {
                     <td style={s.td} onClick={() => openDetail(student)}>{student.student_id || "—"}</td>
                     <td style={s.td} onClick={() => openDetail(student)}>{student.department || "—"}</td>
                     <td style={s.td} onClick={() => openDetail(student)}>{student.year_level ? `Year ${student.year_level}` : "—"}</td>
-                    <td style={s.td} onClick={() => openDetail(student)}><span style={{ fontWeight: 700, color: G.base }}>📚 {moduleCount}</span></td>
-                    <td style={s.td} onClick={() => openDetail(student)}><span style={{ fontWeight: 700, color: "#f59e0b" }}>🏅 {badgeCount}</span></td>
-                    <td style={s.td} onClick={() => openDetail(student)}><span style={{ fontWeight: 700, color: "#7c3aed" }}>🎓 {semCount}</span></td>
+                    <td style={s.td} onClick={() => openDetail(student)}><span style={{ fontWeight: 700, color: G.base }}><i className="bi bi-book me-1"/> {moduleCount}</span></td>
+                    <td style={s.td} onClick={() => openDetail(student)}><span style={{ fontWeight: 700, color: "#f59e0b" }}><i className="bi bi-award me-1"/> {badgeCount}</span></td>
+                    <td style={s.td} onClick={() => openDetail(student)}><span style={{ fontWeight: 700, color: "#7c3aed" }}><i className="bi bi-mortarboard me-1"/> {semCount}</span></td>
                     <td style={s.td} onClick={() => openDetail(student)}>
                       <span style={s.tag(isActive ? "green" : "red")}>{isActive ? "Active" : "Inactive"}</span>
                     </td>
                     <td style={s.td}>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button style={{ padding: "5px 10px", border: `1px solid ${G.pale}`, borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: G.dark }}
+                        <button style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: G.dark }}
                           onClick={() => openDetail(student)}>View</button>
                         <button style={{ padding: "5px 10px", border: "none", borderRadius: 6, background: isActive ? "#fee2e2" : "#dcfce7", fontSize: 12, cursor: "pointer", fontWeight: 600, color: isActive ? "#dc2626" : "#16a34a" }}
                           onClick={() => toggleActive(student)}>
@@ -245,7 +245,7 @@ export default function StudentsPage() {
                   <div style={{ fontSize: 11, color: "#aaa", marginTop: 1 }}>{selected.email}</div>
                 </div>
               </div>
-              <button style={s.iconBtn()} onClick={() => { setSelected(null); setDetail(null); }}>✕</button>
+              <button style={s.iconBtn()} onClick={() => { setSelected(null); setDetail(null); }}>×</button>
             </div>
 
             <div style={s.mBody}>
@@ -269,7 +269,7 @@ export default function StudentsPage() {
                   </div>
 
                   {/* Module Progress */}
-                  <div style={s.secTitle}>📚 Module Progress <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.progress.length})</span></div>
+                  <div style={s.secTitle}><i className="bi bi-book me-1"/> Module Progress <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.progress.length})</span></div>
                   {detail.progress.length === 0
                     ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No modules started yet.</div>
                     : detail.progress.map(p => (
@@ -290,13 +290,13 @@ export default function StudentsPage() {
                   }
 
                   {/* Badges */}
-                  <div style={s.secTitle}>🏅 Badges Earned <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.badges.length})</span></div>
+                  <div style={s.secTitle}><i className="bi bi-award me-1"/> Badges Earned <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.badges.length})</span></div>
                   {detail.badges.length === 0
                     ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No badges earned yet.</div>
                     : <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
                         {detail.badges.map(b => (
-                          <div key={b.id} style={{ background: "#fef9c3", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#92400e", border: "1px solid #fde047", display: "flex", alignItems: "center", gap: 6 }}>
-                            🏅 {b.badges?.name || "Badge"}
+                          <div key={b.id} style={{ background: "#fef9c3", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#92400e", border: "1px solid #fde047", display: "flex", alignItems: "center", gap: 6 }}>
+                            <i className="bi bi-award me-1"/> {b.badges?.name || "Badge"}
                             <span style={{ fontSize: 10, color: "#aaa", fontWeight: 400 }}>· {formatDate(b.awarded_at)}</span>
                           </div>
                         ))}
@@ -304,14 +304,14 @@ export default function StudentsPage() {
                   }
 
                   {/* Assessment Results */}
-                  <div style={s.secTitle}>📝 Assessment Results <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.attempts.length})</span></div>
+                  <div style={s.secTitle}><i className="bi bi-clipboard-check me-1"/> Assessment Results <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.attempts.length})</span></div>
                   {detail.attempts.length === 0
                     ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No assessments taken yet.</div>
                     : detail.attempts.map(a => (
                       <div key={a.id} style={s.card}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <span style={{ fontSize: 13, fontWeight: 600, color: G.dark }}>{a.assessments?.title || "—"}</span>
-                          <span style={s.tag(a.passed ? "green" : "red")}>{a.score}% · {a.passed ? "✅ Passed" : "❌ Failed"}</span>
+                          <span style={s.tag(a.passed ? "green" : "red")}>{a.score}% · {a.passed ? "Passed" : "Failed"}</span>
                         </div>
                         <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>{formatDate(a.submitted_at)}</div>
                       </div>
@@ -319,7 +319,7 @@ export default function StudentsPage() {
                   }
 
                   {/* Seminar Registrations */}
-                  <div style={s.secTitle}>🎓 Seminar Registrations <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.regs.length})</span></div>
+                  <div style={s.secTitle}><i className="bi bi-mortarboard me-1"/> Seminar Registrations <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.regs.length})</span></div>
                   {detail.regs.length === 0
                     ? <div style={{ fontSize: 13, color: "#aaa" }}>No seminar registrations yet.</div>
                     : detail.regs.map(r => (
@@ -339,11 +339,11 @@ export default function StudentsPage() {
             </div>
 
             <div style={s.mFooter}>
-              <button style={{ padding: "9px 20px", background: selected?.is_active !== false ? "#fee2e2" : "#dcfce7", color: selected?.is_active !== false ? "#dc2626" : "#16a34a", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 }}
+              <button style={{ padding: "9px 20px", background: selected?.is_active !== false ? "#fee2e2" : "#dcfce7", color: selected?.is_active !== false ? "#dc2626" : "#16a34a", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 }}
                 onClick={() => toggleActive(selected)}>
                 {selected?.is_active !== false ? "Deactivate Student" : "Activate Student"}
               </button>
-              <button style={{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 }}
+              <button style={{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 }}
                 onClick={() => { setSelected(null); setDetail(null); }}>Close</button>
             </div>
           </div>

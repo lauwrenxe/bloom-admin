@@ -14,45 +14,45 @@ function formatDate(iso) {
 
 // ── Styles ───────────────────────────────────────────────────────
 const s = {
-  page:         { display: "flex", height: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", overflow: "hidden" },
+  page:         { display: "flex", height: "100vh", fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", overflow: "hidden" },
   sidebar:      { width: 290, minWidth: 290, background: G.dark, display: "flex", flexDirection: "column", overflow: "hidden" },
   sidebarHdr:   { padding: "20px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.1)" },
   sidebarTitle: { fontSize: 17, fontWeight: 800, color: "#fff", margin: 0 },
   sidebarSub:   { fontSize: 12, color: G.pale, marginTop: 2 },
   asmList:      { flex: 1, overflowY: "auto", padding: "4px 0" },
   asmItem:     (a) => ({ padding: "11px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, borderLeft: a ? `3px solid ${G.light}` : "3px solid transparent", background: a ? "rgba(255,255,255,0.1)" : "transparent", transition: "background .15s" }),
-  asmIcon:      { width: 34, height: 34, borderRadius: 8, background: G.mid, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 },
+  asmIcon:      { width: 34, height: 34, borderRadius: 6, background: G.mid, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 },
   asmTitle:     { fontSize: 13, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   asmMeta:      { fontSize: 11, color: G.pale, marginTop: 1 },
   pubDot:      (p) => ({ width: 7, height: 7, borderRadius: "50%", background: p ? "#4ade80" : "#facc15", flexShrink: 0, marginLeft: "auto" }),
-  addBtn:       { margin: "12px 16px", padding: "9px 14px", background: G.base, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 },
-  searchInput:  { margin: "0 12px 8px", padding: "8px 12px", background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 8, color: "#fff", fontSize: 12, outline: "none", width: "calc(100% - 24px)", boxSizing: "border-box" },
+  addBtn:       { margin: "12px 16px", padding: "9px 14px", background: G.base, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 },
+  searchInput:  { margin: "0 12px 8px", padding: "8px 12px", background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 6, color: "#fff", fontSize: 12, outline: "none", width: "calc(100% - 24px)", boxSizing: "border-box" },
   main:         { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
   topBar:       { background: "#fff", borderBottom: `1px solid ${G.wash}`, padding: "0 24px", height: 58, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 },
   topTitle:     { fontSize: 17, fontWeight: 700, color: G.dark, flex: 1 },
   tabBar:       { display: "flex", borderBottom: `1px solid ${G.wash}`, background: "#fff", padding: "0 24px", flexShrink: 0 },
   tab:         (a) => ({ padding: "11px 18px", fontSize: 13, fontWeight: 600, color: a ? G.dark : "#999", borderBottom: a ? `2px solid ${G.dark}` : "2px solid transparent", cursor: "pointer", marginBottom: -1, display: "flex", alignItems: "center", gap: 6 }),
   content:      { flex: 1, overflowY: "auto", padding: 24 },
-  card:         { background: "#fff", borderRadius: 14, padding: 20, border: `1px solid ${G.wash}`, boxShadow: "0 1px 6px rgba(0,0,0,0.04)", marginBottom: 16 },
+  card:         { background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #DDE8DD", boxShadow: "0 1px 6px rgba(0,0,0,0.04)", marginBottom: 16 },
   label:        { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
-  input:        { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:       { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  textarea:     { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 80 },
+  input:        { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:       { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  textarea:     { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 80 },
   fg:           { marginBottom: 16 },
   row:          { display: "flex", gap: 12 },
-  btnPrimary:   { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  btnSecondary: { padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  btnGreen:     { padding: "8px 16px", background: G.base, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 12 },
-  btnDanger:    { padding: "7px 14px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 12 },
+  btnPrimary:   { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnSecondary: { padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnGreen:     { padding: "8px 16px", background: G.base, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12 },
+  btnDanger:    { padding: "7px 14px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12 },
   iconBtn:     (c) => ({ background: "none", border: "none", cursor: "pointer", color: c || "#999", fontSize: 14, padding: "4px 6px", borderRadius: 6 }),
-  tag:         (c) => ({ display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "red" ? "#fee2e2" : c === "yellow" ? "#fef9c3" : c === "blue" ? "#dbeafe" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "red" ? "#dc2626" : c === "yellow" ? "#92400e" : c === "blue" ? "#1d4ed8" : "#555" }),
+  tag:         (c) => ({ display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "red" ? "#fee2e2" : c === "yellow" ? "#fef9c3" : c === "blue" ? "#dbeafe" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "red" ? "#dc2626" : c === "yellow" ? "#92400e" : c === "blue" ? "#1d4ed8" : "#555" }),
   overlay:      { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
-  modal:       (w) => ({ background: "#fff", borderRadius: 16, width: "100%", maxWidth: w || 540, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" }),
+  modal:       (w) => ({ background: "#fff", borderRadius: 10, width: "100%", maxWidth: w || 540, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" }),
   mHeader:      { padding: "20px 24px 16px", borderBottom: `1px solid ${G.wash}`, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#fff", zIndex: 1 },
   mTitle:       { fontSize: 17, fontWeight: 700, color: G.dark },
   mBody:        { padding: "20px 24px" },
   mFooter:      { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
-  statCard:    (c) => ({ flex: 1, minWidth: 100, background: "#fff", borderRadius: 12, padding: "16px 18px", border: `1px solid ${G.wash}`, borderTop: `3px solid ${c || G.base}` }),
+  statCard:    (c) => ({ flex: 1, minWidth: 100, background: "#fff", borderRadius: 10, padding: "16px 18px", border: "1px solid #DDE8DD", borderTop: `3px solid ${c || G.base}` }),
   statNum:      { fontSize: 28, fontWeight: 900, color: G.dark },
   statLabel:    { fontSize: 12, color: "#888", marginTop: 2 },
   table:        { width: "100%", borderCollapse: "collapse", fontSize: 13 },
@@ -62,7 +62,7 @@ const s = {
 };
 
 // ── Question type labels ──────────────────────────────────────────
-const QTYPE = { multiple_choice: "🔘 Multiple Choice", true_false: "✅ True/False", short_answer: "✏️ Short Answer" };
+const QTYPE = { multiple_choice: "Multiple Choice", true_false: "True/False", short_answer: "Short Answer" };
 
 // ═══════════════════════════════════════════════════════════════════
 //  QUESTIONS TAB
@@ -152,14 +152,14 @@ function QuestionsTab({ assessment }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontWeight: 700, color: G.dark }}>Questions</span>
-          <span style={{ background: G.wash, color: G.base, borderRadius: 12, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{questions.length}</span>
+          <span style={{ background: G.wash, color: G.base, borderRadius: 10, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{questions.length}</span>
         </div>
         <button style={s.btnGreen} onClick={openAdd}>+ Add Question</button>
       </div>
 
       {questions.length === 0 ? (
         <div style={s.emptyBox}>
-          <div style={{ fontSize: 40, marginBottom: 10 }}>📝</div>
+          <div style={{ fontSize: 40, marginBottom: 10 }}><i className="bi bi-clipboard-check me-1"/></div>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No questions yet</div>
           <div style={{ fontSize: 13, color: "#aaa", marginBottom: 16 }}>Add questions for students to answer in the app</div>
           <button style={s.btnGreen} onClick={openAdd}>+ Add First Question</button>
@@ -176,18 +176,18 @@ function QuestionsTab({ assessment }) {
                     <span style={s.tag("blue")}>{QTYPE[q.question_type] || q.question_type}</span>
                   </div>
                   <div style={{ display: "flex", gap: 4 }}>
-                    <button style={s.iconBtn(G.base)} onClick={() => openEdit(q)}>✏️</button>
-                    <button style={s.iconBtn("#dc2626")} onClick={() => del(q)}>🗑️</button>
+                    <button style={s.iconBtn(G.base)} onClick={() => openEdit(q)}><i className="bi bi-pencil me-1"/></button>
+                    <button style={s.iconBtn("#dc2626")} onClick={() => del(q)}><i className="bi bi-trash me-1"/></button>
                   </div>
                 </div>
                 <div style={{ fontSize: 14, fontWeight: 600, color: G.dark, marginBottom: 10, lineHeight: 1.5 }}>{q.question_text}</div>
                 {q.question_type === "short_answer" ? (
-                  <div style={{ background: G.wash, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#888", fontStyle: "italic" }}>✏️ Students type a written response</div>
+                  <div style={{ background: G.wash, borderRadius: 6, padding: "8px 12px", fontSize: 12, color: "#888", fontStyle: "italic" }}><i className="bi bi-pencil me-1"/> Students type a written response</div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                     {qOpts.map((o, j) => (
-                      <div key={j} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderRadius: 8, background: o.is_correct ? "#dcfce7" : "#f9fafb", border: `1px solid ${o.is_correct ? "#86efac" : "#e5e7eb"}`, fontSize: 13 }}>
-                        {o.is_correct ? "✅" : "⬜"}
+                      <div key={j} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderRadius: 6, background: o.is_correct ? "#dcfce7" : "#f9fafb", border: `1px solid ${o.is_correct ? "#86efac" : "#e5e7eb"}`, fontSize: 13 }}>
+                        {o.is_correct ? "" : "⬜"}
                         <span style={{ color: o.is_correct ? "#16a34a" : G.dark, fontWeight: o.is_correct ? 700 : 400 }}>{o.option_text}</span>
                         {o.is_correct && <span style={{ marginLeft: "auto", fontSize: 11, color: "#16a34a", fontWeight: 700 }}>Correct answer</span>}
                       </div>
@@ -206,15 +206,15 @@ function QuestionsTab({ assessment }) {
           <div style={s.modal(580)}>
             <div style={s.mHeader}>
               <span style={s.mTitle}>{editQ ? "Edit Question" : "Add Question"}</span>
-              <button style={s.iconBtn()} onClick={() => setShowModal(false)}>✕</button>
+              <button style={s.iconBtn()} onClick={() => setShowModal(false)}>×</button>
             </div>
             <div style={s.mBody}>
               {/* Type picker */}
               <div style={s.fg}>
                 <label style={s.label}>Question Type</label>
                 <div style={{ display: "flex", gap: 8 }}>
-                  {[["multiple_choice", "🔘 Multiple Choice"], ["true_false", "✅ True / False"], ["short_answer", "✏️ Short Answer"]].map(([v, l]) => (
-                    <button key={v} onClick={() => setQType(v)} style={{ flex: 1, padding: "9px 6px", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 12, border: `2px solid ${qType === v ? G.base : G.pale}`, background: qType === v ? G.wash : "#fff", color: qType === v ? G.dark : "#888" }}>{l}</button>
+                  {[["multiple_choice", "Multiple Choice"], ["true_false", "True / False"], ["short_answer", "Short Answer"]].map(([v, l]) => (
+                    <button key={v} onClick={() => setQType(v)} style={{ flex: 1, padding: "9px 6px", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, border: `2px solid ${qType === v ? G.base : G.pale}`, background: qType === v ? G.wash : "#fff", color: qType === v ? G.dark : "#888" }}>{l}</button>
                   ))}
                 </div>
               </div>
@@ -228,10 +228,10 @@ function QuestionsTab({ assessment }) {
                   {opts.map((o, i) => (
                     <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                       <button onClick={() => setCorrect(i)} style={{ width: 24, height: 24, borderRadius: "50%", border: `2px solid ${correct === i ? G.base : G.pale}`, background: correct === i ? G.base : "#fff", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13 }}>
-                        {correct === i ? "✓" : ""}
+                        {correct === i ? "" : ""}
                       </button>
                       <input style={{ ...s.input, flex: 1 }} value={o} onChange={e => { const n = [...opts]; n[i] = e.target.value; setOpts(n); }} placeholder={`Option ${i + 1}`} />
-                      {opts.length > 2 && <button style={s.iconBtn("#dc2626")} onClick={() => { setOpts(opts.filter((_, j) => j !== i)); if (correct >= i) setCorrect(Math.max(0, correct - 1)); }}>✕</button>}
+                      {opts.length > 2 && <button style={s.iconBtn("#dc2626")} onClick={() => { setOpts(opts.filter((_, j) => j !== i)); if (correct >= i) setCorrect(Math.max(0, correct - 1)); }}>×</button>}
                     </div>
                   ))}
                   {opts.length < 6 && <button style={{ ...s.btnSecondary, fontSize: 12, padding: "6px 14px" }} onClick={() => setOpts([...opts, ""])}>+ Add Option</button>}
@@ -243,7 +243,7 @@ function QuestionsTab({ assessment }) {
                   <div style={{ display: "flex", gap: 10 }}>
                     {["true", "false"].map(v => (
                       <button key={v} onClick={() => setTfAns(v)} style={{ flex: 1, padding: 14, borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 15, border: `2px solid ${tfAns === v ? G.base : G.pale}`, background: tfAns === v ? G.wash : "#fff", color: tfAns === v ? G.dark : "#888" }}>
-                        {v === "true" ? "✅ True" : "❌ False"}
+                        {v === "true" ? "True" : "False"}
                       </button>
                     ))}
                   </div>
@@ -326,12 +326,12 @@ function ResultsTab({ assessment }) {
       {/* Table */}
       {attempts.length === 0 ? (
         <div style={s.emptyBox}>
-          <div style={{ fontSize: 40, marginBottom: 10 }}>📊</div>
+          <div style={{ fontSize: 40, marginBottom: 10 }}><i className="bi bi-bar-chart me-1"/></div>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No attempts yet</div>
           <div style={{ fontSize: 13, color: "#aaa" }}>Student results will appear here once they take the assessment in the app.</div>
         </div>
       ) : (
-        <div style={{ background: "#fff", borderRadius: 14, border: `1px solid ${G.wash}`, overflow: "hidden" }}>
+        <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #DDE8DD", overflow: "hidden" }}>
           <table style={s.table}>
             <thead>
               <tr>
@@ -357,7 +357,7 @@ function ResultsTab({ assessment }) {
                   </td>
                   <td style={s.td}>
                     <span style={s.tag(a.passed ? "green" : "red")}>
-                      {a.passed ? "✅ Passed" : "❌ Failed"}
+                      {a.passed ? "Passed" : "Failed"}
                     </span>
                   </td>
                   <td style={s.td}>{formatDate(a.submitted_at)}</td>
@@ -377,14 +377,14 @@ function ResultsTab({ assessment }) {
           <div style={s.modal(660)}>
             <div style={s.mHeader}>
               <div>
-                <div style={s.mTitle}>📋 {selected.profiles?.full_name || "Student"}'s Answers</div>
+                <div style={s.mTitle}><i className="bi bi-file-earmark-text me-1"/> {selected.profiles?.full_name || "Student"}'s Answers</div>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
                   Score: <strong style={{ color: selected.passed ? "#16a34a" : "#dc2626" }}>{selected.score}%</strong>
-                  &nbsp;·&nbsp;{selected.passed ? "✅ Passed" : "❌ Failed"}
+                  &nbsp;·&nbsp;{selected.passed ? "Passed" : "Failed"}
                   &nbsp;·&nbsp;{formatDate(selected.submitted_at)}
                 </div>
               </div>
-              <button style={s.iconBtn()} onClick={() => setSelected(null)}>✕</button>
+              <button style={s.iconBtn()} onClick={() => setSelected(null)}>×</button>
             </div>
             <div style={s.mBody}>
               {selected.answers.length === 0 ? (
@@ -399,10 +399,10 @@ function ResultsTab({ assessment }) {
                         <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 4 }}>Q{i + 1} · {QTYPE[ans.questions?.question_type] || ans.questions?.question_type}</div>
                         <div style={{ fontSize: 14, fontWeight: 600, color: G.dark, marginBottom: 8 }}>{ans.questions?.question_text}</div>
                         {isShort ? (
-                          <div style={{ fontSize: 13, color: "#555", fontStyle: "italic" }}>✏️ Short answer — review manually</div>
+                          <div style={{ fontSize: 13, color: "#555", fontStyle: "italic" }}><i className="bi bi-pencil me-1"/> Short answer — review manually</div>
                         ) : (
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={s.tag(isCorrect ? "green" : "red")}>{isCorrect ? "✅ Correct" : "❌ Incorrect"}</span>
+                            <span style={s.tag(isCorrect ? "green" : "red")}>{isCorrect ? "Correct" : "Incorrect"}</span>
                             <span style={{ fontSize: 13, color: G.dark }}>Answered: <strong>{ans.selected_option?.option_text || "—"}</strong></span>
                           </div>
                         )}
@@ -447,7 +447,7 @@ function SettingsTab({ assessment, modules, badges, onSaved }) {
     const { error: err } = await supabase.from("assessments").update(payload).eq("id", assessment.id);
     setSaving(false);
     if (err) { setError(err.message); return; }
-    alert("✅ Assessment settings saved!");
+    alert("Assessment settings saved!");
     onSaved();
   };
 
@@ -460,10 +460,10 @@ function SettingsTab({ assessment, modules, badges, onSaved }) {
 
   return (
     <div>
-      {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 16 }}>{error}</div>}
+      {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 16 }}>{error}</div>}
 
       <div style={s.card}>
-        <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 16 }}>⚙️ Assessment Settings</div>
+        <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 16 }}><i className="bi bi-gear me-1"/> Assessment Settings</div>
         <div style={s.fg}>
           <label style={s.label}>Title *</label>
           <input style={s.input} value={form.title || ""} onChange={e => setF("title", e.target.value)} />
@@ -490,12 +490,12 @@ function SettingsTab({ assessment, modules, badges, onSaved }) {
           </div>
         </div>
         <div style={s.fg}>
-          <label style={s.label}>🏅 Badge Awarded on Pass</label>
+          <label style={s.label}><i className="bi bi-award me-1"/> Badge Awarded on Pass</label>
           <select style={s.select} value={form.badge_id || ""} onChange={e => setF("badge_id", e.target.value)}>
             <option value="">— No badge —</option>
             {badges.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
-          {form.badge_id && <div style={{ marginTop: 6, fontSize: 12, color: G.base, fontWeight: 600 }}>✅ Students who pass will automatically receive this badge.</div>}
+          {form.badge_id && <div style={{ marginTop: 6, fontSize: 12, color: G.base, fontWeight: 600 }}><i className="bi bi-check-circle-fill me-1"/> Students who pass will automatically receive this badge.</div>}
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -503,9 +503,9 @@ function SettingsTab({ assessment, modules, badges, onSaved }) {
               <input type="checkbox" checked={!!form.is_published} onChange={togglePublish} style={{ width: 16, height: 16, accentColor: G.base }} />
               Published (visible to students in app)
             </label>
-            <span style={s.tag(form.is_published ? "green" : "yellow")}>{form.is_published ? "✅ Published" : "📝 Draft"}</span>
+            <span style={s.tag(form.is_published ? "green" : "yellow")}>{form.is_published ? "Published" : "Draft"}</span>
           </div>
-          <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>{saving ? "Saving…" : "💾 Save Settings"}</button>
+          <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Settings"}</button>
         </div>
       </div>
     </div>
@@ -591,7 +591,7 @@ export default function AssessmentsPage() {
       {/* ── SIDEBAR ── */}
       <div style={s.sidebar}>
         <div style={s.sidebarHdr}>
-          <div style={s.sidebarTitle}>📝 Assessments</div>
+          <div style={s.sidebarTitle}><i className="bi bi-clipboard-check me-1"/> Assessments</div>
           <div style={s.sidebarSub}>{assessments.length} total</div>
         </div>
         <button style={s.addBtn} onClick={() => { setAddForm({ passing_score: 75, time_limit_minutes: 30 }); setAddError(""); setShowAdd(true); }}>＋ New Assessment</button>
@@ -603,7 +603,7 @@ export default function AssessmentsPage() {
             <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>No assessments found</div>
           ) : filtered.map(a => (
             <div key={a.id} style={s.asmItem(selected?.id === a.id)} onClick={() => { setSelected(a); setTab("questions"); }}>
-              <div style={s.asmIcon}>📝</div>
+              <div style={s.asmIcon}><i className="bi bi-clipboard-check me-1"/></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={s.asmTitle}>{a.title}</div>
                 <div style={s.asmMeta}>{a.modules?.title || "No module"} · {a.passing_score || 75}% to pass</div>
@@ -618,7 +618,7 @@ export default function AssessmentsPage() {
       <div style={s.main}>
         {!selected ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", flex: 1, gap: 12, color: "#aaa" }}>
-            <span style={{ fontSize: 52 }}>📝</span>
+            <span style={{ fontSize: 52 }}><i className="bi bi-clipboard-check me-1"/></span>
             <span style={{ fontWeight: 700, color: G.dark, fontSize: 16 }}>Select an assessment to get started</span>
             <span style={{ fontSize: 13 }}>or create a new one using the button on the left</span>
           </div>
@@ -633,18 +633,18 @@ export default function AssessmentsPage() {
                 </div>
               </div>
               <span style={s.tag(selected.is_published ? "green" : "yellow")}>
-                {selected.is_published ? "✅ Published" : "📝 Draft"}
+                {selected.is_published ? "Published" : "Draft"}
               </span>
-              <button style={s.btnDanger} onClick={() => deleteAssessment(selected)}>🗑️ Delete</button>
+              <button style={s.btnDanger} onClick={() => deleteAssessment(selected)}><i className="bi bi-trash me-1"/> Delete</button>
             </div>
 
             {/* Tab bar */}
             <div style={s.tabBar}>
-              <div style={s.tab(tab === "questions")} onClick={() => setTab("questions")}>📋 Questions</div>
+              <div style={s.tab(tab === "questions")} onClick={() => setTab("questions")}><i className="bi bi-file-earmark-text me-1"/> Questions</div>
               <div style={s.tab(tab === "results")}   onClick={() => setTab("results")}>
-                📊 Student Results
+                <i className="bi bi-bar-chart me-1"/> Student Results
               </div>
-              <div style={s.tab(tab === "settings")}  onClick={() => setTab("settings")}>⚙️ Settings</div>
+              <div style={s.tab(tab === "settings")}  onClick={() => setTab("settings")}><i className="bi bi-gear me-1"/> Settings</div>
             </div>
 
             {/* Content */}
@@ -663,10 +663,10 @@ export default function AssessmentsPage() {
           <div style={s.modal(520)}>
             <div style={s.mHeader}>
               <span style={s.mTitle}>Create New Assessment</span>
-              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}>✕</button>
+              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}>×</button>
             </div>
             <div style={s.mBody}>
-              {addError && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{addError}</div>}
+              {addError && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{addError}</div>}
               <div style={s.fg}>
                 <label style={s.label}>Assessment Title *</label>
                 <input style={s.input} value={addForm.title || ""} onChange={e => setAddForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Week 1 Quiz" autoFocus />
@@ -688,8 +688,8 @@ export default function AssessmentsPage() {
                   <input style={s.input} type="number" min={1} value={addForm.time_limit_minutes || 30} onChange={e => setAddForm(f => ({ ...f, time_limit_minutes: e.target.value }))} />
                 </div>
               </div>
-              <div style={{ background: G.wash, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-                💡 After creating, go to <strong>Questions</strong> tab to add questions, then <strong>Settings</strong> to publish it for students.
+              <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
+                <i className="bi bi-lightbulb me-1"/> After creating, go to <strong>Questions</strong> tab to add questions, then <strong>Settings</strong> to publish it for students.
               </div>
             </div>
             <div style={s.mFooter}>

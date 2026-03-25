@@ -11,8 +11,8 @@ const G = {
 
 function Btn({ children, onClick, variant = "primary", small, disabled, style = {} }) {
   const base = {
-    border: "none", borderRadius: 8, cursor: disabled ? "not-allowed" : "pointer",
-    fontFamily: "'DM Sans', sans-serif", fontWeight: 600,
+    border: "none", borderRadius: 6, cursor: disabled ? "not-allowed" : "pointer",
+    fontFamily: "'Inter', sans-serif", fontWeight: 600,
     padding: small ? "6px 14px" : "10px 22px",
     fontSize: small ? 12 : 13,
     opacity: disabled ? 0.5 : 1,
@@ -23,7 +23,7 @@ function Btn({ children, onClick, variant = "primary", small, disabled, style = 
     primary:   { background: G.dark,        color: "#fff" },
     secondary: { background: G.wash,        color: G.dark },
     danger:    { background: "#fef2f2",     color: "#c0392b" },
-    ghost:     { background: "transparent", color: G.base, border: `1px solid ${G.pale}` },
+    ghost:     { background: "transparent", color: G.base, border: "1px solid #DDE8DD" },
   };
   return <button onClick={onClick} disabled={disabled} style={{ ...base, ...variants[variant] }}>{children}</button>;
 }
@@ -36,8 +36,8 @@ function Input({ label, value, onChange, type = "text", placeholder, disabled, h
         type={type} value={value ?? ""} onChange={e => onChange?.(e.target.value)}
         placeholder={placeholder} disabled={disabled}
         style={{
-          border: `1px solid ${G.pale}`, borderRadius: 8, padding: "9px 12px",
-          fontSize: 13, fontFamily: "'DM Sans', sans-serif",
+          border: "1px solid #DDE8DD", borderRadius: 6, padding: "9px 12px",
+          fontSize: 13, fontFamily: "'Inter', sans-serif",
           background: disabled ? G.cream : G.white,
           color: disabled ? G.light : G.dark, outline: "none",
           transition: "border .15s",
@@ -53,8 +53,8 @@ function Input({ label, value, onChange, type = "text", placeholder, disabled, h
 function Card({ children, style = {} }) {
   return (
     <div style={{
-      background: G.white, border: `1px solid ${G.pale}`,
-      borderRadius: 16, padding: "24px 28px", ...style,
+      background: "#FFFFFF", border: "1px solid #DDE8DD",
+      borderRadius: 10, padding: "24px 28px", ...style,
     }}>{children}</div>
   );
 }
@@ -73,14 +73,14 @@ function SectionTitle({ children, sub }) {
 function Alert({ message, type = "error" }) {
   if (!message) return null;
   const styles = {
-    error:   { bg: "#fef2f2", border: "#fecaca", color: "#c0392b", icon: "⚠️" },
-    success: { bg: G.wash,    border: G.pale,    color: G.dark,    icon: "✅" },
+    error:   { bg: "#fef2f2", border: "#fecaca", color: "#c0392b", icon: "" },
+    success: { bg: G.wash,    border: G.pale,    color: G.dark,    icon: "" },
     info:    { bg: "#e8f0fe", border: "#bfdbfe", color: "#1a56a8", icon: "ℹ️" },
   };
   const s = styles[type];
   return (
     <div style={{
-      background: s.bg, border: `1px solid ${s.border}`, borderRadius: 8,
+      background: s.bg, border: `1px solid ${s.border}`, borderRadius: 6,
       padding: "10px 14px", fontSize: 12.5, color: s.color,
       display: "flex", alignItems: "center", gap: 8,
     }}>
@@ -119,13 +119,14 @@ function AvatarCircle({ name, photoUrl, size = 80 }) {
 
 // ── Activity icon ─────────────────────────────────────────────────
 function activityIcon(type) {
-  const map = {
-    module:       "📂", assessment: "📝", seminar:  "🎙️",
-    certificate:  "🎓", calendar:   "📅", student:  "👩‍🎓",
-    announcement: "📢", analytics:  "📊", login:    "🔐",
-    profile:      "👤", password:   "🔑",
+  const icons = {
+    module: "bi-book", assessment: "bi-clipboard-check", seminar: "bi-people",
+    certificate: "bi-patch-check", calendar: "bi-calendar3", student: "bi-mortarboard",
+    announcement: "bi-megaphone", analytics: "bi-bar-chart", login: "bi-key",
+    profile: "bi-person", password: "bi-lock",
   };
-  return map[type] ?? "📌";
+  const icon = icons[type] ?? "bi-pin-angle";
+  return icon;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -258,10 +259,10 @@ export default function AdminProfilePage({ user, onClose }) {
   };
 
   const TABS = [
-    { id: "profile",  label: "Profile",          icon: "👤" },
-    { id: "security", label: "Security",          icon: "🔑" },
-    { id: "activity", label: "Recent Activity",   icon: "📋" },
-    { id: "settings", label: "Account Settings",  icon: "⚙️" },
+    { id: "profile",  label: "Profile",          icon: "" },
+    { id: "security", label: "Security",          icon: "" },
+    { id: "activity", label: "Recent Activity",   icon: "" },
+    { id: "settings", label: "Account Settings",  icon: "" },
   ];
 
   // ════════════════════════════════════════════════════════════════
@@ -276,7 +277,7 @@ export default function AdminProfilePage({ user, onClose }) {
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div style={{
-        background: G.cream, borderRadius: 20, width: "100%", maxWidth: 760,
+        background: "#F5F7F5", borderRadius: 20, width: "100%", maxWidth: 760,
         maxHeight: "92vh", overflow: "hidden", display: "flex", flexDirection: "column",
         boxShadow: "0 24px 80px rgba(0,0,0,.25)",
       }}>
@@ -291,7 +292,7 @@ export default function AdminProfilePage({ user, onClose }) {
             background: "rgba(255,255,255,.15)", border: "none", borderRadius: "50%",
             width: 32, height: 32, cursor: "pointer", color: "#fff", fontSize: 16,
             display: "flex", alignItems: "center", justifyContent: "center",
-          }}>✕</button>
+          }}>×</button>
 
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
             <div style={{ position: "relative" }}>
@@ -304,7 +305,7 @@ export default function AdminProfilePage({ user, onClose }) {
                   width: 26, height: 26, cursor: "pointer", fontSize: 12,
                   display: "flex", alignItems: "center", justifyContent: "center",
                 }}
-              >📷</button>
+              ><i className="bi bi-camera me-1"/></button>
               <input ref={fileRef} type="file" accept="image/*"
                 onChange={uploadAvatar} style={{ display: "none" }} />
             </div>
@@ -339,9 +340,9 @@ export default function AdminProfilePage({ user, onClose }) {
               <button key={t.id} onClick={() => setTab(t.id)} style={{
                 background: tab === t.id ? "rgba(255,255,255,.2)" : "transparent",
                 border: tab === t.id ? "1px solid rgba(255,255,255,.3)" : "1px solid transparent",
-                borderRadius: 8, padding: "6px 14px", cursor: "pointer",
+                borderRadius: 6, padding: "6px 14px", cursor: "pointer",
                 color: tab === t.id ? "#fff" : "rgba(255,255,255,.55)",
-                fontSize: 12, fontWeight: 600, fontFamily: "'DM Sans', sans-serif",
+                fontSize: 12, fontWeight: 600, fontFamily: "'Inter', sans-serif",
                 transition: "all .15s",
               }}>
                 {t.icon} {t.label}
@@ -380,8 +381,8 @@ export default function AdminProfilePage({ user, onClose }) {
                   <textarea value={profileForm.bio ?? ""}
                     onChange={e => setProfileForm(f => ({ ...f, bio: e.target.value }))}
                     placeholder="Write a short bio about yourself…" rows={3}
-                    style={{ border: `1px solid ${G.pale}`, borderRadius: 8, padding: "9px 12px",
-                      fontSize: 13, fontFamily: "'DM Sans', sans-serif", background: G.white,
+                    style={{ border: "1px solid #DDE8DD", borderRadius: 6, padding: "9px 12px",
+                      fontSize: 13, fontFamily: "'Inter', sans-serif", background: "#FFFFFF",
                       color: G.dark, outline: "none", resize: "vertical" }}
                     onFocus={e => e.target.style.borderColor = G.base}
                     onBlur={e  => e.target.style.borderColor = G.pale}
@@ -403,11 +404,11 @@ export default function AdminProfilePage({ user, onClose }) {
                     { label: "Role",          value: "Administrator" },
                     { label: "Account Created", value: fmtShort(user?.created_at) },
                     { label: "Last Sign In",    value: fmtShort(user?.last_sign_in_at) },
-                    { label: "Email Verified",  value: user?.email_confirmed_at ? "✅ Verified" : "❌ Not verified" },
+                    { label: "Email Verified",  value: user?.email_confirmed_at ? "Verified" : "Not verified" },
                     { label: "Auth Provider",   value: user?.app_metadata?.provider ?? "email" },
                   ].map(({ label, value }) => (
                     <div key={label} style={{
-                      background: G.cream, borderRadius: 10, padding: "10px 14px",
+                      background: "#F5F7F5", borderRadius: 10, padding: "10px 14px",
                     }}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: G.light,
                         textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>{label}</div>
@@ -478,12 +479,12 @@ export default function AdminProfilePage({ user, onClose }) {
                   ].map(({ label, status }) => (
                     <div key={label} style={{
                       display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "10px 14px", background: G.cream, borderRadius: 10,
+                      padding: "10px 14px", background: "#F5F7F5", borderRadius: 10,
                     }}>
                       <span style={{ fontSize: 13, color: G.dark }}>{label}</span>
                       <span style={{ fontSize: 12, fontWeight: 700,
                         color: status ? G.base : "#e67e22" }}>
-                        {status ? "✅ Active" : "⚠️ Not set"}
+                        {status ? "Active" : "Not set"}
                       </span>
                     </div>
                   ))}
@@ -500,7 +501,7 @@ export default function AdminProfilePage({ user, onClose }) {
               </SectionTitle>
               {activity.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#aaa" }}>
-                  <div style={{ fontSize: 36, marginBottom: 8 }}>📋</div>
+                  <div style={{ fontSize: 36, marginBottom: 8 }}><i className="bi bi-file-earmark-text me-1"/></div>
                   No activity recorded yet.
                 </div>
               ) : (
@@ -511,8 +512,8 @@ export default function AdminProfilePage({ user, onClose }) {
                       padding: "10px 12px", borderRadius: 10,
                       background: i % 2 === 0 ? G.cream : "transparent",
                     }}>
-                      <div style={{ fontSize: 20, flexShrink: 0 }}>
-                        {activityIcon(a.type ?? a.action_type)}
+                      <div className="icon-box-sm bg-primary-subtle d-flex align-items-center justify-content-center flex-shrink-0" style={{borderRadius:"50%"}}>
+                        <i className={`bi ${activityIcon(a.type ?? a.action_type)} text-primary`} style={{fontSize:13}}/>
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, color: G.dark, fontWeight: 500 }}>
@@ -548,7 +549,7 @@ export default function AdminProfilePage({ user, onClose }) {
                   ].map(pref => (
                     <div key={pref.label} style={{
                       display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "12px 16px", background: G.cream, borderRadius: 12,
+                      padding: "12px 16px", background: "#F5F7F5", borderRadius: 10,
                       opacity: pref.disabled ? 0.5 : 1,
                     }}>
                       <div>
@@ -579,7 +580,7 @@ export default function AdminProfilePage({ user, onClose }) {
                   Danger Zone
                 </SectionTitle>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "12px 16px", background: "#fef2f2", borderRadius: 12 }}>
+                  padding: "12px 16px", background: "#fef2f2", borderRadius: 10 }}>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: "#c0392b" }}>Sign out all sessions</div>
                     <div style={{ fontSize: 11, color: "#e74c3c" }}>Force logout from all devices</div>

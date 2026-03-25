@@ -8,15 +8,15 @@ const G = {
 };
 
 const s = {
-  page:       { padding: "28px 32px", fontFamily: "'Segoe UI', system-ui, sans-serif", background: G.cream, minHeight: "100vh" },
+  page:       { padding: "28px 32px", fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", minHeight: "100vh" },
   header:     { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 },
   title:      { fontSize: 22, fontWeight: 800, color: G.dark, margin: 0 },
   subtitle:   { fontSize: 13, color: "#888", marginTop: 2 },
-  addBtn:     { padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 },
-  searchBar:  { width: "100%", maxWidth: 320, padding: "9px 14px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 13, outline: "none", background: "#fff" },
+  addBtn:     { padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 },
+  searchBar:  { width: "100%", maxWidth: 320, padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff" },
   toolbar:    { display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" },
   grid:       { display: "flex", flexDirection: "column", gap: 10 },
-  card:       { background: "#fff", borderRadius: 12, padding: "16px 20px", boxShadow: "0 1px 6px rgba(0,0,0,0.06)", border: `1px solid ${G.wash}`, display: "flex", gap: 16, alignItems: "flex-start" },
+  card:       { background: "#fff", borderRadius: 10, padding: "16px 20px", boxShadow: "0 1px 4px rgba(26,46,26,.06)", border: "1px solid #DDE8DD", display: "flex", gap: 16, alignItems: "flex-start" },
   cardLeft:   { flex: 1, minWidth: 0 },
   cardTitle:  { fontSize: 15, fontWeight: 700, color: G.dark, marginBottom: 4 },
   cardBody:   { fontSize: 13, color: "#555", lineHeight: 1.5, marginBottom: 8 },
@@ -25,22 +25,22 @@ const s = {
   tag:       (c) => ({ display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "yellow" ? "#fef9c3" : c === "red" ? "#fee2e2" : c === "blue" ? "#dbeafe" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "yellow" ? "#92400e" : c === "red" ? "#dc2626" : c === "blue" ? "#1d4ed8" : "#555" }),
   iconBtn:   (c) => ({ background: "none", border: "none", cursor: "pointer", color: c || "#999", fontSize: 15, padding: "5px 7px", borderRadius: 6 }),
   overlay:    { position: "fixed", inset: 0, background: "rgba(0,0,0,0.42)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
-  modal:      { background: "#fff", borderRadius: 16, width: "100%", maxWidth: 540, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
+  modal:      { background: "#fff", borderRadius: 10, width: "100%", maxWidth: 540, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
   mHeader:    { padding: "20px 24px 16px", borderBottom: `1px solid ${G.wash}`, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#fff", zIndex: 1 },
   mTitle:     { fontSize: 17, fontWeight: 700, color: G.dark },
   mBody:      { padding: "20px 24px" },
   mFooter:    { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
   label:      { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
-  input:      { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:     { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  textarea:   { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 100 },
+  input:      { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:     { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  textarea:   { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 100 },
   fg:         { marginBottom: 16 },
   row:        { display: "flex", gap: 12 },
-  btnPrimary: { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  btnSecondary:{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  btnDanger:  { padding: "9px 20px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  error:      { background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 },
-  pinBadge:   { display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: "#92400e", background: "#fef9c3", borderRadius: 8, padding: "2px 8px" },
+  btnPrimary: { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnSecondary:{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnDanger:  { padding: "9px 20px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  error:      { background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 },
+  pinBadge:   { display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: "#92400e", background: "#fef9c3", borderRadius: 6, padding: "2px 8px" },
 };
 
 const PRIORITY_OPTS  = ["low", "normal", "high", "urgent"];
@@ -208,7 +208,7 @@ export default function AnnouncementsPage() {
       {/* Header */}
       <div style={s.header}>
         <div>
-          <div style={s.title}>📢 Announcements</div>
+          <div style={s.title}><i className="bi bi-megaphone me-1"/> Announcements</div>
           <div style={s.subtitle}>{announcements.length} total · {announcements.filter(a => a.published_at).length} published</div>
         </div>
         <button style={s.addBtn} onClick={openAdd}>＋ New Announcement</button>
@@ -229,7 +229,7 @@ export default function AnnouncementsPage() {
         <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>
       ) : filtered.length === 0 ? (
         <div style={{ padding: 60, textAlign: "center", color: "#aaa" }}>
-          <div style={{ fontSize: 44, marginBottom: 12 }}>📢</div>
+          <div style={{ fontSize: 44, marginBottom: 12 }}><i className="bi bi-megaphone me-1"/></div>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>
             {search ? "No announcements match your search" : "No announcements yet"}
           </div>
@@ -246,13 +246,13 @@ export default function AnnouncementsPage() {
               <div key={a.id} style={{ ...s.card, borderLeft: a.is_pinned ? `4px solid ${G.light}` : `4px solid transparent` }}>
                 <div style={s.cardLeft}>
                   <div style={s.cardTitle}>
-                    {a.is_pinned && <span style={{ ...s.pinBadge, marginRight: 8 }}>📌 Pinned</span>}
+                    {a.is_pinned && <span style={{ ...s.pinBadge, marginRight: 8 }}><i className="bi bi-pin-angle me-1"/> Pinned</span>}
                     {a.title}
                   </div>
                   <div style={s.cardBody}>{body.length > 160 ? body.slice(0, 160) + "…" : body}</div>
                   <div style={s.cardMeta}>
                     <span style={s.tag(published ? "green" : "yellow")}>
-                      {published ? "✅ Published" : "📝 Draft"}
+                      {published ? "Published" : "Draft"}
                     </span>
                     <span style={s.tag(priorityColor(a.priority))}>
                       {(a.priority || "normal").toUpperCase()}
@@ -273,9 +273,9 @@ export default function AnnouncementsPage() {
                   >
                     {published ? "Unpublish" : "Publish"}
                   </button>
-                  <button style={s.iconBtn(a.is_pinned ? G.base : "#aaa")} onClick={() => togglePin(a)} title={a.is_pinned ? "Unpin" : "Pin"}>📌</button>
-                  <button style={s.iconBtn(G.base)} onClick={() => openEdit(a)} title="Edit">✏️</button>
-                  <button style={s.iconBtn("#dc2626")} onClick={() => deleteAnn(a)} title="Delete">🗑️</button>
+                  <button style={s.iconBtn(a.is_pinned ? G.base : "#aaa")} onClick={() => togglePin(a)} title={a.is_pinned ? "Unpin" : "Pin"}><i className="bi bi-pin-angle me-1"/></button>
+                  <button style={s.iconBtn(G.base)} onClick={() => openEdit(a)} title="Edit"><i className="bi bi-pencil me-1"/></button>
+                  <button style={s.iconBtn("#dc2626")} onClick={() => deleteAnn(a)} title="Delete"><i className="bi bi-trash me-1"/></button>
                 </div>
               </div>
             );
@@ -289,7 +289,7 @@ export default function AnnouncementsPage() {
           <div style={s.modal}>
             <div style={s.mHeader}>
               <span style={s.mTitle}>{modal === "add" ? "New Announcement" : "Edit Announcement"}</span>
-              <button style={s.iconBtn()} onClick={() => setModal(null)}>✕</button>
+              <button style={s.iconBtn()} onClick={() => setModal(null)}>×</button>
             </div>
             <div style={s.mBody}>
               {error && <div style={s.error}>{error}</div>}

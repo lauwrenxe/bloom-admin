@@ -16,19 +16,19 @@ function formatDate(iso) {
 }
 
 const s = {
-  page:    { padding: "28px 32px", fontFamily: "'Segoe UI', system-ui, sans-serif", background: G.cream, minHeight: "100vh" },
+  page:    { padding: "28px 32px", fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", minHeight: "100vh" },
   header:  { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 },
   title:   { fontSize: 22, fontWeight: 800, color: G.dark, margin: 0 },
-  addBtn:  { padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  addBtn:  { padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
   grid:    { display: "grid", gridTemplateColumns: "1fr 340px", gap: 20, alignItems: "start" },
-  calBox:  { background: "#fff", borderRadius: 16, border: `1px solid ${G.wash}`, overflow: "hidden", boxShadow: "0 2px 8px rgba(0,0,0,0.05)" },
+  calBox:  { background: "#fff", borderRadius: 10, border: "1px solid #DDE8DD", overflow: "hidden", boxShadow: "0 2px 8px rgba(0,0,0,0.05)" },
   calHdr:  { background: G.dark, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" },
   calNav:  { background: "none", border: "none", color: "#fff", fontSize: 18, cursor: "pointer", padding: "4px 8px", borderRadius: 6 },
   calMonth:{ fontSize: 16, fontWeight: 700, color: "#fff" },
   dayGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)" },
   dayHdr:  { padding: "10px 0", textAlign: "center", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase" },
   dayCell: (today, otherMonth) => ({
-    minHeight: 72, padding: "6px 4px", border: `1px solid ${G.wash}`, cursor: "pointer",
+    minHeight: 72, padding: "6px 4px", border: "1px solid #DDE8DD", cursor: "pointer",
     background: today ? G.wash : "#fff",
     opacity: otherMonth ? 0.35 : 1,
     transition: "background .1s",
@@ -36,22 +36,22 @@ const s = {
   dayNum:  (today) => ({ fontSize: 12, fontWeight: today ? 800 : 500, color: today ? G.dark : "#555", marginBottom: 3, display: "block", textAlign: "center" }),
   eventDot:{ fontSize: 10, padding: "1px 5px", borderRadius: 4, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "#fff", fontWeight: 600 },
   sidebar: { display: "flex", flexDirection: "column", gap: 16 },
-  eventCard:{ background: "#fff", borderRadius: 12, padding: "14px 16px", border: `1px solid ${G.wash}`, boxShadow: "0 1px 4px rgba(0,0,0,0.04)" },
+  eventCard:{ background: "#fff", borderRadius: 10, padding: "14px 16px", border: "1px solid #DDE8DD", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" },
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
-  modal:   { background: "#fff", borderRadius: 16, width: "100%", maxWidth: 520, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
+  modal:   { background: "#fff", borderRadius: 10, width: "100%", maxWidth: 520, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
   mHeader: { padding: "20px 24px 16px", borderBottom: `1px solid ${G.wash}`, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#fff", zIndex: 1 },
   mTitle:  { fontSize: 17, fontWeight: 700, color: G.dark },
   mBody:   { padding: "20px 24px" },
   mFooter: { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
   label:   { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
-  input:   { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:  { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  textarea:{ width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 70 },
+  input:   { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:  { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  textarea:{ width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 70 },
   fg:      { marginBottom: 16 },
   row:     { display: "flex", gap: 12 },
-  btnPrimary:  { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  btnSecondary:{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  btnDanger:   { padding: "7px 12px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 12 },
+  btnPrimary:  { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnSecondary:{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnDanger:   { padding: "7px 12px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12 },
   iconBtn: (c) => ({ background: "none", border: "none", cursor: "pointer", color: c || "#999", fontSize: 14, padding: "4px 6px", borderRadius: 6 }),
   tag:    (c) => ({ display: "inline-flex", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: c + "22", color: c }),
 };
@@ -155,7 +155,7 @@ export default function CalendarPage() {
     <div style={s.page}>
       <div style={s.header}>
         <div>
-          <div style={s.title}>📅 Calendar</div>
+          <div style={s.title}><i className="bi bi-calendar3 me-1"/> Calendar</div>
           <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{events.length} events total</div>
         </div>
         <button style={s.addBtn} onClick={() => openAdd(todayStr)}>＋ New Event</button>
@@ -195,7 +195,7 @@ export default function CalendarPage() {
 
         {/* Sidebar */}
         <div style={s.sidebar}>
-          <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}>📆 Upcoming Events</div>
+          <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}><i className="bi bi-calendar-event me-1"/> Upcoming Events</div>
           {loading ? <div style={{ color: "#aaa", fontSize: 13 }}>Loading…</div>
             : upcoming.length === 0 ? <div style={{ color: "#aaa", fontSize: 13 }}>No upcoming events</div>
             : upcoming.map(ev => (
@@ -211,8 +211,8 @@ export default function CalendarPage() {
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 2 }}>
-                    <button style={s.iconBtn(G.base)} onClick={() => openEdit(ev)}>✏️</button>
-                    <button style={s.iconBtn("#dc2626")} onClick={() => del(ev)}>🗑️</button>
+                    <button style={s.iconBtn(G.base)} onClick={() => openEdit(ev)}><i className="bi bi-pencil me-1"/></button>
+                    <button style={s.iconBtn("#dc2626")} onClick={() => del(ev)}><i className="bi bi-trash me-1"/></button>
                   </div>
                 </div>
               </div>
@@ -227,10 +227,10 @@ export default function CalendarPage() {
           <div style={s.modal}>
             <div style={s.mHeader}>
               <span style={s.mTitle}>{editEvent ? "Edit Event" : "New Event"}</span>
-              <button style={s.iconBtn()} onClick={() => setShowModal(false)}>✕</button>
+              <button style={s.iconBtn()} onClick={() => setShowModal(false)}>×</button>
             </div>
             <div style={s.mBody}>
-              {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
+              {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
               <div style={s.fg}>
                 <label style={s.label}>Title *</label>
                 <input style={s.input} value={form.title || ""} onChange={e => setF("title", e.target.value)} autoFocus />
@@ -266,8 +266,8 @@ export default function CalendarPage() {
                   <input style={s.input} type="date" value={form.end_date || ""} onChange={e => setF("end_date", e.target.value)} />
                 </div>
               </div>
-              <div style={{ background: G.wash, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-                📢 Events are visible to all students in the mobile app.
+              <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
+                <i className="bi bi-megaphone me-1"/> Events are visible to all students in the mobile app.
               </div>
             </div>
             <div style={s.mFooter}>
