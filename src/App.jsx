@@ -193,7 +193,7 @@ const NAV_SECTIONS = [
     { id:"calendar",     icon:"bi-calendar3",         label:"Calendar"      },
   ]},
   { label:"Community", items:[
-    { id:"students",     icon:"bi-mortarboard",       label:"Students"      },
+    { id:"students",     icon:"bi-people",             label:"Users"     },
     { id:"announcements",icon:"bi-megaphone",         label:"Announcements" },
   ]},
 ];
@@ -311,6 +311,7 @@ function AdminShell({ onLogout, user }) {
   const [showProfile, setShowProfile] = useState(false);
   const [pageLoading, setPageLoading] = useState(false);
   const [collapsed,   setCollapsed]   = useState(false);
+  const [showSignOut, setShowSignOut] = useState(false);
   useEffect(() => {
     loadCSS(INTER_CSS); loadCSS(BI_CSS);
     loadJS(BOOTSTRAP_JS);
@@ -391,7 +392,7 @@ function AdminShell({ onLogout, user }) {
                     <div className="text-truncate" style={{ fontSize:10,color:"rgba(255,255,255,.38)" }}>{user?.email}</div>
                   </div>
                 </div>
-                <button onClick={onLogout}
+                <button onClick={()=>setShowSignOut(true)}
                   className="btn btn-sm w-100 d-flex align-items-center gap-2 border-0"
                   style={{ color:"rgba(255,255,255,.4)",background:"transparent",fontSize:12 }}
                   onMouseEnter={e=>{e.currentTarget.style.background="rgba(255,255,255,.08)";e.currentTarget.style.color="rgba(255,255,255,.8)";}}
@@ -406,7 +407,7 @@ function AdminShell({ onLogout, user }) {
                   onClick={()=>setShowProfile(true)}>
                   {initials}
                 </div>
-                <button onClick={onLogout} title="Sign out"
+                <button onClick={()=>setShowSignOut(true)} title="Sign out"
                   className="btn btn-sm border-0 p-1"
                   style={{ color:"rgba(255,255,255,.4)" }}>
                   <i className="bi bi-box-arrow-right"/>
@@ -464,8 +465,37 @@ function AdminShell({ onLogout, user }) {
         </div>
       </div>
 
+      {showSignOut&&<ConfirmModal title="Sign Out" message="Are you sure you want to sign out of BLOOM GAD?" confirmLabel="Sign Out" danger={false} onConfirm={()=>{setShowSignOut(false);onLogout();}} onCancel={()=>setShowSignOut(false)}/>}
       {showProfile && <AdminProfilePage user={user} onClose={()=>setShowProfile(false)}/>}
     </>
+  );
+}
+
+
+/* ─── Reusable ConfirmModal ──────────────────────────────────────── */
+export function ConfirmModal({ title, message, confirmLabel="Confirm", danger=false, onConfirm, onCancel }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16 }}
+      onClick={e=>{ if(e.target===e.currentTarget) onCancel(); }}>
+      <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:400, boxShadow:"0 8px 40px rgba(0,0,0,.18)", overflow:"hidden", animation:"fadeInScale .15s ease" }}>
+        <div style={{ padding:"22px 24px 14px" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:danger?"#fee2e2":"#E8F5E9", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+              <i className={`bi ${danger?"bi-exclamation-triangle-fill":"bi-question-circle-fill"}`}
+                style={{ color:danger?"#dc2626":"#2D6A2D", fontSize:16 }}/>
+            </div>
+            <div style={{ fontSize:15, fontWeight:700, color:"#1A2E1A" }}>{title}</div>
+          </div>
+          <div style={{ fontSize:13, color:"#666", lineHeight:1.65, paddingLeft:46 }}>{message}</div>
+        </div>
+        <div style={{ padding:"12px 24px 20px", display:"flex", gap:8, justifyContent:"flex-end" }}>
+          <button onClick={onCancel} style={{ padding:"9px 20px", background:"#F5F7F5", color:"#1A2E1A", border:"1px solid #DDE8DD", borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>Cancel</button>
+          <button onClick={onConfirm} style={{ padding:"9px 20px", background:danger?"#dc2626":"#1A2E1A", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
+import { ConfirmModal } from "./App.jsx";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -44,6 +45,7 @@ const s = {
 
 export default function StudentsPage() {
   const [students, setStudents]     = useState([]);
+  const [admins, setAdmins]         = useState([]);
   const [loading, setLoading]       = useState(true);
   const [search, setSearch]         = useState("");
   const [filter, setFilter]         = useState("all");
@@ -51,6 +53,7 @@ export default function StudentsPage() {
   const [selected, setSelected]     = useState(null);
   const [detail, setDetail]         = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [mainTab, setMainTab]       = useState("students"); // students | admins
 
   useEffect(() => {
     let active = true;
@@ -74,7 +77,16 @@ export default function StudentsPage() {
       }
       const { data, error } = await query;
       if (error) console.error("Students load error:", error.message);
-      if (active) { setStudents(data || []); setLoading(false); }
+      if (active) { setStudents(data || []); }
+
+      // Load admins
+      const { data: adminRoles } = await supabase.from("user_roles").select("user_id, roles(name)");
+      const adminIds = (adminRoles || []).filter(r => r.roles?.name === "admin").map(r => r.user_id).filter(Boolean);
+      if (adminIds.length > 0) {
+        const { data: adminProfiles } = await supabase.from("profiles").select("*").in("id", adminIds).order("full_name");
+        if (active) setAdmins(adminProfiles || []);
+      }
+      if (active) setLoading(false);
     })();
     return () => { active = false; };
   }, []);
@@ -91,11 +103,47 @@ export default function StudentsPage() {
     setDetailLoading(false);
   };
 
-  const toggleActive = async (student) => {
+  const [confirm, setConfirm] = useState(null);
+  const [inactivityDays] = useState(30); // Policy: deactivate after 30 days
+
+  const toggleActive = (student) => {
     const newVal = !student.is_active;
-    await supabase.from("profiles").update({ is_active: newVal }).eq("id", student.id);
-    setStudents(ss => ss.map(s => s.id === student.id ? { ...s, is_active: newVal } : s));
-    if (selected?.id === student.id) setSelected(s => ({ ...s, is_active: newVal }));
+    setConfirm({
+      title: newVal ? "Reactivate Account" : "Deactivate Account",
+      message: newVal
+        ? `Reactivate ${student.full_name}'s account? They will regain access to BLOOM.`
+        : `Deactivate ${student.full_name}'s account? They will be locked out and shown a notice to contact the admin.`,
+      confirmLabel: newVal ? "Reactivate" : "Deactivate",
+      danger: !newVal,
+      onConfirm: async () => {
+        await supabase.from("profiles").update({ is_active: newVal }).eq("id", student.id);
+        setStudents(ss => ss.map(s => s.id === student.id ? { ...s, is_active: newVal } : s));
+        if (selected?.id === student.id) setSelected(s => ({ ...s, is_active: newVal }));
+        setConfirm(null);
+      }
+    });
+  };
+
+  const checkInactiveUsers = async () => {
+    const cutoff = new Date(Date.now() - inactivityDays * 86400000).toISOString();
+    const inactive = students.filter(s =>
+      s.is_active && s.last_sign_in_at && new Date(s.last_sign_in_at) < new Date(cutoff)
+    );
+    if (inactive.length === 0) { alert("No inactive users found based on current policy."); return; }
+    setConfirm({
+      title: "Deactivate Inactive Users",
+      message: `Found ${inactive.length} user(s) who haven't logged in for ${inactivityDays}+ days. Deactivate all?`,
+      confirmLabel: `Deactivate ${inactive.length} Users`,
+      danger: true,
+      onConfirm: async () => {
+        for (const s of inactive) {
+          await supabase.from("profiles").update({ is_active: false }).eq("id", s.id);
+        }
+        setStudents(ss => ss.map(s => inactive.find(i => i.id === s.id) ? { ...s, is_active: false } : s));
+        setConfirm(null);
+        alert(`${inactive.length} account(s) deactivated.`);
+      }
+    });
   };
 
   const departments = [...new Set(students.map(s => s.department).filter(Boolean))].sort();
@@ -116,7 +164,7 @@ export default function StudentsPage() {
     <div style={s.page}>
       <div style={s.header}>
         <div>
-          <div style={s.title}><i className="bi bi-person me-1"/>‍<i className="bi bi-mortarboard me-1"/> Students</div>
+          <div style={s.title}><i className="bi bi-people me-1"/> User Management</div>
           <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{students.length} registered students</div>
         </div>
       </div>
@@ -136,6 +184,21 @@ export default function StudentsPage() {
         ))}
       </div>
 
+      {/* Main tabs */}
+      <div style={{ display:"flex", gap:0, borderBottom:`2px solid ${G.wash}`, marginBottom:20 }}>
+        {[["students","Students","bi-mortarboard"],["admins","Administrators","bi-shield-lock"]].map(([v,l,ic])=>(
+          <div key={v} onClick={()=>{ setMainTab(v); setSearch(""); setSelected(null); }}
+            style={{ padding:"10px 22px", fontSize:14, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", gap:6,
+              color:mainTab===v?G.dark:"#999",
+              borderBottom:mainTab===v?`2px solid ${G.dark}`:"2px solid transparent", marginBottom:-2 }}>
+            <i className={`bi ${ic}`}/>{l}
+            <span style={{ background:G.wash, color:G.base, borderRadius:10, padding:"1px 8px", fontSize:11, fontWeight:700 }}>
+              {v==="students"?students.length:admins.length}
+            </span>
+          </div>
+        ))}
+      </div>
+
       {/* Toolbar */}
       <div style={s.toolbar}>
         <input style={s.searchBar} placeholder="Search by name, ID, or email…" value={search} onChange={e => setSearch(e.target.value)} />
@@ -148,6 +211,12 @@ export default function StudentsPage() {
           <option value="all">All Departments</option>
           {departments.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
+        {mainTab === "students" && (
+          <button onClick={checkInactiveUsers}
+            style={{ padding:"9px 14px", background:"#fff7ed", color:"#c2410c", border:"1px solid #fed7aa", borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:12, display:"flex", alignItems:"center", gap:6 }}>
+            <i className="bi bi-clock-history"/>Check Inactive Users ({inactivityDays}d)
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -227,6 +296,55 @@ export default function StudentsPage() {
       )}
 
       {/* Detail Modal */}
+      {/* Admins tab */}
+      {mainTab==="admins"&&(
+        <div>
+          <div style={{ background:"#fff7ed", border:"1px solid #fed7aa", borderRadius:8, padding:"12px 16px", fontSize:13, color:"#c2410c", marginBottom:20, display:"flex", gap:10, alignItems:"flex-start" }}>
+            <i className="bi bi-exclamation-triangle-fill" style={{ flexShrink:0, marginTop:2 }}/>
+            <div><strong>Administrator accounts</strong> have full access to this admin panel. Manage these accounts with care. Role assignments require database-level changes.</div>
+          </div>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #DDE8DD", overflow:"hidden" }}>
+            <table style={s.table}>
+              <thead><tr>
+                <th style={s.th}>Administrator</th>
+                <th style={s.th}>Email</th>
+                <th style={s.th}>Status</th>
+                <th style={s.th}>Last Active</th>
+              </tr></thead>
+              <tbody>
+                {admins.length===0?
+                  <tr><td colSpan={4} style={{...s.td, textAlign:"center", color:"#aaa"}}>No admin accounts found</td></tr>
+                  :admins.map(a=>(
+                  <tr key={a.id}>
+                    <td style={s.td}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <div style={{ width:36, height:36, borderRadius:"50%", background:"linear-gradient(135deg,#2D6A2D,#4CAF50)", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:14, fontWeight:700, flexShrink:0 }}>
+                          {(a.full_name||a.email||"A").slice(0,1).toUpperCase()}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight:600, color:G.dark }}>{a.full_name||"—"}</div>
+                          <div style={{ fontSize:11, color:"#aaa" }}>System Admin</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={s.td}>{a.email||"—"}</td>
+                    <td style={s.td}>
+                      <span style={{ display:"inline-flex", alignItems:"center", gap:4, padding:"2px 10px", borderRadius:20, fontSize:11, fontWeight:700,
+                        background:a.is_active!==false?"#dcfce7":"#fee2e2", color:a.is_active!==false?"#16a34a":"#dc2626" }}>
+                        <span style={{ width:6, height:6, borderRadius:"50%", background:a.is_active!==false?"#16a34a":"#dc2626", display:"inline-block" }}/>
+                        {a.is_active!==false?"Active":"Deactivated"}
+                      </span>
+                    </td>
+                    <td style={{...s.td, fontSize:12, color:"#888"}}>{a.last_sign_in_at?new Date(a.last_sign_in_at).toLocaleDateString("en-PH",{month:"short",day:"numeric",year:"numeric"}):"Never"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {confirm&&<ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
       {selected && (
         <div style={s.overlay}>
           <div style={s.modal}>

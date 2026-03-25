@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
+import { ConfirmModal } from "./App.jsx";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -42,7 +43,9 @@ const s = {
   moduleIcon:   { width:34, height:34, borderRadius:6, background:G.mid, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 },
   modTitle:     { fontSize:13, fontWeight:600, color:"#fff", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" },
   modMeta:      { fontSize:11, color:G.pale, marginTop:1 },
-  statusDot:   (st) => ({ width:7, height:7, borderRadius:"50%", background:st==="published"?"#4ade80":"#facc15", flexShrink:0, marginLeft:"auto" }),
+  statusBadge: (st) => ({ display:"inline-flex", alignItems:"center", gap:4, padding:"2px 8px", borderRadius:20, fontSize:10, fontWeight:700, flexShrink:0, marginLeft:"auto",
+    background: st==="published"?"#dcfce7":"#fef9c3",
+    color:      st==="published"?"#16a34a":"#a16207" }),
   main:         { flex:1, display:"flex", flexDirection:"column", overflow:"hidden" },
   topBar:       { background:"#fff", borderBottom:`1px solid ${G.wash}`, padding:"0 24px", display:"flex", alignItems:"center", height:58, gap:10, flexShrink:0 },
   topBarTitle:  { fontSize:17, fontWeight:700, color:G.dark, flex:1 },
@@ -348,7 +351,7 @@ function ResultsPanel({ assessment }) {
 }
 
 // ── Assessment Panel (full-featured, embedded) ────────────────────
-function AssessmentPanel({ module, onAssessmentChange }) {
+function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   const [assessment, setAssessment] = useState(null);
   const [questions,  setQuestions]  = useState([]);
   const [badges,     setBadges]     = useState([]);
@@ -405,50 +408,76 @@ function AssessmentPanel({ module, onAssessmentChange }) {
     onAssessmentChange?.();
   };
 
-  const saveSettings = async () => {
+  const saveSettings = () => {
     if (!assessment) return;
-    setSaving(true);
-    const payload={title:form.title,passing_score:form.passingScore,time_limit_minutes:form.timeLimit,badge_id:form.badgeId||null,is_published:form.isPublished};
-    const {error}=await supabase.from("assessments").update(payload).eq("id",assessment.id);
-    setSaving(false);
-    if (error){alert("Save error: "+error.message);return;}
-    setAssessment(a=>({...a,...payload}));
-    onAssessmentChange?.();
+    onConfirm?.({ title:"Save Assessment Settings", message:"Save changes to assessment title, passing score, time limit, and badge?", confirmLabel:"Save Settings", danger:false,
+      onConfirm: async()=>{
+        setSaving(true);
+        const payload={title:form.title,passing_score:form.passingScore,time_limit_minutes:form.timeLimit,badge_id:form.badgeId||null,is_published:form.isPublished};
+        const {error}=await supabase.from("assessments").update(payload).eq("id",assessment.id);
+        setSaving(false);
+        if (error){alert("Save error: "+error.message);onConfirm?.(null);return;}
+        setAssessment(a=>({...a,...payload}));
+        onAssessmentChange?.();
+        onConfirm?.(null);
+      }
+    });
   };
 
-  const togglePublish = async () => {
+  const togglePublish = () => {
     if (!assessment) return;
     const newVal=!form.isPublished;
-    setF("isPublished",newVal);
-    await supabase.from("assessments").update({is_published:newVal}).eq("id",assessment.id);
-    setAssessment(a=>({...a,is_published:newVal}));
-    onAssessmentChange?.();
+    onConfirm?.({ 
+      title: newVal ? "Publish Assessment" : "Unpublish Assessment",
+      message: newVal
+        ? "Publish this assessment? Students will be able to see and take it immediately."
+        : "Unpublish this assessment? Students will no longer see it.",
+      confirmLabel: newVal ? "Publish" : "Unpublish",
+      danger: !newVal,
+      onConfirm: async()=>{
+        setF("isPublished",newVal);
+        await supabase.from("assessments").update({is_published:newVal}).eq("id",assessment.id);
+        setAssessment(a=>({...a,is_published:newVal}));
+        onAssessmentChange?.();
+        onConfirm?.(null);
+      }
+    });
   };
 
-  const deleteAssessment = async () => {
-    if (!assessment||!confirm("Delete this assessment? All questions and student results will be removed.")) return;
-    await supabase.from("assessments").delete().eq("id",assessment.id);
-    setAssessment(null);setQuestions([]);
-    setForm({title:`${module.title} — Assessment`,passingScore:75,timeLimit:30,badgeId:"",isPublished:false});
-    onAssessmentChange?.();
+  const deleteAssessment = () => {
+    onConfirm?.({ title:"Delete Assessment", message:"Delete this assessment? All questions and student results will be permanently removed.", confirmLabel:"Delete", danger:true,
+      onConfirm: async()=>{
+        await supabase.from("assessments").delete().eq("id",assessment.id);
+        setAssessment(null);setQuestions([]);
+        setForm({title:`${module.title} — Assessment`,passingScore:75,timeLimit:30,badgeId:"",isPublished:false});
+        onAssessmentChange?.();
+        onConfirm?.(null);
+      }
+    });
   };
 
   const addQ    = (d) => { setQuestions(qs=>[...qs,{...d,_new:true,id:`tmp_${Date.now()}`}]); setShowAdd(false); };
   const updateQ = (d) => { setQuestions(qs=>qs.map((q,i)=>i===editQIdx?{...q,...d}:q)); setEditQ(null);setEditQIdx(null); };
   const deleteQ = (i) => {
-    if (!confirm("Remove this question?")) return;
-    const q=questions[i];
-    if (!q._new) {
-      supabase.from("question_options").delete().eq("question_id",q.id).then(()=>
-        supabase.from("questions").delete().eq("id",q.id).then(()=>loadQs())
-      );
-    }
-    setQuestions(qs=>qs.filter((_,j)=>j!==i));
+    onConfirm?.({ title:"Delete Question", message:"Remove this question? This cannot be undone.", confirmLabel:"Delete", danger:true,
+      onConfirm: async()=>{
+        const q=questions[i];
+        if (!q._new) {
+          await supabase.from("question_options").delete().eq("question_id",q.id);
+          await supabase.from("questions").delete().eq("id",q.id);
+          loadQs();
+        }
+        setQuestions(qs=>qs.filter((_,j)=>j!==i));
+        onConfirm?.(null);
+      }
+    });
   };
   const moveQ = (i,dir) => { const qs=[...questions];const t=i+dir;if(t<0||t>=qs.length)return;[qs[i],qs[t]]=[qs[t],qs[i]];setQuestions(qs); };
 
-  const saveQuestions = async () => {
+  const saveQuestions = () => {
     if (!assessment) return;
+    onConfirm?.({ title:"Save Questions", message:`Save all ${questions.length} question(s) to this assessment?`, confirmLabel:"Save Questions", danger:false,
+      onConfirm: async()=>{
     setSaving(true);
 
     // Track all real DB IDs that belong to this save (existing + newly inserted)
@@ -479,6 +508,9 @@ function AssessmentPanel({ module, onAssessmentChange }) {
       }
     }
     await loadQs(); setSaving(false);
+    onConfirm?.(null);
+      }
+    });
   };
 
   if (loading) return <div style={{padding:40,textAlign:"center",color:"#aaa"}}>Loading assessment…</div>;
@@ -671,7 +703,7 @@ function AssessmentPanel({ module, onAssessmentChange }) {
 }
 
 // ── Files Panel ───────────────────────────────────────────────────
-function FilesPanel({ module }) {
+function FilesPanel({ module, onConfirm }) {
   const [files,      setFiles]      = useState([]);
   const [uploading,  setUploading]  = useState(false);
   const [uploadName, setUploadName] = useState("");
@@ -700,12 +732,16 @@ function FilesPanel({ module }) {
 
   const onDrop=async(e)=>{e.preventDefault();setDragging(false);for(const f of Array.from(e.dataTransfer.files))await upload(f);};
   const onPick=async(e)=>{for(const f of Array.from(e.target.files))await upload(f);e.target.value="";};
-  const del=async(file)=>{
-    if(!confirm(`Delete "${file.file_name}"?`))return;
-    const[,path]=file.file_url.split("/module-files/");
-    if(path)await supabase.storage.from("module-files").remove([path]);
-    await supabase.from("module_files").delete().eq("id",file.id);
-    setFiles(f=>f.filter(x=>x.id!==file.id));
+  const del=(file)=>{
+    onConfirm?.({ title:"Delete File", message:`Delete "${file.file_name}"? This cannot be undone.`, confirmLabel:"Delete", danger:true,
+      onConfirm: async()=>{
+        const[,path]=file.file_url.split("/module-files/");
+        if(path)await supabase.storage.from("module-files").remove([path]);
+        await supabase.from("module_files").delete().eq("id",file.id);
+        setFiles(f=>f.filter(x=>x.id!==file.id));
+        onConfirm?.(null);
+      }
+    });
   };
 
   return(
@@ -783,6 +819,7 @@ export default function ModulesPage() {
   const [editMod,    setEditMod]    = useState(null);
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState("");
+  const [confirm,    setConfirm]    = useState(null); // {title,message,onConfirm,danger?}
 
   const loadModules = async () => {
     const{data}=await supabase.from("modules").select("*, categories(name), module_files(count), assessments(id,is_published,title)").order("created_at",{ascending:false});
@@ -815,20 +852,46 @@ export default function ModulesPage() {
     setShowModal(false);setEditMod(null);
   };
 
-  const togglePublish = async (mod,e) => {
+  const togglePublish = (mod, e) => {
     e?.stopPropagation();
-    const newStatus=mod.status==="published"?"draft":"published";
-    await supabase.from("modules").update({status:newStatus}).eq("id",mod.id);
-    const updated={...mod,status:newStatus};
-    setModules(ms=>ms.map(m=>m.id===mod.id?updated:m));
-    if(selected?.id===mod.id)setSelected(updated);
+    const isPublishing = mod.status !== "published";
+    if (isPublishing) {
+      setConfirm({ title:"Publish Module", message:`Publish "${mod.title}"? It will become visible to all students in the app.`, confirmLabel:"Publish", danger:false,
+        onConfirm: async () => {
+          await supabase.from("modules").update({status:"published"}).eq("id",mod.id);
+          const updated={...mod,status:"published"};
+          setModules(ms=>ms.map(m=>m.id===mod.id?updated:m));
+          if(selected?.id===mod.id)setSelected(updated);
+          setConfirm(null);
+        }
+      });
+    } else {
+      setConfirm({ title:"Unpublish Module", message:`Unpublish "${mod.title}"? Students will no longer see this module.`, confirmLabel:"Unpublish", danger:true,
+        onConfirm: async () => {
+          await supabase.from("modules").update({status:"draft"}).eq("id",mod.id);
+          const updated={...mod,status:"draft"};
+          setModules(ms=>ms.map(m=>m.id===mod.id?updated:m));
+          if(selected?.id===mod.id)setSelected(updated);
+          setConfirm(null);
+        }
+      });
+    }
   };
 
-  const deleteMod = async () => {
-    if(!selected||!confirm(`Delete "${selected.title}"? This is permanent.`))return;
-    await supabase.from("modules").delete().eq("id",selected.id);
-    const rest=modules.filter(m=>m.id!==selected.id);
-    setModules(rest);setSelected(rest[0]||null);
+  const deleteMod = () => {
+    if (!selected) return;
+    setConfirm({
+      title: "Delete Module",
+      message: `Delete "${selected?.title}"? This will permanently remove the module, all files, and the linked assessment.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: async () => {
+        await supabase.from("modules").delete().eq("id", selected.id);
+        const rest = modules.filter(m => m.id !== selected.id);
+        setModules(rest); setSelected(rest[0] || null);
+        setConfirm(null);
+      }
+    });
   };
 
   const handleAssessmentChange = async () => {
@@ -871,7 +934,10 @@ export default function ModulesPage() {
                     )}
                   </div>
                 </div>
-                <div style={s.statusDot(mod.status)} title={mod.status}/>
+                <div style={s.statusBadge(mod.status)}>
+                  <span style={{width:6,height:6,borderRadius:"50%",background:mod.status==="published"?"#16a34a":"#a16207",display:"inline-block"}}/>
+                  {mod.status==="published"?"Published":"Draft"}
+                </div>
               </div>
             ))
           }
@@ -886,7 +952,7 @@ export default function ModulesPage() {
               <i className="bi bi-book" style={{fontSize:34,color:G.base}}/>
             </div>
             <span style={{fontWeight:700,color:G.dark,fontSize:16}}>Select a module to get started</span>
-            <span style={{fontSize:13,color:"#888"}}>or create a new one using the button on the left</span>
+            <span style={{fontSize:13,color:"#888"}}>or create one using the button above</span>
           </div>
         ):(
           <>
@@ -912,13 +978,14 @@ export default function ModulesPage() {
             </div>
 
             <div style={s.content}>
-              {tab==="files"      &&<FilesPanel      key={selected.id+"_f"} module={selected}/>}
-              {tab==="assessment" &&<AssessmentPanel key={selected.id+"_a"} module={selected} onAssessmentChange={handleAssessmentChange}/>}
+              {tab==="files"      &&<FilesPanel      key={selected.id+"_f"} module={selected} onConfirm={setConfirm}/>}
+              {tab==="assessment" &&<AssessmentPanel key={selected.id+"_a"} module={selected} onAssessmentChange={handleAssessmentChange} onConfirm={setConfirm}/>}
             </div>
           </>
         )}
       </div>
 
+      {confirm&&<ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
       {showModal&&<ModuleModal initial={editMod} categories={categories} onSave={saveModule} onClose={()=>{setShowModal(false);setEditMod(null);}}/>}
     </div>
   );

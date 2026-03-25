@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
+import { ConfirmModal } from "./App.jsx";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -46,6 +47,166 @@ const s = {
   searchBar:{ padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", width: 260 },
 };
 
+
+// ── Certificate Preview Modal ─────────────────────────────────────
+function CertPreviewModal({ cert, onClose }) {
+  const refType  = cert.reference_type || "achievement";
+  const certTitle = refType === "manual" ? "Certificate of Achievement"
+    : `Certificate of ${refType.charAt(0).toUpperCase() + refType.slice(1)}`;
+  const studentName = cert.profiles?.full_name || "Recipient";
+  const issuedDate   = cert.issued_at ? new Date(cert.issued_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }) : "—";
+
+  const certHTML = () => `<!DOCTYPE html><html><head><title>${certTitle}</title>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+      @page { size: A4 landscape; margin: 0; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { width:297mm; height:210mm; background:#fff; font-family:'Inter',sans-serif; display:flex; align-items:center; justify-content:center; }
+      .cert { width:267mm; height:186mm; border:10px double #2D6A2D; padding:28px 36px; background:linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%); display:flex; flex-direction:column; justify-content:space-between; position:relative; }
+      .cert::before { content:''; position:absolute; inset:16px; border:1.5px solid rgba(45,106,45,.15); pointer-events:none; }
+      .org-name { font-size:12px; font-weight:700; color:#2D6A2D; letter-spacing:3px; text-transform:uppercase; text-align:center; }
+      .org-sub  { font-size:10px; color:#888; letter-spacing:1px; text-align:center; margin-top:2px; }
+      .divider  { border:none; border-top:1.5px solid #2D6A2D; margin:10px 80px; }
+      .title    { font-family:'Playfair Display',serif; font-size:32px; font-weight:700; color:#1A2E1A; text-align:center; margin:6px 0; }
+      .presented{ font-size:11px; color:#888; text-align:center; letter-spacing:3px; text-transform:uppercase; margin:6px 0; }
+      .name-wrap { text-align:center; margin:6px 0; }
+      .name     { font-family:'Playfair Display',serif; font-style:italic; font-size:38px; color:#2D6A2D; border-bottom:2px solid #C8E6C9; padding:0 40px 6px; display:inline-block; }
+      .desc     { font-size:12px; color:#555; text-align:center; max-width:480px; margin:8px auto; line-height:1.8; }
+      .footer   { display:flex; justify-content:space-between; align-items:flex-end; padding-top:12px; border-top:1px solid #C8E6C9; }
+      .sig-block{ text-align:center; min-width:150px; }
+      .seal     { width:52px; height:52px; border-radius:50%; border:2.5px solid #2D6A2D; display:flex; align-items:center; justify-content:center; margin:0 auto 6px; font-size:22px; color:#2D6A2D; }
+      .sig-line { border-top:1px solid #1A2E1A; padding-top:5px; font-size:10px; color:#1A2E1A; font-weight:700; letter-spacing:.5px; }
+      .sig-sub  { font-size:9px; color:#888; margin-top:2px; }
+      .code-block { text-align:center; }
+      .code-label { font-size:9px; color:#888; letter-spacing:1px; text-transform:uppercase; }
+      .code-value { font-size:13px; font-weight:800; color:#2D6A2D; letter-spacing:2px; margin:2px 0; }
+      .code-date  { font-size:9px; color:#888; }
+    </style></head><body>
+    <div class="cert">
+      <div>
+        <div class="org-name">Cavite State University</div>
+        <div class="org-sub">Gender and Development Resource Center (GADRC) · BLOOM e-Learning Platform</div>
+        <hr class="divider"/>
+        <div class="title">${certTitle}</div>
+        <div class="presented">This is to certify that</div>
+        <div class="name-wrap"><span class="name">${studentName}</span></div>
+        <div class="desc">has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.</div>
+      </div>
+      <div class="footer">
+        <div class="sig-block">
+          <div class="seal">★</div>
+          <div class="sig-line">GAD Coordinator</div>
+          <div class="sig-sub">Cavite State University</div>
+        </div>
+        <div class="code-block">
+          <div class="code-label">Certificate Code</div>
+          <div class="code-value">${cert.certificate_code || "—"}</div>
+          <div class="code-date">Issued: ${issuedDate}</div>
+        </div>
+        <div class="sig-block">
+          <div class="seal">✦</div>
+          <div class="sig-line">GADRC Director</div>
+          <div class="sig-sub">Cavite State University</div>
+        </div>
+      </div>
+    </div>
+    </body></html>`;
+
+  const printCert = () => {
+    const w = window.open("", "_blank");
+    w.document.write(certHTML());
+    w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 600);
+  };
+
+  const downloadPDF = () => {
+    const w = window.open("", "_blank");
+    w.document.write(certHTML());
+    w.document.close();
+    // Trigger print-to-PDF dialog after load
+    setTimeout(() => {
+      w.focus();
+      w.print();
+      // Instruct user via title
+      w.document.title = `Certificate_${studentName.replace(/\s+/g,"_")}_${cert.certificate_code || "CERT"}.pdf`;
+    }, 600);
+  };
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:2000, padding:16 }}>
+      <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:900, maxHeight:"95vh", overflow:"auto", boxShadow:"0 32px 80px rgba(0,0,0,.3)" }}>
+        {/* Modal header */}
+        <div style={{ padding:"16px 24px", borderBottom:"1px solid #DDE8DD", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, background:"#fff", zIndex:1 }}>
+          <div style={{ fontWeight:700, color:"#1A2E1A", fontSize:15 }}>
+            <i className="bi bi-patch-check me-2" style={{ color:"#2D6A2D" }}/>Certificate Preview
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={printCert} style={{ padding:"8px 16px", background:"#1A2E1A", color:"#fff", border:"none", borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:13, display:"flex", alignItems:"center", gap:6 }}>
+              <i className="bi bi-printer"/>Print
+            </button>
+            <button onClick={downloadPDF} style={{ padding:"8px 16px", background:"#2D6A2D", color:"#fff", border:"none", borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:13, display:"flex", alignItems:"center", gap:6 }}>
+              <i className="bi bi-file-earmark-pdf"/>Download PDF
+            </button>
+            <button onClick={onClose} style={{ padding:"8px 16px", background:"#F5F7F5", color:"#1A2E1A", border:"1px solid #DDE8DD", borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:13 }}>Close</button>
+          </div>
+        </div>
+
+        {/* Certificate preview */}
+        <div style={{ padding:32, background:"#F5F7F5" }}>
+          <div style={{
+            width:"100%", aspectRatio:"842/595", maxWidth:842, margin:"0 auto", position:"relative",
+            border:"10px double #2D6A2D", background:"linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%)",
+            padding:32, boxSizing:"border-box", fontFamily:"'Inter',sans-serif",
+            boxShadow:"0 8px 32px rgba(0,0,0,.12)"
+          }}>
+            {/* Header */}
+            <div style={{ textAlign:"center", marginBottom:8 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:"#2D6A2D", letterSpacing:3, textTransform:"uppercase" }}>Cavite State University</div>
+              <div style={{ fontSize:10, color:"#888", letterSpacing:1 }}>Gender and Development Resource Center (GADRC)</div>
+            </div>
+            <div style={{ border:"none", borderTop:"2px solid #2D6A2D", margin:"10px 60px" }}/>
+
+            {/* Title */}
+            <div style={{ fontFamily:"Georgia,serif", fontSize:28, color:"#1A2E1A", textAlign:"center", margin:"12px 0 6px", fontWeight:700 }}>{certTitle}</div>
+            <div style={{ fontSize:11, color:"#666", textAlign:"center", letterSpacing:2, textTransform:"uppercase", margin:"6px 0" }}>This is to certify that</div>
+
+            {/* Name */}
+            <div style={{ textAlign:"center", margin:"10px 0" }}>
+              <span style={{ fontFamily:"Georgia,serif", fontStyle:"italic", fontSize:32, color:"#2D6A2D", borderBottom:"2px solid #C8E6C9", paddingBottom:6, paddingLeft:32, paddingRight:32 }}>
+                {studentName}
+              </span>
+            </div>
+
+            {/* Body */}
+            <div style={{ fontSize:11, color:"#444", textAlign:"center", maxWidth:480, margin:"10px auto", lineHeight:1.8 }}>
+              has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.
+            </div>
+
+            {/* Footer */}
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginTop:20, paddingTop:14, borderTop:"1px solid #C8E6C9" }}>
+              <div style={{ textAlign:"center", minWidth:140 }}>
+                <div style={{ width:44, height:44, borderRadius:"50%", border:"2px solid #2D6A2D", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 6px", fontSize:18, color:"#2D6A2D" }}>★</div>
+                <div style={{ borderTop:"1px solid #1A2E1A", paddingTop:4, fontSize:10, fontWeight:700, color:"#1A2E1A", letterSpacing:.5 }}>GAD Coordinator</div>
+                <div style={{ fontSize:9, color:"#888" }}>Cavite State University</div>
+              </div>
+              <div style={{ textAlign:"center" }}>
+                <div style={{ fontSize:9, color:"#888", letterSpacing:1, textTransform:"uppercase" }}>Certificate Code</div>
+                <div style={{ fontSize:13, fontWeight:800, color:"#2D6A2D", letterSpacing:2 }}>{cert.certificate_code || "—"}</div>
+                <div style={{ fontSize:9, color:"#888", marginTop:4 }}>Issued: {issuedDate}</div>
+              </div>
+              <div style={{ textAlign:"center", minWidth:140 }}>
+                <div style={{ width:44, height:44, borderRadius:"50%", border:"2px solid #2D6A2D", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 6px", fontSize:18, color:"#2D6A2D" }}>✦</div>
+                <div style={{ borderTop:"1px solid #1A2E1A", paddingTop:4, fontSize:10, fontWeight:700, color:"#1A2E1A", letterSpacing:.5 }}>GADRC Director</div>
+                <div style={{ fontSize:9, color:"#888" }}>Cavite State University</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Certificates Tab ──────────────────────────────────────────────
 function CertificatesTab() {
   const [certs, setCerts]       = useState([]);
@@ -56,6 +217,7 @@ function CertificatesTab() {
   const [form, setForm]         = useState({});
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState("");
+  const [previewCert, setPreviewCert] = useState(null);
   const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   useEffect(() => {
@@ -152,6 +314,8 @@ function CertificatesTab() {
                   <td style={s.td}>{formatDate(c.issued_at)}</td>
                   <td style={s.td}><span style={s.tag(c.is_revoked ? "red" : "green")}>{c.is_revoked ? "Revoked" : "Valid"}</span></td>
                   <td style={s.td}>
+                    <button style={{ padding:"5px 10px", border:"1px solid #DDE8DD", borderRadius:6, background:"#fff", fontSize:12, cursor:"pointer", fontWeight:600, color:"#1A2E1A", marginRight:4 }}
+                      onClick={() => setPreviewCert(c)}><i className="bi bi-eye me-1"/>View</button>
                     <button style={{ padding: "5px 10px", border: "none", borderRadius: 6, background: c.is_revoked ? "#dcfce7" : "#fee2e2", fontSize: 12, cursor: "pointer", fontWeight: 600, color: c.is_revoked ? "#16a34a" : "#dc2626" }}
                       onClick={() => toggleRevoke(c)}>{c.is_revoked ? "Restore" : "Revoke"}</button>
                   </td>
@@ -160,7 +324,7 @@ function CertificatesTab() {
             </tbody>
           </table>
         )}
-
+      {previewCert && <CertPreviewModal cert={previewCert} onClose={() => setPreviewCert(null)}/>}
       {showAdd && (
         <div style={s.overlay}>
           <div style={s.modal(480)}>
@@ -295,7 +459,6 @@ function BadgesTab() {
             })}
           </div>
         )}
-
       {showAdd && (
         <div style={s.overlay}>
           <div style={s.modal(460)}>

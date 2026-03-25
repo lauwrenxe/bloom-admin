@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
+import { ConfirmModal } from "./App.jsx";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -35,7 +36,8 @@ const s = {
   itemIcon:     { width: 36, height: 36, borderRadius: 6, background: G.mid, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0, overflow: "hidden" },
   itemTitle:    { fontSize: 13, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   itemMeta:     { fontSize: 11, color: G.pale, marginTop: 1 },
-  pubDot:      (p) => ({ width: 7, height: 7, borderRadius: "50%", background: p ? "#4ade80" : "#facc15", flexShrink: 0, marginLeft: "auto" }),
+  pubBadge:    (p) => ({ display:"inline-flex", alignItems:"center", gap:4, padding:"2px 8px", borderRadius:20, fontSize:10, fontWeight:700, flexShrink:0, marginLeft:"auto",
+    background: p ? "#dcfce7" : "#fef9c3", color: p ? "#16a34a" : "#a16207" }),
   addBtn:       { margin: "12px 16px", padding: "9px 14px", background: G.base, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 },
   searchInput:  { margin: "0 12px 8px", padding: "8px 12px", background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 6, color: "#fff", fontSize: 12, outline: "none", width: "calc(100% - 24px)", boxSizing: "border-box" },
   main:         { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
@@ -232,9 +234,26 @@ function DetailsTab({ seminar, onUpdate }) {
 }
 
 // ── Registrations Tab ─────────────────────────────────────────────
+const SEMINAR_ROLES = [
+  { value: "student",       label: "Student",       color: "blue"   },
+  { value: "guest",         label: "Guest",         color: "yellow" },
+  { value: "guest_speaker", label: "Guest Speaker", color: "green"  },
+  { value: "host",          label: "Host",          color: "green"  },
+  { value: "staff",         label: "Staff",         color: "blue"   },
+];
+
+function roleColor(role) {
+  return SEMINAR_ROLES.find(r => r.value === role)?.color || "blue";
+}
+function roleLabel(role) {
+  return SEMINAR_ROLES.find(r => r.value === role)?.label || role || "Student";
+}
+
 function RegistrationsTab({ seminar }) {
-  const [regs, setRegs]     = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [regs, setRegs]         = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [search, setSearch]     = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
 
   const load = async () => {
     setLoading(true);
@@ -250,25 +269,34 @@ function RegistrationsTab({ seminar }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [seminar.id]);
 
-  const updateStatus = async (id, status) => {
-    await supabase.from("seminar_registrations").update({ status }).eq("id", id);
-    setRegs(r => r.map(x => x.id === id ? { ...x, status } : x));
+  const updateRole = async (id, role) => {
+    await supabase.from("seminar_registrations").update({ role, status: "registered" }).eq("id", id);
+    setRegs(r => r.map(x => x.id === id ? { ...x, role, status: "registered" } : x));
   };
-
-  const statusColor = (s) => s === "registered" ? "green" : s === "waitlisted" ? "yellow" : s === "cancelled" ? "red" : "blue";
 
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
 
-  const confirmed = regs.filter(r => r.status === "registered").length;
+  const active = regs.filter(r => r.status !== "cancelled");
+  const filtered = regs.filter(r => {
+    const matchSearch = !search || (r.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) || (r.profiles?.email || "").toLowerCase().includes(search.toLowerCase());
+    const matchRole   = roleFilter === "all" || (r.role || "student") === roleFilter;
+    return matchSearch && matchRole;
+  });
+
+  const roleCounts = SEMINAR_ROLES.reduce((acc, r) => {
+    acc[r.value] = regs.filter(x => (x.role || "student") === r.value).length;
+    return acc;
+  }, {});
 
   return (
     <div>
+      {/* Stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
-          { label: "Total Registered", value: regs.length, color: G.base },
-          { label: "Registered", value: confirmed, color: "#16a34a" },
-          { label: "Waitlisted", value: regs.filter(r => r.status === "waitlisted").length, color: "#f59e0b" },
-          { label: "Capacity", value: seminar.max_participants ? `${regs.length}/${seminar.max_participants}` : "Unlimited", color: "#2563eb" },
+          { label: "Total", value: regs.length, color: G.base },
+          { label: "Active", value: active.length, color: "#16a34a" },
+          { label: "Cancelled", value: regs.filter(r => r.status === "cancelled").length, color: "#dc2626" },
+          { label: "Capacity", value: seminar.max_participants ? `${active.length}/${seminar.max_participants}` : "Unlimited", color: "#2563eb" },
         ].map(stat => (
           <div key={stat.label} style={s.statCard(stat.color)}>
             <div style={{ ...s.statNum, color: stat.color, fontSize: 22 }}>{stat.value}</div>
@@ -277,47 +305,71 @@ function RegistrationsTab({ seminar }) {
         ))}
       </div>
 
+      {/* Role breakdown pills */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <button onClick={() => setRoleFilter("all")}
+          style={{ padding: "4px 12px", borderRadius: 20, border: `1.5px solid ${roleFilter==="all"?"#2D6A2D":"#DDE8DD"}`, background: roleFilter==="all"?"#E8F5E9":"#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: roleFilter==="all"?"#2D6A2D":"#555" }}>
+          All ({regs.length})
+        </button>
+        {SEMINAR_ROLES.map(r => (
+          <button key={r.value} onClick={() => setRoleFilter(r.value)}
+            style={{ padding: "4px 12px", borderRadius: 20, border: `1.5px solid ${roleFilter===r.value?"#2D6A2D":"#DDE8DD"}`, background: roleFilter===r.value?"#E8F5E9":"#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: roleFilter===r.value?"#2D6A2D":"#555" }}>
+            {r.label} ({roleCounts[r.value] || 0})
+          </button>
+        ))}
+      </div>
+
+      {/* Search */}
+      <div style={{ marginBottom: 14 }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or email…"
+          style={{ ...s.input, maxWidth: 300 }} />
+      </div>
+
       {regs.length === 0 ? (
         <div style={s.emptyBox}>
-          <div style={{ fontSize: 40, marginBottom: 10 }}><i className="bi bi-people me-1"/></div>
+          <i className="bi bi-people d-block mb-2" style={{ fontSize: 40, color: G.pale }} />
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No registrations yet</div>
-          <div style={{ fontSize: 13, color: "#aaa" }}>Students who register from the app will appear here.</div>
+          <div style={{ fontSize: 13, color: "#aaa" }}>Participants who register from the app will appear here.</div>
         </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "40px 0", color: "#aaa" }}>No results match your filter.</div>
       ) : (
         <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #DDE8DD", overflow: "hidden" }}>
           <table style={s.table}>
             <thead>
               <tr>
-                <th style={s.th}>Student</th>
+                <th style={s.th}>Participant</th>
                 <th style={s.th}>Department</th>
                 <th style={s.th}>Registered</th>
-                <th style={s.th}>Status</th>
-                <th style={s.th}>Actions</th>
+                <th style={s.th}>Role</th>
+                <th style={s.th}>Change Role</th>
               </tr>
             </thead>
             <tbody>
-              {regs.map(r => (
-                <tr key={r.id}>
-                  <td style={s.td}>
-                    <div style={{ fontWeight: 600, color: G.dark }}>{r.profiles?.full_name || "—"}</div>
-                    <div style={{ fontSize: 11, color: "#aaa" }}>{r.profiles?.student_id} · {r.profiles?.email}</div>
-                  </td>
-                  <td style={s.td}>{r.profiles?.department || "—"} · Year {r.profiles?.year_level || "—"}</td>
-                  <td style={s.td}>{formatDate(r.registered_at)}</td>
-                  <td style={s.td}><span style={s.tag(statusColor(r.status))}>{r.status || "registered"}</span></td>
-                  <td style={s.td}>
-                    <div style={{ display: "flex", gap: 4 }}>
-                      <select value={r.status || "registered"} onChange={e => updateStatus(r.id, e.target.value)}
-                        style={{ padding: "5px 8px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12, outline: "none", cursor: "pointer" }}>
-                        <option value="registered">Registered</option>
-                        
-                        
-                        <option value="cancelled">Cancelled</option>
+              {filtered.map(r => {
+                const currentRole = r.role || "student";
+                return (
+                  <tr key={r.id}>
+                    <td style={s.td}>
+                      <div style={{ fontWeight: 600, color: G.dark }}>{r.profiles?.full_name || "—"}</div>
+                      <div style={{ fontSize: 11, color: "#aaa" }}>{r.profiles?.student_id} · {r.profiles?.email}</div>
+                    </td>
+                    <td style={s.td}>{r.profiles?.department || "—"} · Yr {r.profiles?.year_level || "—"}</td>
+                    <td style={{...s.td, fontSize:12}}>{formatDate(r.registered_at)}</td>
+                    <td style={s.td}>
+                      <span style={s.tag(roleColor(currentRole))}>{roleLabel(currentRole)}</span>
+                    </td>
+                    <td style={s.td}>
+                      <select value={currentRole} onChange={e => updateRole(r.id, e.target.value)}
+                        style={{ padding: "6px 10px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12, outline: "none", cursor: "pointer", background: "#fff" }}>
+                        {SEMINAR_ROLES.map(role => (
+                          <option key={role.value} value={role.value}>{role.label}</option>
+                        ))}
                       </select>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -326,16 +378,39 @@ function RegistrationsTab({ seminar }) {
   );
 }
 
-// ── Evaluations Tab ───────────────────────────────────────────────
+// ── Evaluation Fields ─────────────────────────────────────────────
+const EVAL_FIELDS = [
+  { key: "q_content",      label: "Content Quality",          desc: "Relevance and accuracy of the seminar content" },
+  { key: "q_speaker",      label: "Speaker Effectiveness",    desc: "Clarity, knowledge, and delivery of the speaker(s)" },
+  { key: "q_organization", label: "Event Organization",       desc: "Logistics, time management, and flow of the event" },
+  { key: "q_relevance",    label: "Relevance to GAD",         desc: "How relevant was this activity to gender and development?" },
+  { key: "q_materials",    label: "Materials & Resources",    desc: "Quality of presentation materials and handouts" },
+  { key: "q_overall",      label: "Overall Satisfaction",     desc: "Your overall experience with this seminar" },
+];
+
+function StarRating({ value }) {
+  const stars = Math.round(value || 0);
+  return (
+    <span>
+      {[1,2,3,4,5].map(i => (
+        <i key={i} className={`bi bi-star${i<=stars?"-fill":""}`}
+          style={{ color: i<=stars?"#f59e0b":"#e5e7eb", fontSize:14, marginRight:2 }} />
+      ))}
+      <span style={{ fontSize:12, color:"#888", marginLeft:4 }}>({value?.toFixed(1)||"—"})</span>
+    </span>
+  );
+}
+
 function EvaluationsTab({ seminar }) {
-  const [evals, setEvals] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [evals, setEvals]         = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [selected, setSelected]   = useState(null);
 
   const load = async () => {
     setLoading(true);
     const { data } = await supabase
       .from("seminar_evaluations")
-      .select("*, profiles(full_name, student_id)")
+      .select("*, profiles(full_name, student_id, email)")
       .eq("seminar_id", seminar.id)
       .order("submitted_at", { ascending: false });
     setEvals(data || []);
@@ -345,44 +420,105 @@ function EvaluationsTab({ seminar }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [seminar.id]);
 
-  const avgRating = evals.length > 0 ? (evals.reduce((s, e) => s + (e.rating || 0), 0) / evals.length).toFixed(1) : "—";
+  const avg = (key) => {
+    const vals = evals.map(e => e[key]).filter(v => v != null);
+    return vals.length ? (vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(1) : "—";
+  };
+  const overallAvg = evals.length > 0
+    ? (EVAL_FIELDS.map(f => parseFloat(avg(f.key))||0).reduce((a,b)=>a+b,0)/EVAL_FIELDS.length).toFixed(1)
+    : "—";
 
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+      {/* Summary stats */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <div style={s.statCard(G.base)}>
           <div style={{ ...s.statNum, color: G.base }}>{evals.length}</div>
-          <div style={s.statLabel}>Total Evaluations</div>
+          <div style={s.statLabel}>Responses</div>
         </div>
         <div style={s.statCard("#f59e0b")}>
-          <div style={{ ...s.statNum, color: "#f59e0b" }}>⭐ {avgRating}</div>
-          <div style={s.statLabel}>Average Rating</div>
+          <div style={{ ...s.statNum, color: "#f59e0b", fontSize:22 }}>
+            <i className="bi bi-star-fill me-1" style={{ fontSize:18 }}/>{overallAvg}
+          </div>
+          <div style={s.statLabel}>Overall Average</div>
         </div>
       </div>
 
       {evals.length === 0 ? (
         <div style={s.emptyBox}>
-          <div style={{ fontSize: 40, marginBottom: 10 }}>⭐</div>
-          <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No evaluations yet</div>
-          <div style={{ fontSize: 13, color: "#aaa" }}>Student feedback will appear here after the seminar.</div>
+          <i className="bi bi-clipboard-data d-block mb-2" style={{ fontSize:40, color:G.pale }}/>
+          <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No evaluations submitted yet</div>
+          <div style={{ fontSize: 13, color: "#aaa" }}>Evaluation forms submitted by participants will appear here.</div>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {evals.map(e => (
-            <div key={e.id} style={s.card}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: G.dark }}>{e.profiles?.full_name || "Anonymous"}</div>
-                  <div style={{ fontSize: 11, color: "#aaa" }}>{e.profiles?.student_id} · {formatDate(e.submitted_at)}</div>
-                </div>
-                <div style={{ fontSize: 20 }}>{"⭐".repeat(e.rating || 0)}</div>
-              </div>
-              {e.comments && <div style={{ marginTop: 10, fontSize: 13, color: "#555", lineHeight: 1.5, background: "#F5F7F5", borderRadius: 6, padding: "10px 14px" }}>{e.comments}</div>}
+        <>
+          {/* Per-question averages card */}
+          <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #DDE8DD", padding: "20px 24px", marginBottom: 20 }}>
+            <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 14 }}>
+              <i className="bi bi-bar-chart-line me-2" style={{ color: G.base }}/>Evaluation Summary
             </div>
-          ))}
-        </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {EVAL_FIELDS.map(f => {
+                const val = parseFloat(avg(f.key)) || 0;
+                const pct = (val / 5) * 100;
+                return (
+                  <div key={f.key}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: G.dark }}>{f.label}</span>
+                      <StarRating value={val}/>
+                    </div>
+                    <div style={{ background: "#E8F5E9", borderRadius: 4, height: 6 }}>
+                      <div style={{ width: `${pct}%`, height: 6, borderRadius: 4, background: G.base, transition: "width .5s" }}/>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>{f.desc}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Individual responses */}
+          <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 12 }}>
+            <i className="bi bi-person-lines-fill me-2" style={{ color: G.base }}/>Individual Responses
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {evals.map(e => (
+              <div key={e.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #DDE8DD", overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#F9FBF9", borderBottom: "1px solid #DDE8DD", cursor: "pointer" }}
+                  onClick={() => setSelected(selected?.id === e.id ? null : e)}>
+                  <div>
+                    <div style={{ fontWeight: 600, color: G.dark }}>{e.profiles?.full_name || "Anonymous"}</div>
+                    <div style={{ fontSize: 11, color: "#aaa" }}>{e.profiles?.student_id} · {formatDate(e.submitted_at)}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <StarRating value={parseFloat(avg("q_overall")) || e.q_overall || 0}/>
+                    <i className={`bi bi-chevron-${selected?.id===e.id?"up":"down"}`} style={{ color: "#aaa" }}/>
+                  </div>
+                </div>
+                {selected?.id === e.id && (
+                  <div style={{ padding: "16px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 12, marginBottom: 12 }}>
+                      {EVAL_FIELDS.map(f => (
+                        <div key={f.key} style={{ background: "#F5F7F5", borderRadius: 8, padding: "10px 12px" }}>
+                          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>{f.label}</div>
+                          <StarRating value={e[f.key]}/>
+                        </div>
+                      ))}
+                    </div>
+                    {e.comments && (
+                      <div style={{ background: G.wash, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: G.dark, lineHeight: 1.6 }}>
+                        <i className="bi bi-chat-quote me-2" style={{ color: G.base }}/>
+                        {e.comments}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
@@ -399,6 +535,7 @@ export default function SeminarsPage() {
   const [addForm, setAddForm]   = useState({});
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError]   = useState("");
+  const [confirm, setConfirm] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -436,10 +573,12 @@ export default function SeminarsPage() {
   };
 
   const deleteSeminar = async () => {
-    if (!selected || !confirm(`Delete "${selected.title}"?`)) return;
-    await supabase.from("seminars").delete().eq("id", selected.id);
+    setConfirm({ title:"Delete Seminar", message:`Delete "${selected?.title}"? All registrations and evaluations will be removed.`, confirmLabel:"Delete", danger:true,
+      onConfirm: async () => {
+        await supabase.from("seminars").delete().eq("id", selected.id);
     const rest = seminars.filter(s => s.id !== selected.id);
     setSeminars(rest); setSelected(rest[0] || null);
+      setConfirm(null); }});
   };
 
   const statusColor = (s) => s === "ongoing" ? "green" : s === "completed" ? "blue" : s === "cancelled" ? "red" : "yellow";
@@ -468,7 +607,10 @@ export default function SeminarsPage() {
                   <div style={s.itemTitle}>{sem.title}</div>
                   <div style={s.itemMeta}>{formatDateShort(sem.scheduled_start)} · {regCount(sem)} registered</div>
                 </div>
-                <div style={s.pubDot(sem.is_public)} />
+                <div style={s.pubBadge(sem.is_public)}>
+                  <span style={{width:6,height:6,borderRadius:"50%",background:sem.is_public?"#16a34a":"#a16207",display:"inline-block"}}/>
+                  {sem.is_public?"Public":"Private"}
+                </div>
               </div>
             ))
           }
@@ -496,7 +638,7 @@ export default function SeminarsPage() {
               <button style={s.btnDanger} onClick={deleteSeminar}><i className="bi bi-trash me-1"/> Delete</button>
             </div>
             <div style={s.tabBar}>
-              {[["details", "Details"], ["registrations", "Registrations"], ["evaluations", "⭐ Evaluations"]].map(([v, l]) => (
+              {[["details", "Details"], ["registrations", "Registrations"], ["evaluations", "Evaluations"]].map(([v, l]) => (
                 <div key={v} style={s.tab(tab === v)} onClick={() => setTab(v)}>{l}</div>
               ))}
             </div>
@@ -509,6 +651,7 @@ export default function SeminarsPage() {
         )}
       </div>
 
+      {confirm&&<ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
       {/* Create Modal */}
       {showAdd && (
         <div style={s.overlay}>
