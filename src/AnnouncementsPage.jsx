@@ -169,10 +169,11 @@ export default function AnnouncementsPage() {
 
   // ── Toggle publish ─────────────────────────────────────────────
   const togglePublish = async (a) => {
-    const newVal = a.published_at ? null : new Date().toISOString();
+    const isPublishing = !a.published_at;
+    const newVal = isPublishing ? new Date().toISOString() : null;
     const { error: err } = await supabase
       .from("announcements")
-      .update({ published_at: newVal })
+      .update({ published_at: newVal, is_published: isPublishing })
       .eq("id", a.id);
     if (!err) fetchData();
   };

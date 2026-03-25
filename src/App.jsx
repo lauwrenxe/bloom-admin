@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
 import ModulesPage       from "./ModulesPage.jsx";
-import AssessmentsPage   from "./AssessmentsPage.jsx";
 import DashboardPage     from "./DashboardPage.jsx";
 import SeminarsPage      from "./SeminarsPage.jsx";
 import CertificatesPage  from "./CertificatesPage.jsx";
@@ -187,7 +186,6 @@ const NAV_SECTIONS = [
   ]},
   { label:"Learning", items:[
     { id:"modules",      icon:"bi-book",              label:"Modules"       },
-    { id:"assessments",  icon:"bi-clipboard-check",   label:"Assessments"   },
     { id:"certificates", icon:"bi-patch-check",       label:"Certificates"  },
   ]},
   { label:"Events", items:[
@@ -453,7 +451,6 @@ function AdminShell({ onLogout, user }) {
                 <>
                   {active==="dashboard"     && <DashboardPage/>}
                   {active==="modules"       && <ModulesPage/>}
-                  {active==="assessments"   && <AssessmentsPage/>}
                   {active==="seminars"      && <SeminarsPage/>}
                   {active==="certificates"  && <CertificatesPage/>}
                   {active==="calendar"      && <CalendarPage/>}
