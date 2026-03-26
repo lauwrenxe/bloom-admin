@@ -104,7 +104,7 @@ export default function StudentsPage() {
   };
 
   const [confirm, setConfirm] = useState(null);
-  const [inactivityDays] = useState(0.001); // Policy: deactivate after 30 days
+  const [inactivityDays] = useState(30); // Policy: deactivate after 30 days
 
   const toggleActive = (student) => {
     const newVal = !student.is_active;
@@ -116,7 +116,10 @@ export default function StudentsPage() {
       confirmLabel: newVal ? "Reactivate" : "Deactivate",
       danger: !newVal,
       onConfirm: async () => {
-        await supabase.from("profiles").update({ is_active: newVal }).eq("id", student.id);
+        const updateData = { is_active: newVal };
+        // When reactivating, reset last_sign_in_at so inactivity clock restarts fresh
+        if (newVal === true) updateData.last_sign_in_at = new Date().toISOString();
+        await supabase.from("profiles").update(updateData).eq("id", student.id);
         setStudents(ss => ss.map(s => s.id === student.id ? { ...s, is_active: newVal } : s));
         if (selected?.id === student.id) setSelected(s => ({ ...s, is_active: newVal }));
         setConfirm(null);
