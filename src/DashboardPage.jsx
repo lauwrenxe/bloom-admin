@@ -170,12 +170,7 @@ export default function DashboardPage(){
   const [recentMods,setRecentMods]=useState([]),[weeklyAct,setWeeklyAct]=useState([]);
   const [fromDate,setFromDate]=useState(MONTH_AGO),[toDate,setToDate]=useState(TODAY),[preset,setPreset]=useState("This Month");
 
-  const applyPreset=useCallback((p)=>{
-    setPreset(p.label);
-    if(p.days===-1){setFromDate("2020-01-01");setToDate(TODAY);}
-    else if(p.days===0){setFromDate(TODAY);setToDate(TODAY);}
-    else{const d=new Date();d.setDate(d.getDate()-p.days);setFromDate(d.toISOString().split("T")[0]);setToDate(TODAY);}
-  },[]);
+  // applyPreset is defined after fetchAll below
 
   const fetchStats=useCallback(async(from,to)=>{const f=toISO(from),t=toISO(to,true);const rng=(q,col="created_at")=>{if(f)q=q.gte(col,f);if(t)q=q.lte(col,t);return q;};const[{count:tm},{count:pm},{count:ta},{count:ts},{count:us},{count:tc},{count:tb},{count:tat}]=await Promise.all([rng(supabase.from("modules").select("*",{count:"exact",head:true})),rng(supabase.from("modules").select("*",{count:"exact",head:true}).eq("status","published")),rng(supabase.from("assessments").select("*",{count:"exact",head:true})),rng(supabase.from("seminars").select("*",{count:"exact",head:true})),rng(supabase.from("seminars").select("*",{count:"exact",head:true}).eq("status","upcoming")),rng(supabase.from("certificates").select("*",{count:"exact",head:true}).eq("is_revoked",false),"issued_at"),rng(supabase.from("student_badges").select("*",{count:"exact",head:true}),"awarded_at"),rng(supabase.from("assessment_attempts").select("*",{count:"exact",head:true}),"submitted_at")]);let students=0;try{const{data:r}=await supabase.from("roles").select("id").eq("name","student").single();if(r){const{count}=await supabase.from("user_roles").select("*",{count:"exact",head:true}).eq("role_id",r.id);students=count??0;}}catch(e){console.error(e);}setStats({totalMods:tm??0,pubMods:pm??0,totalAssess:ta??0,totalSems:ts??0,upcomingSems:us??0,totalCerts:tc??0,totalBadges:tb??0,totalAttempts:tat??0,students});},[]);
   const fetchModStats=useCallback(async()=>{const{data}=await supabase.from("v_module_completion_stats").select("*").order("completion_rate_percent",{ascending:false}).limit(6);setModStats(data??[]);},[]);
@@ -188,6 +183,16 @@ export default function DashboardPage(){
   const fetchWeeklyAct=useCallback(async(from,to)=>{const end=to?new Date(to):new Date();const days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],result=[];for(let i=6;i>=0;i--){const d=new Date(end);d.setDate(d.getDate()-i);const s=new Date(d);s.setHours(0,0,0,0);const e=new Date(d);e.setHours(23,59,59,999);const{count}=await supabase.from("activity_logs").select("*",{count:"exact",head:true}).gte("created_at",s.toISOString()).lte("created_at",e.toISOString());result.push({label:days[d.getDay()],value:count??0});}setWeeklyAct(result);},[]);
 
   const fetchAll=useCallback(async(from,to,isRef=false)=>{isRef?setRefreshing(true):setLoading(true);await Promise.allSettled([fetchStats(from,to),fetchModStats(),fetchSemStats(),fetchLeaderboard(from,to),fetchActivity(from,to),fetchCertStats(from,to),fetchAssessStats(from,to),fetchRecentMods(from,to),fetchWeeklyAct(from,to)]);isRef?setRefreshing(false):setLoading(false);},[fetchStats,fetchModStats,fetchSemStats,fetchLeaderboard,fetchActivity,fetchCertStats,fetchAssessStats,fetchRecentMods,fetchWeeklyAct]); // eslint-disable-line
+
+  const applyPreset=useCallback((p)=>{
+    setPreset(p.label);
+    let from,to=TODAY;
+    if(p.days===-1){from="2020-01-01";}
+    else if(p.days===0){from=TODAY;}
+    else{const d=new Date();d.setDate(d.getDate()-p.days);from=d.toISOString().split("T")[0];}
+    setFromDate(from);setToDate(to);
+    fetchAll(from,to,true);
+  },[fetchAll]);
 
   useState(()=>{fetchAll(MONTH_AGO,TODAY);});
 
@@ -231,15 +236,12 @@ export default function DashboardPage(){
             <div className="d-flex align-items-center gap-1 bg-white border rounded px-2 py-1" style={{fontSize:12}}>
               <i className="bi bi-calendar3 text-muted" style={{fontSize:13}}/>
               <input type="date" className="border-0 p-0 bg-transparent" style={{fontSize:11,width:110,outline:"none"}}
-                value={fromDate} max={toDate} onChange={e=>{setFromDate(e.target.value);setPreset("Custom");}}/>
+                value={fromDate} max={toDate} onChange={e=>{const v=e.target.value;setFromDate(v);setPreset("Custom");fetchAll(v,toDate,true);}}/>
               <span className="text-muted">—</span>
               <input type="date" className="border-0 p-0 bg-transparent" style={{fontSize:11,width:110,outline:"none"}}
-                value={toDate} min={fromDate} max={TODAY} onChange={e=>{setToDate(e.target.value);setPreset("Custom");}}/>
+                value={toDate} min={fromDate} max={TODAY} onChange={e=>{const v=e.target.value;setToDate(v);setPreset("Custom");fetchAll(fromDate,v,true);}}/>
             </div>
-            <button className="btn btn-primary btn-sm d-flex align-items-center gap-1" onClick={()=>fetchAll(fromDate,toDate,true)} disabled={refreshing}>
-              <i className={`bi bi-arrow-clockwise ${refreshing?"rotating":""}`}/>
-              {refreshing?"Updating":"Apply"}
-            </button>
+
           </div>
         </div>
 

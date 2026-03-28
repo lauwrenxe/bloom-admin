@@ -364,6 +364,14 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   const [editQIdx,   setEditQIdx]   = useState(null);
   const [form, setForm] = useState({title:"",passingScore:75,timeLimit:30,badgeId:"",isPublished:false});
   const setF = (k,v) => setForm(f=>({...f,[k]:v}));
+  const [showAI, setShowAI]         = useState(false);
+  const [aiPrompt, setAiPrompt]     = useState("");
+  const [aiCount, setAiCount]       = useState(5);
+  const [aiType, setAiType]         = useState("multiple_choice");
+  const [aiLoading, setAiLoading]   = useState(false);
+  const [aiGenerated, setAiGenerated] = useState([]);
+  const [aiSelected, setAiSelected] = useState([]);
+  const [aiError, setAiError]       = useState("");
 
   useEffect(()=>{
     let active=true;
@@ -513,6 +521,78 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
     });
   };
 
+  const generateWithAI = async () => {
+    if (!aiPrompt.trim()) { setAiError("Please describe the topic or paste content for the AI to generate questions from."); return; }
+    setAiLoading(true); setAiError(""); setAiGenerated([]); setAiSelected([]);
+    try {
+      const systemPrompt = `You are an educational assessment expert for a Gender and Development (GAD) e-learning platform called BLOOM at Cavite State University.
+
+CRITICAL RULES — follow these exactly:
+1. Generate EXACTLY ${aiCount} questions — no more, no less.
+2. Return ONLY a raw JSON array. No markdown, no code fences, no explanation, no text before or after the array.
+3. The array must start with [ and end with ].
+4. Each question object must have:
+   - "question_text": string
+   - "question_type": "${aiType}"
+   - "options": array of option objects with "option_text" (string) and "is_correct" (boolean)
+     * For multiple_choice: exactly 4 options, exactly 1 is_correct=true, rest false
+     * For true_false: exactly 2 options ("True" and "False"), exactly 1 is_correct=true
+     * For short_answer: empty array []
+
+EXAMPLE OUTPUT (multiple_choice, 2 questions):
+[{"question_text":"What is gender equality?","question_type":"multiple_choice","options":[{"option_text":"Equal rights for all genders","is_correct":true},{"option_text":"Only for women","is_correct":false},{"option_text":"A legal term only","is_correct":false},{"option_text":"Not relevant today","is_correct":false}]},{"question_text":"What does GAD stand for?","question_type":"multiple_choice","options":[{"option_text":"Gender and Development","is_correct":true},{"option_text":"Growth and Diversity","is_correct":false},{"option_text":"Global Aid Division","is_correct":false},{"option_text":"General Administrative Directive","is_correct":false}]}]
+
+Now generate EXACTLY ${aiCount} ${aiType} questions about the given topic.`;
+
+      const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+      if (!apiKey) { setAiError("Groq API key not found. Add VITE_GROQ_API_KEY to your .env file and restart the dev server."); setAiLoading(false); return; }
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          temperature: 0.7,
+          max_tokens: 4000,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `Module: "${module.title}"\n\nTopic/Content: ${aiPrompt.trim()}\n\nGenerate ${aiCount} ${aiType} questions.` },
+          ],
+        }),
+      });
+      const data = await response.json();
+      if (data.error) { setAiError("Groq API Error: " + data.error.message); setAiLoading(false); return; }
+      const text = data.choices?.[0]?.message?.content || "";
+      // Strip markdown fences if present
+      const clean = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean);
+      if (!Array.isArray(parsed)) throw new Error("Response is not an array");
+      // Normalise and validate
+      // Trim to exact requested count if AI returned more
+      const trimmed = parsed.slice(0, aiCount);
+      const normalised = trimmed.map((q, i) => ({
+        id: `ai_${Date.now()}_${i}`,
+        question_text: q.question_text || "",
+        question_type: q.question_type || aiType,
+        options: (q.options || []).map(o => ({ option_text: o.option_text || "", is_correct: !!o.is_correct })),
+        _new: true,
+      }));
+      setAiGenerated(normalised);
+      setAiSelected(normalised.map(q => q.id)); // select all by default
+    } catch (e) {
+      setAiError("Failed to parse AI response. Please try again. (" + e.message + ")");
+    }
+    setAiLoading(false);
+  };
+
+  const addAIQuestions = () => {
+    const toAdd = aiGenerated
+      .filter(q => aiSelected.includes(q.id))
+      .map(q => ({ ...q, question_options: q.options }));
+    setQuestions(qs => [...qs, ...toAdd]);
+    setShowAI(false);
+    setAiGenerated([]); setAiSelected([]); setAiPrompt(""); setAiError("");
+  };
+
   if (loading) return <div style={{padding:40,textAlign:"center",color:"#aaa"}}>Loading assessment…</div>;
 
   // Empty state
@@ -549,6 +629,7 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
 
   return(
     <div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       {/* Settings card */}
       <div style={s.card}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
@@ -631,6 +712,9 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
                   {saving?<><i className="bi bi-hourglass-split"/>Saving…</>:<><i className="bi bi-floppy"/>Save Questions</>}
                 </button>
               )}
+              <button style={{...s.btnSm(G.wash,G.base),border:`1px solid ${G.pale}`,fontWeight:700}} onClick={()=>{setAiPrompt(module.description||"");setAiError("");setAiGenerated([]);setAiSelected([]);setShowAI(true);}}>
+                <i className="bi bi-stars"/>Generate with AI
+              </button>
               <button style={s.btnGreen} onClick={()=>setShowAdd(true)}>
                 <i className="bi bi-plus-circle"/>Add Question
               </button>
@@ -642,7 +726,12 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
               <i className="bi bi-clipboard-check d-block mb-3" style={{fontSize:44,color:G.pale}}/>
               <div style={{fontWeight:700,color:G.dark,marginBottom:6}}>No questions yet</div>
               <div style={{fontSize:13,color:"#aaa",marginBottom:18}}>Add multiple choice, true/false, or short answer questions</div>
-              <button style={s.btnGreen} onClick={()=>setShowAdd(true)}><i className="bi bi-plus-circle"/>Add First Question</button>
+              <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+                <button style={{...s.btnSm(G.wash,G.base),border:`1px solid ${G.pale}`,fontWeight:700,padding:"9px 16px"}} onClick={()=>{setAiPrompt(module.description||"");setAiError("");setAiGenerated([]);setAiSelected([]);setShowAI(true);}}>
+                  <i className="bi bi-stars"/>Generate with AI
+                </button>
+                <button style={s.btnGreen} onClick={()=>setShowAdd(true)}><i className="bi bi-plus-circle"/>Add Manually</button>
+              </div>
             </div>
           ):(
             <>
@@ -698,6 +787,141 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
 
       {showAdd&&<QuestionModal num={questions.length+1} onSave={addQ} onClose={()=>setShowAdd(false)}/>}
       {editQ&&<QuestionModal initial={editQ} num={editQIdx+1} onSave={updateQ} onClose={()=>{setEditQ(null);setEditQIdx(null);}}/>}
+
+      {/* ── AI Generate Modal ── */}
+      {showAI&&(
+        <div style={s.overlay}>
+          <div style={{...s.modal,maxWidth:640,maxHeight:"92vh",overflow:"auto",background:G.wash}}>
+            <div style={{padding:"16px 24px",background:`linear-gradient(135deg,${G.dark},${G.base})`,borderRadius:"10px 10px 0 0",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:36,height:36,borderRadius:10,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.25)"}}>
+                  <i className="bi bi-stars" style={{color:"#fff",fontSize:18}}/>
+                </div>
+                <div>
+                  <div style={{fontWeight:800,color:"#fff",fontSize:15}}>Generate Questions with AI</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.65)"}}>Powered by Groq — BLOOM GAD</div>
+                </div>
+              </div>
+              <button style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",borderRadius:6,color:"#fff",cursor:"pointer",fontSize:16,width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowAI(false)}>×</button>
+            </div>
+            <div style={{...s.mBody,background:G.wash}}>
+              {aiError&&<div style={{background:"#fee2e2",color:"#dc2626",borderRadius:6,padding:"10px 14px",fontSize:13,marginBottom:14}}>{aiError}</div>}
+
+              {/* Module context */}
+              <div style={{background:"#fff",border:`1px solid ${G.pale}`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:G.dark}}>
+                <i className="bi bi-book me-1"/><strong>Module:</strong> {module.title}
+              </div>
+
+              {/* Settings row */}
+              <div style={{display:"flex",gap:12,marginBottom:16}}>
+                <div style={{flex:1}}>
+                  <label style={s.label}>Question Type</label>
+                  <select style={s.select} value={aiType} onChange={e=>setAiType(e.target.value)}>
+                    <option value="multiple_choice">Multiple Choice</option>
+                    <option value="true_false">True / False</option>
+                    <option value="short_answer">Short Answer</option>
+                  </select>
+                </div>
+                <div style={{flex:1}}>
+                  <label style={s.label}>Number of Questions</label>
+                  <select style={s.select} value={aiCount} onChange={e=>setAiCount(+e.target.value)}>
+                    {[3,5,8,10,15].map(n=><option key={n} value={n}>{n} questions</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Topic / content input */}
+              <div style={s.fg}>
+                <label style={s.label}>Topic or Content *</label>
+                <textarea style={{...s.textarea,minHeight:100}} value={aiPrompt}
+                  onChange={e=>setAiPrompt(e.target.value)}
+                  placeholder="Describe the topic, paste module content, or write key concepts the questions should cover. The more detail you provide, the better the questions."/>
+                <div style={{fontSize:11,color:"#888",marginTop:4}}>
+                  <i className="bi bi-lightbulb me-1"/>Tip: You can paste the module description or key learning outcomes here.
+                </div>
+              </div>
+
+              {/* Generate button */}
+              {aiGenerated.length===0&&(
+                <button
+                  style={{width:"100%",padding:"11px 20px",background:aiLoading?G.pale:`linear-gradient(135deg,${G.dark},${G.base})`,color:"#fff",border:"none",borderRadius:8,cursor:aiLoading?"not-allowed":"pointer",fontWeight:700,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+                  onClick={generateWithAI} disabled={aiLoading}>
+                  {aiLoading
+                    ? <><span style={{width:16,height:16,border:"2px solid rgba(255,255,255,.4)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/> Generating questions…</>
+                    : <><i className="bi bi-stars"/>Generate {aiCount} Questions</>
+                  }
+                </button>
+              )}
+
+              {/* Generated questions review */}
+              {aiGenerated.length>0&&(
+                <div>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                    <div style={{fontWeight:700,color:G.dark,fontSize:13}}>
+                      <i className="bi bi-check2-all me-1" style={{color:"#16a34a"}}/>
+                      {aiGenerated.length} questions generated — review and select
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <button style={{...s.btnSm(G.wash,G.base),fontSize:11}} onClick={()=>setAiSelected(aiGenerated.map(q=>q.id))}>Select All</button>
+                      <button style={{...s.btnSm(G.wash,G.dark),fontSize:11}} onClick={()=>setAiSelected([])}>Deselect All</button>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:340,overflowY:"auto",padding:"2px 0"}}>
+                    {aiGenerated.map((q,i)=>{
+                      const sel=aiSelected.includes(q.id);
+                      const opts=q.options||[];
+                      return(
+                        <div key={q.id} style={{background:sel?G.wash:"#f9fafb",border:`1.5px solid ${sel?G.light:"#e5e7eb"}`,borderRadius:8,padding:"12px 14px",cursor:"pointer",transition:"all .15s"}}
+                          onClick={()=>setAiSelected(s=>sel?s.filter(id=>id!==q.id):[...s,q.id])}>
+                          <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                            <div style={{width:20,height:20,borderRadius:4,border:`2px solid ${sel?G.base:"#d1d5db"}`,background:sel?G.base:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>
+                              {sel&&<i className="bi bi-check" style={{color:"#fff",fontSize:11}}/>}
+                            </div>
+                            <div style={{flex:1}}>
+                              <div style={{fontSize:13,fontWeight:600,color:G.dark,marginBottom:6,lineHeight:1.5}}>
+                                <span style={{fontSize:11,fontWeight:700,color:G.base,marginRight:6}}>Q{i+1}</span>
+                                {q.question_text}
+                              </div>
+                              {q.question_type!=="short_answer"&&(
+                                <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                                  {opts.map((o,j)=>(
+                                    <div key={j} style={{fontSize:12,padding:"4px 8px",borderRadius:5,background:o.is_correct?"#dcfce7":"#f3f4f6",color:o.is_correct?"#16a34a":G.dark,display:"flex",alignItems:"center",gap:6}}>
+                                      <i className={`bi bi-${o.is_correct?"check-circle-fill":"circle"}`} style={{color:o.is_correct?"#16a34a":"#d1d5db"}}/>
+                                      {o.option_text}
+                                      {o.is_correct&&<span style={{marginLeft:"auto",fontSize:10,fontWeight:700}}>✓ Correct</span>}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {q.question_type==="short_answer"&&(
+                                <div style={{fontSize:12,color:"#888",fontStyle:"italic"}}>Open-ended — students type their answer</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* Regenerate option */}
+                  <button style={{...s.btnSm(G.wash,G.base),marginTop:10,fontSize:12}} onClick={()=>{setAiGenerated([]);setAiSelected([]);}}>
+                    <i className="bi bi-arrow-clockwise"/>Regenerate
+                  </button>
+                </div>
+              )}
+            </div>
+            <div style={{...s.mFooter,background:G.wash}}>
+              <button style={s.btnSecondary} onClick={()=>setShowAI(false)}>Cancel</button>
+              {aiGenerated.length>0&&(
+                <button
+                  style={{...s.btnPrimary,background:`linear-gradient(135deg,${G.dark},${G.base})`,opacity:aiSelected.length===0?0.5:1}}
+                  onClick={addAIQuestions} disabled={aiSelected.length===0}>
+                  <i className="bi bi-plus-circle"/>Add {aiSelected.length} Selected Question{aiSelected.length!==1?"s":""}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
