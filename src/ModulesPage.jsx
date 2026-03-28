@@ -551,8 +551,8 @@ Now generate EXACTLY ${aiCount} ${aiType} questions about the given topic.`;
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
         body: JSON.stringify({
           model: "llama-3.1-8b-instant",
-          temperature: 0.7,
-          max_tokens: 4000,
+          temperature: 0.4,
+          max_tokens: 6000,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: `Module: "${module.title}"\n\nTopic/Content: ${aiPrompt.trim()}\n\nGenerate ${aiCount} ${aiType} questions.` },
@@ -562,8 +562,14 @@ Now generate EXACTLY ${aiCount} ${aiType} questions about the given topic.`;
       const data = await response.json();
       if (data.error) { setAiError("Groq API Error: " + data.error.message); setAiLoading(false); return; }
       const text = data.choices?.[0]?.message?.content || "";
-      // Strip markdown fences if present
-      const clean = text.replace(/```json|```/g, "").trim();
+      // Robustly extract JSON array from response
+      // Strip markdown fences, then find the first [ ... ] block
+      let clean = text.replace(/```json|```/g, "").trim();
+      // Extract just the JSON array — find first [ and last ]
+      const start = clean.indexOf("[");
+      const end   = clean.lastIndexOf("]");
+      if (start === -1 || end === -1) throw new Error("No JSON array found in response");
+      clean = clean.slice(start, end + 1);
       const parsed = JSON.parse(clean);
       if (!Array.isArray(parsed)) throw new Error("Response is not an array");
       // Normalise and validate
