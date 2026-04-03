@@ -50,11 +50,17 @@ const s = {
 
 // ── Certificate Preview Modal ─────────────────────────────────────
 function CertPreviewModal({ cert, onClose }) {
-  const refType  = cert.reference_type || "achievement";
-  const certTitle = refType === "manual" ? "Certificate of Achievement"
+  const refType     = cert.reference_type || "achievement";
+  const certTitle   = refType === "manual" ? "Certificate of Achievement"
     : `Certificate of ${refType.charAt(0).toUpperCase() + refType.slice(1)}`;
   const studentName = cert.profiles?.full_name || "Recipient";
-  const issuedDate   = cert.issued_at ? new Date(cert.issued_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }) : "—";
+  const issuedDate  = cert.issued_at ? new Date(cert.issued_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }) : "—";
+  const bodyText    = cert.body_text   || "has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.";
+  const sig1Name    = cert.sig1_name   || "GAD Coordinator";
+  const sig1Title   = cert.sig1_title  || "Cavite State University";
+  const sig2Name    = cert.sig2_name   || "GADRC Director";
+  const sig2Title   = cert.sig2_title  || "Cavite State University";
+  const themeColor  = cert.theme_color || "#2D6A2D";
 
   const certHTML = () => `<!DOCTYPE html><html><head><title>${certTitle}</title>
     <style>
@@ -62,24 +68,24 @@ function CertPreviewModal({ cert, onClose }) {
       @page { size: A4 landscape; margin: 0; }
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body { width:297mm; height:210mm; background:#fff; font-family:'Inter',sans-serif; display:flex; align-items:center; justify-content:center; }
-      .cert { width:267mm; height:186mm; border:10px double #2D6A2D; padding:28px 36px; background:linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%); display:flex; flex-direction:column; justify-content:space-between; position:relative; }
+      .cert { width:267mm; height:186mm; border:10px double ${themeColor}; padding:28px 36px; background:linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%); display:flex; flex-direction:column; justify-content:space-between; position:relative; }
       .cert::before { content:''; position:absolute; inset:16px; border:1.5px solid rgba(45,106,45,.15); pointer-events:none; }
-      .org-name { font-size:12px; font-weight:700; color:#2D6A2D; letter-spacing:3px; text-transform:uppercase; text-align:center; }
+      .org-name { font-size:12px; font-weight:700; color:${themeColor}; letter-spacing:3px; text-transform:uppercase; text-align:center; }
       .org-sub  { font-size:10px; color:#888; letter-spacing:1px; text-align:center; margin-top:2px; }
-      .divider  { border:none; border-top:1.5px solid #2D6A2D; margin:10px 80px; }
+      .divider  { border:none; border-top:1.5px solid ${themeColor}; margin:10px 80px; }
       .title    { font-family:'Playfair Display',serif; font-size:32px; font-weight:700; color:#1A2E1A; text-align:center; margin:6px 0; }
       .presented{ font-size:11px; color:#888; text-align:center; letter-spacing:3px; text-transform:uppercase; margin:6px 0; }
       .name-wrap { text-align:center; margin:6px 0; }
-      .name     { font-family:'Playfair Display',serif; font-style:italic; font-size:38px; color:#2D6A2D; border-bottom:2px solid #C8E6C9; padding:0 40px 6px; display:inline-block; }
+      .name     { font-family:'Playfair Display',serif; font-style:italic; font-size:38px; color:${themeColor}; border-bottom:2px solid #C8E6C9; padding:0 40px 6px; display:inline-block; }
       .desc     { font-size:12px; color:#555; text-align:center; max-width:480px; margin:8px auto; line-height:1.8; }
       .footer   { display:flex; justify-content:space-between; align-items:flex-end; padding-top:12px; border-top:1px solid #C8E6C9; }
       .sig-block{ text-align:center; min-width:150px; }
-      .seal     { width:52px; height:52px; border-radius:50%; border:2.5px solid #2D6A2D; display:flex; align-items:center; justify-content:center; margin:0 auto 6px; font-size:22px; color:#2D6A2D; }
+      .seal     { width:52px; height:52px; border-radius:50%; border:2.5px solid ${themeColor}; display:flex; align-items:center; justify-content:center; margin:0 auto 6px; font-size:22px; color:${themeColor}; }
       .sig-line { border-top:1px solid #1A2E1A; padding-top:5px; font-size:10px; color:#1A2E1A; font-weight:700; letter-spacing:.5px; }
       .sig-sub  { font-size:9px; color:#888; margin-top:2px; }
       .code-block { text-align:center; }
       .code-label { font-size:9px; color:#888; letter-spacing:1px; text-transform:uppercase; }
-      .code-value { font-size:13px; font-weight:800; color:#2D6A2D; letter-spacing:2px; margin:2px 0; }
+      .code-value { font-size:13px; font-weight:800; color:${themeColor}; letter-spacing:2px; margin:2px 0; }
       .code-date  { font-size:9px; color:#888; }
     </style></head><body>
     <div class="cert">
@@ -90,13 +96,13 @@ function CertPreviewModal({ cert, onClose }) {
         <div class="title">${certTitle}</div>
         <div class="presented">This is to certify that</div>
         <div class="name-wrap"><span class="name">${studentName}</span></div>
-        <div class="desc">has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.</div>
+        <div class="desc">${bodyText}</div>
       </div>
       <div class="footer">
         <div class="sig-block">
           <div class="seal">★</div>
-          <div class="sig-line">GAD Coordinator</div>
-          <div class="sig-sub">Cavite State University</div>
+          <div class="sig-line">${sig1Name}</div>
+          <div class="sig-sub">${sig1Title}</div>
         </div>
         <div class="code-block">
           <div class="code-label">Certificate Code</div>
@@ -105,8 +111,8 @@ function CertPreviewModal({ cert, onClose }) {
         </div>
         <div class="sig-block">
           <div class="seal">✦</div>
-          <div class="sig-line">GADRC Director</div>
-          <div class="sig-sub">Cavite State University</div>
+          <div class="sig-line">${sig2Name}</div>
+          <div class="sig-sub">${sig2Title}</div>
         </div>
       </div>
     </div>
@@ -155,16 +161,16 @@ function CertPreviewModal({ cert, onClose }) {
         <div style={{ padding:32, background:"#F5F7F5" }}>
           <div style={{
             width:"100%", aspectRatio:"842/595", maxWidth:842, margin:"0 auto", position:"relative",
-            border:"10px double #2D6A2D", background:"linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%)",
+            border:`10px double ${themeColor}`, background:"linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%)",
             padding:32, boxSizing:"border-box", fontFamily:"'Inter',sans-serif",
             boxShadow:"0 8px 32px rgba(0,0,0,.12)"
           }}>
             {/* Header */}
             <div style={{ textAlign:"center", marginBottom:8 }}>
-              <div style={{ fontSize:11, fontWeight:700, color:"#2D6A2D", letterSpacing:3, textTransform:"uppercase" }}>Cavite State University</div>
+              <div style={{ fontSize:11, fontWeight:700, color:themeColor, letterSpacing:3, textTransform:"uppercase" }}>Cavite State University</div>
               <div style={{ fontSize:10, color:"#888", letterSpacing:1 }}>Gender and Development Resource Center (GADRC)</div>
             </div>
-            <div style={{ border:"none", borderTop:"2px solid #2D6A2D", margin:"10px 60px" }}/>
+            <div style={{ border:"none", borderTop:`2px solid ${themeColor}`, margin:"10px 60px" }}/>
 
             {/* Title */}
             <div style={{ fontFamily:"Georgia,serif", fontSize:28, color:"#1A2E1A", textAlign:"center", margin:"12px 0 6px", fontWeight:700 }}>{certTitle}</div>
@@ -172,32 +178,32 @@ function CertPreviewModal({ cert, onClose }) {
 
             {/* Name */}
             <div style={{ textAlign:"center", margin:"10px 0" }}>
-              <span style={{ fontFamily:"Georgia,serif", fontStyle:"italic", fontSize:32, color:"#2D6A2D", borderBottom:"2px solid #C8E6C9", paddingBottom:6, paddingLeft:32, paddingRight:32 }}>
+              <span style={{ fontFamily:"Georgia,serif", fontStyle:"italic", fontSize:32, color:themeColor, borderBottom:"2px solid #C8E6C9", paddingBottom:6, paddingLeft:32, paddingRight:32 }}>
                 {studentName}
               </span>
             </div>
 
             {/* Body */}
             <div style={{ fontSize:11, color:"#444", textAlign:"center", maxWidth:480, margin:"10px auto", lineHeight:1.8 }}>
-              has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.
+              {bodyText}
             </div>
 
             {/* Footer */}
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginTop:20, paddingTop:14, borderTop:"1px solid #C8E6C9" }}>
               <div style={{ textAlign:"center", minWidth:140 }}>
-                <div style={{ width:44, height:44, borderRadius:"50%", border:"2px solid #2D6A2D", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 6px", fontSize:18, color:"#2D6A2D" }}>★</div>
-                <div style={{ borderTop:"1px solid #1A2E1A", paddingTop:4, fontSize:10, fontWeight:700, color:"#1A2E1A", letterSpacing:.5 }}>GAD Coordinator</div>
-                <div style={{ fontSize:9, color:"#888" }}>Cavite State University</div>
+                <div style={{ width:44, height:44, borderRadius:"50%", border:"2px solid #2D6A2D", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 6px", fontSize:18, color:themeColor }}>★</div>
+                <div style={{ borderTop:"1px solid #1A2E1A", paddingTop:4, fontSize:10, fontWeight:700, color:"#1A2E1A", letterSpacing:.5 }}>{sig1Name}</div>
+                <div style={{ fontSize:9, color:"#888" }}>{sig1Title}</div>
               </div>
               <div style={{ textAlign:"center" }}>
                 <div style={{ fontSize:9, color:"#888", letterSpacing:1, textTransform:"uppercase" }}>Certificate Code</div>
-                <div style={{ fontSize:13, fontWeight:800, color:"#2D6A2D", letterSpacing:2 }}>{cert.certificate_code || "—"}</div>
+                <div style={{ fontSize:13, fontWeight:800, color:themeColor, letterSpacing:2 }}>{cert.certificate_code || "—"}</div>
                 <div style={{ fontSize:9, color:"#888", marginTop:4 }}>Issued: {issuedDate}</div>
               </div>
               <div style={{ textAlign:"center", minWidth:140 }}>
-                <div style={{ width:44, height:44, borderRadius:"50%", border:"2px solid #2D6A2D", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 6px", fontSize:18, color:"#2D6A2D" }}>✦</div>
-                <div style={{ borderTop:"1px solid #1A2E1A", paddingTop:4, fontSize:10, fontWeight:700, color:"#1A2E1A", letterSpacing:.5 }}>GADRC Director</div>
-                <div style={{ fontSize:9, color:"#888" }}>Cavite State University</div>
+                <div style={{ width:44, height:44, borderRadius:"50%", border:"2px solid #2D6A2D", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 6px", fontSize:18, color:themeColor }}>✦</div>
+                <div style={{ borderTop:"1px solid #1A2E1A", paddingTop:4, fontSize:10, fontWeight:700, color:"#1A2E1A", letterSpacing:.5 }}>{sig2Name}</div>
+                <div style={{ fontSize:9, color:"#888" }}>{sig2Title}</div>
               </div>
             </div>
           </div>
@@ -214,11 +220,16 @@ function CertificatesTab() {
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState("");
   const [showAdd, setShowAdd]   = useState(false);
+  const [editCert, setEditCert] = useState(null);  // cert being edited
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError]   = useState("");
   const [form, setForm]         = useState({});
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState("");
   const [previewCert, setPreviewCert] = useState(null);
-  const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setF  = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setEF = (k, v) => setEditForm(f => ({ ...f, [k]: v }));
 
   useEffect(() => {
     let active = true;
@@ -270,6 +281,58 @@ function CertificatesTab() {
     setCerts(cs => cs.map(c => c.id === cert.id ? { ...c, is_revoked: newVal } : c));
   };
 
+  const openEdit = (cert) => {
+    setEditCert(cert);
+    setEditForm({
+      user_id:        cert.user_id || "",
+      reference_type: cert.reference_type || "manual",
+      issued_at:      cert.issued_at ? cert.issued_at.split("T")[0] : "",
+      body_text:      cert.body_text  || "has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.",
+      sig1_name:      cert.sig1_name  || "GAD Coordinator",
+      sig1_title:     cert.sig1_title || "Cavite State University",
+      sig2_name:      cert.sig2_name  || "GADRC Director",
+      sig2_title:     cert.sig2_title || "Cavite State University",
+      theme_color:    cert.theme_color || "#2D6A2D",
+    });
+    setEditError("");
+  };
+
+  const saveEdit = async () => {
+    if (!editForm.user_id) { setEditError("Please select a student."); return; }
+    if (!editForm.issued_at) { setEditError("Please set an issue date."); return; }
+    setEditSaving(true); setEditError("");
+    const { error: err } = await supabase.from("certificates").update({
+      user_id:        editForm.user_id,
+      reference_type: editForm.reference_type || "manual",
+      issued_at:      new Date(editForm.issued_at).toISOString(),
+      body_text:      editForm.body_text  || null,
+      sig1_name:      editForm.sig1_name  || null,
+      sig1_title:     editForm.sig1_title || null,
+      sig2_name:      editForm.sig2_name  || null,
+      sig2_title:     editForm.sig2_title || null,
+      theme_color:    editForm.theme_color || "#2D6A2D",
+    }).eq("id", editCert.id);
+    setEditSaving(false);
+    if (err) { setEditError(err.message); return; }
+    // Update local state immediately so preview reflects changes right away
+    const updatedFields = {
+      user_id:        editForm.user_id,
+      reference_type: editForm.reference_type || "manual",
+      issued_at:      new Date(editForm.issued_at).toISOString(),
+      body_text:      editForm.body_text  || null,
+      sig1_name:      editForm.sig1_name  || null,
+      sig1_title:     editForm.sig1_title || null,
+      sig2_name:      editForm.sig2_name  || null,
+      sig2_title:     editForm.sig2_title || null,
+      theme_color:    editForm.theme_color || "#2D6A2D",
+    };
+    setCerts(cs => cs.map(c => c.id === editCert.id ? { ...c, ...updatedFields } : c));
+    // If preview is open for this cert, update it too
+    if (previewCert?.id === editCert.id) setPreviewCert(p => ({ ...p, ...updatedFields }));
+    setEditCert(null);
+    reload();
+  };
+
   const filtered = certs.filter(c =>
     (c.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) ||
     (c.profiles?.student_id || "").toLowerCase().includes(search.toLowerCase()) ||
@@ -316,6 +379,8 @@ function CertificatesTab() {
                   <td style={s.td}>
                     <button style={{ padding:"5px 10px", border:"1px solid #DDE8DD", borderRadius:6, background:"#fff", fontSize:12, cursor:"pointer", fontWeight:600, color:"#1A2E1A", marginRight:4 }}
                       onClick={() => setPreviewCert(c)}><i className="bi bi-eye me-1"/>View</button>
+                    <button style={{ padding:"5px 10px", border:"1px solid #DDE8DD", borderRadius:6, background:"#fff", fontSize:12, cursor:"pointer", fontWeight:600, color:"#2D6A2D", marginRight:4 }}
+                      onClick={() => openEdit(c)}><i className="bi bi-pencil me-1"/>Edit</button>
                     <button style={{ padding: "5px 10px", border: "none", borderRadius: 6, background: c.is_revoked ? "#dcfce7" : "#fee2e2", fontSize: 12, cursor: "pointer", fontWeight: 600, color: c.is_revoked ? "#16a34a" : "#dc2626" }}
                       onClick={() => toggleRevoke(c)}>{c.is_revoked ? "Restore" : "Revoke"}</button>
                   </td>
@@ -325,6 +390,120 @@ function CertificatesTab() {
           </table>
         )}
       {previewCert && <CertPreviewModal cert={previewCert} onClose={() => setPreviewCert(null)}/>}
+
+      {/* ── Edit Certificate Modal ── */}
+      {editCert && (
+        <div style={s.overlay}>
+          <div style={s.modal(480)}>
+            <div style={s.mHeader}>
+              <span style={s.mTitle}><i className="bi bi-pencil me-2"/>Edit Certificate</span>
+              <button style={s.iconBtn()} onClick={() => setEditCert(null)}>×</button>
+            </div>
+            <div style={s.mBody}>
+              {editError && <div style={{ background:"#fee2e2", color:"#dc2626", borderRadius:6, padding:"10px 14px", fontSize:13, marginBottom:14 }}>{editError}</div>}
+
+              {/* Recipient */}
+              <div style={s.fg}>
+                <label style={s.label}>Recipient (Student) *</label>
+                <select style={s.select} value={editForm.user_id || ""} onChange={e => setEF("user_id", e.target.value)}>
+                  <option value="">— Select student —</option>
+                  {students.map(st => (
+                    <option key={st.id} value={st.id}>{st.full_name} ({st.student_id})</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Certificate Title / Type */}
+              <div style={s.fg}>
+                <label style={s.label}>Certificate Title / Type *</label>
+                <select style={s.select} value={editForm.reference_type || "manual"} onChange={e => setEF("reference_type", e.target.value)}>
+                  <option value="manual">Certificate of Achievement (Manual)</option>
+                  <option value="module">Certificate of Module Completion</option>
+                  <option value="seminar">Certificate of Seminar Attendance</option>
+                  <option value="assessment">Certificate of Assessment</option>
+                </select>
+                <div style={{ fontSize:11, color:"#888", marginTop:5 }}>
+                  Preview: <strong style={{ color:"#1A2E1A" }}>
+                    {editForm.reference_type === "manual" ? "Certificate of Achievement"
+                      : `Certificate of ${(editForm.reference_type||"manual").charAt(0).toUpperCase() + (editForm.reference_type||"manual").slice(1)}`}
+                  </strong>
+                </div>
+              </div>
+
+              {/* Issue Date */}
+              <div style={s.fg}>
+                <label style={s.label}>Issue Date *</label>
+                <input type="date" style={s.input} value={editForm.issued_at || ""}
+                  max={new Date().toISOString().split("T")[0]}
+                  onChange={e => setEF("issued_at", e.target.value)} />
+              </div>
+
+              {/* Body Text */}
+              <div style={s.fg}>
+                <label style={s.label}>Body Text</label>
+                <textarea style={{...s.textarea, minHeight:80}} value={editForm.body_text || ""} onChange={e => setEF("body_text", e.target.value)}/>
+                <div style={{fontSize:11,color:"#888",marginTop:4}}>
+                  <i className="bi bi-arrow-counterclockwise me-1"/>
+                  <span style={{cursor:"pointer",textDecoration:"underline"}} onClick={()=>setEF("body_text","has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.")}>Reset to default</span>
+                </div>
+              </div>
+
+              {/* Signatories */}
+              <div style={{...s.row, marginBottom:0}}>
+                <div style={{flex:1,...s.fg}}>
+                  <label style={s.label}>Left Signatory Name</label>
+                  <input style={s.input} value={editForm.sig1_name || ""} onChange={e => setEF("sig1_name", e.target.value)} placeholder="GAD Coordinator"/>
+                </div>
+                <div style={{flex:1,...s.fg}}>
+                  <label style={s.label}>Left Signatory Title</label>
+                  <input style={s.input} value={editForm.sig1_title || ""} onChange={e => setEF("sig1_title", e.target.value)} placeholder="Cavite State University"/>
+                </div>
+              </div>
+              <div style={{...s.row, marginBottom:16}}>
+                <div style={{flex:1,...s.fg}}>
+                  <label style={s.label}>Right Signatory Name</label>
+                  <input style={s.input} value={editForm.sig2_name || ""} onChange={e => setEF("sig2_name", e.target.value)} placeholder="GADRC Director"/>
+                </div>
+                <div style={{flex:1,...s.fg}}>
+                  <label style={s.label}>Right Signatory Title</label>
+                  <input style={s.input} value={editForm.sig2_title || ""} onChange={e => setEF("sig2_title", e.target.value)} placeholder="Cavite State University"/>
+                </div>
+              </div>
+
+              {/* Theme Color */}
+              <div style={s.fg}>
+                <label style={s.label}>Theme Color</label>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <input type="color" value={editForm.theme_color || "#2D6A2D"} onChange={e => setEF("theme_color", e.target.value)}
+                    style={{width:48,height:36,border:"1px solid #DDE8DD",borderRadius:6,cursor:"pointer",padding:2}}/>
+                  <div style={{flex:1}}>
+                    {[["#2D6A2D","Forest Green (Default)"],["#1A2E1A","Dark Green"],["#1d4ed8","Blue"],["#7c3aed","Purple"],["#c2410c","Orange"],["#0f766e","Teal"]].map(([c,label])=>(
+                      <span key={c} onClick={()=>setEF("theme_color",c)}
+                        style={{display:"inline-block",width:22,height:22,borderRadius:"50%",background:c,marginRight:6,cursor:"pointer",border:editForm.theme_color===c?"3px solid #000":"2px solid transparent",verticalAlign:"middle"}}
+                        title={label}/>
+                    ))}
+                  </div>
+                  <code style={{fontSize:11,color:"#888"}}>{editForm.theme_color}</code>
+                </div>
+              </div>
+
+              {/* Read-only info */}
+              <div style={{ background:G.wash, borderRadius:6, padding:"10px 14px", fontSize:12, color:G.dark }}>
+                <i className="bi bi-info-circle me-1"/>
+                Certificate Code <strong>{editCert.certificate_code}</strong> cannot be changed.
+              </div>
+            </div>
+            <div style={s.mFooter}>
+              <button style={s.btnSecondary} onClick={() => setEditCert(null)}>Cancel</button>
+              <button style={{ ...s.btnPrimary, opacity: editSaving ? 0.7 : 1 }}
+                onClick={saveEdit} disabled={editSaving}>
+                {editSaving ? "Saving…" : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showAdd && (
         <div style={s.overlay}>
           <div style={s.modal(480)}>
