@@ -11,6 +11,7 @@ import ReportsPage       from "./ReportsPage";
 import StudentsPage      from "./StudentsPage";
 import AnnouncementsPage from "./AnnouncementsPage";
 import AdminProfilePage  from "./AdminProfilePage";
+import ForumPage         from "./Forumpage";
 
 const STYLE = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -27,22 +28,40 @@ const STYLE = `
   .page-anim { animation: fadeSlideIn .18s ease forwards; }
 `;
 
-function Sk({ w="100%", h=14, r=4 }) {
-  return <div style={{ width:w, height:h, borderRadius:r, background:"linear-gradient(90deg,#EBF2EB 25%,#F5F7F5 50%,#EBF2EB 75%)", backgroundSize:"200% 100%", animation:"shimmer 1.3s infinite" }}/>;
+function Sk({ w = "100%", h = 14, r = 4 }) {
+  return (
+    <div style={{
+      width: w, height: h, borderRadius: r,
+      background: "linear-gradient(90deg,#EBF2EB 25%,#F5F7F5 50%,#EBF2EB 75%)",
+      backgroundSize: "200% 100%",
+      animation: "shimmer 1.3s infinite",
+    }}/>
+  );
 }
 
 function PageSkeleton() {
   return (
-    <div style={{ padding:"28px 32px", display:"flex", flexDirection:"column", gap:18 }}>
-      <Sk w={180} h={22} r={4}/> <Sk w={120} h={13} r={3}/>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginTop:6 }}>
-        {[1,2,3,4].map(i=>(
-          <div key={i} style={{ background:"#fff", border:"1px solid #DDE8DD", borderRadius:10, padding:18, boxShadow:"0 1px 3px rgba(26,46,26,.06)" }}>
-            <Sk h={13} w="60%" r={3}/> <div style={{ height:8 }}/> <Sk h={28} w="40%" r={4}/>
+    <div style={{ padding: "28px 32px", display: "flex", flexDirection: "column", gap: 18 }}>
+      <Sk w={180} h={22} r={4}/>
+      <Sk w={120} h={13} r={3}/>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginTop: 6 }}>
+        {[1, 2, 3, 4].map(i => (
+          <div key={i} style={{
+            background: "#fff", border: "1px solid #DDE8DD",
+            borderRadius: 10, padding: 18,
+            boxShadow: "0 1px 3px rgba(26,46,26,.06)",
+          }}>
+            <Sk h={13} w="60%" r={3}/>
+            <div style={{ height: 8 }}/>
+            <Sk h={28} w="40%" r={4}/>
           </div>
         ))}
       </div>
-      <div style={{ background:"#fff", border:"1px solid #DDE8DD", borderRadius:10, height:200, boxShadow:"0 1px 3px rgba(26,46,26,.06)" }}/>
+      <div style={{
+        background: "#fff", border: "1px solid #DDE8DD",
+        borderRadius: 10, height: 200,
+        boxShadow: "0 1px 3px rgba(26,46,26,.06)",
+      }}/>
     </div>
   );
 }
@@ -62,14 +81,21 @@ export default function AdminShell({ onLogout, user }) {
   return (
     <>
       <style>{STYLE}</style>
-      <div style={{ display:"flex", width:"100%", height:"100vh", overflow:"hidden", fontFamily:"'Inter','Segoe UI',system-ui,sans-serif" }}>
+      <div style={{
+        display: "flex", width: "100%", height: "100vh",
+        overflow: "hidden",
+        fontFamily: "'Inter','Segoe UI',system-ui,sans-serif",
+      }}>
 
         <Sidebar active={active} setActive={navigate} onLogout={onLogout} user={user}/>
 
-        <div style={{ flex:1, display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden", minWidth:0 }}>
+        <div style={{
+          flex: 1, display: "flex", flexDirection: "column",
+          height: "100vh", overflow: "hidden", minWidth: 0,
+        }}>
           <Topbar active={active} user={user} onProfileClick={() => setShowProfile(true)}/>
 
-          <main style={{ flex:1, overflowY:"auto", background:"#F5F7F5" }}>
+          <main style={{ flex: 1, overflowY: "auto", background: "#F5F7F5" }}>
             <div className="page-anim" key={active}>
               {pageLoading ? <PageSkeleton/> : (
                 <>
@@ -82,6 +108,7 @@ export default function AdminShell({ onLogout, user }) {
                   {active === "reports"       && <ReportsPage/>}
                   {active === "students"      && <StudentsPage/>}
                   {active === "announcements" && <AnnouncementsPage/>}
+                  {active === "forum"         && <ForumPage/>}
                 </>
               )}
             </div>

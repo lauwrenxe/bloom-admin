@@ -525,24 +525,9 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
     if (!aiPrompt.trim()) { setAiError("Please describe the topic or paste content for the AI to generate questions from."); return; }
     setAiLoading(true); setAiError(""); setAiGenerated([]); setAiSelected([]);
     try {
-      const systemPrompt = `You are an educational assessment expert for a Gender and Development (GAD) e-learning platform called BLOOM at Cavite State University.
-
-CRITICAL RULES — follow these exactly:
-1. Generate EXACTLY ${aiCount} questions — no more, no less.
-2. Return ONLY a raw JSON array. No markdown, no code fences, no explanation, no text before or after the array.
-3. The array must start with [ and end with ].
-4. Each question object must have:
-   - "question_text": string
-   - "question_type": "${aiType}"
-   - "options": array of option objects with "option_text" (string) and "is_correct" (boolean)
-     * For multiple_choice: exactly 4 options, exactly 1 is_correct=true, rest false
-     * For true_false: exactly 2 options ("True" and "False"), exactly 1 is_correct=true
-     * For short_answer: empty array []
-
-EXAMPLE OUTPUT (multiple_choice, 2 questions):
-[{"question_text":"What is gender equality?","question_type":"multiple_choice","options":[{"option_text":"Equal rights for all genders","is_correct":true},{"option_text":"Only for women","is_correct":false},{"option_text":"A legal term only","is_correct":false},{"option_text":"Not relevant today","is_correct":false}]},{"question_text":"What does GAD stand for?","question_type":"multiple_choice","options":[{"option_text":"Gender and Development","is_correct":true},{"option_text":"Growth and Diversity","is_correct":false},{"option_text":"Global Aid Division","is_correct":false},{"option_text":"General Administrative Directive","is_correct":false}]}]
-
-Now generate EXACTLY ${aiCount} ${aiType} questions about the given topic.`;
+      const systemPrompt = `GAD e-learning assessment generator for BLOOM (CvSU). Return ONLY a JSON array of EXACTLY ${aiCount} ${aiType} questions. No markdown, no explanation, no extra text.
+Format: [{"question_text":"...","question_type":"${aiType}","options":[{"option_text":"...","is_correct":true/false}]}]
+Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correct; short_answer=empty options [].`;
 
       const apiKey = import.meta.env.VITE_GROQ_API_KEY;
       if (!apiKey) { setAiError("Groq API key not found. Add VITE_GROQ_API_KEY to your .env file and restart the dev server."); setAiLoading(false); return; }
@@ -552,7 +537,7 @@ Now generate EXACTLY ${aiCount} ${aiType} questions about the given topic.`;
         body: JSON.stringify({
           model: "llama-3.1-8b-instant",
           temperature: 0.4,
-          max_tokens: 6000,
+          max_tokens: 3000,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: `Module: "${module.title}"\n\nTopic/Content: ${aiPrompt.trim()}\n\nGenerate ${aiCount} ${aiType} questions.` },
