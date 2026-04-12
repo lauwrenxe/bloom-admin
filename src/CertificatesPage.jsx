@@ -570,13 +570,13 @@ function BadgesTab() {
     setBadges(data || []);
   };
 
-  const openAdd = () => { setEditB(null); setForm({ badge_type: "achievement" }); setError(""); setShowAdd(true); };
+  const openAdd = () => { setEditB(null); setForm({ badge_type: "completion" }); setError(""); setShowAdd(true); };
   const openEdit = (b) => { setEditB(b); setForm({ ...b }); setError(""); setShowAdd(true); };
 
   const save = async () => {
     if (!form.name?.trim()) { setError("Name is required."); return; }
     setSaving(true); setError("");
-    const payload = { name: form.name.trim(), description: form.description?.trim() || null, badge_type: form.badge_type || "achievement", icon_url: form.icon_url?.trim() || null };
+    const payload = { name: form.name.trim(), description: form.description?.trim() || null, badge_type: form.badge_type || "completion", icon_url: form.icon_url?.trim() || null };
     let err;
     if (editB) {
       ({ error: err } = await supabase.from("badges").update(payload).eq("id", editB.id));
@@ -595,7 +595,7 @@ function BadgesTab() {
     reload();
   };
 
-  const BADGE_TYPES = ["achievement", "completion", "participation", "excellence", "special"];
+  const BADGE_TYPES = ["completion", "score", "attendance", "streak", "special"];
 
   return (
     <div>
@@ -658,7 +658,7 @@ function BadgesTab() {
               <div style={s.row}>
                 <div style={{ ...s.fg, flex: 1 }}>
                   <label style={s.label}>Badge Type</label>
-                  <select style={s.select} value={form.badge_type || "achievement"} onChange={e => setF("badge_type", e.target.value)}>
+                  <select style={s.select} value={form.badge_type || "completion"} onChange={e => setF("badge_type", e.target.value)}>
                     {BADGE_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                   </select>
                 </div>

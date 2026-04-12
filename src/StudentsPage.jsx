@@ -204,7 +204,7 @@ export default function StudentsPage() {
 
       {/* Toolbar */}
       <div style={s.toolbar}>
-        <input style={s.searchBar} placeholder="Search by name, ID, or email…" value={search} onChange={e => setSearch(e.target.value)} />
+        <input style={{...s.searchBar, color:"#1A2E1A"}} placeholder="Search by name, ID, or email…" value={search} onChange={e => setSearch(e.target.value)} />
         <select style={s.select} value={filter} onChange={e => setFilter(e.target.value)}>
           <option value="all">All Students</option>
           <option value="active">Active Only</option>
@@ -223,15 +223,15 @@ export default function StudentsPage() {
       </div>
 
       {/* Table */}
-      {loading ? (
+      {mainTab === "admins" ? null : mainTab === "students" && loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading students…</div>
-      ) : filtered.length === 0 ? (
+      ) : mainTab === "students" && filtered.length === 0 ? (
         <div style={s.emptyBox}>
           <div style={{ fontSize: 40, marginBottom: 10 }}><i className="bi bi-person me-1"/>‍<i className="bi bi-mortarboard me-1"/></div>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No students found</div>
           <div style={{ fontSize: 13, color: "#aaa" }}>Try adjusting your search or filters</div>
         </div>
-      ) : (
+      ) : mainTab === "students" ? (
         <div style={{ overflowX: "auto" }}>
           <table style={s.table}>
             <thead>
@@ -296,7 +296,7 @@ export default function StudentsPage() {
             </tbody>
           </table>
         </div>
-      )}
+      ) : null}
 
       {/* Detail Modal */}
       {/* Admins tab */}

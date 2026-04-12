@@ -5,7 +5,7 @@ const TODAY    = new Date().toISOString().split("T")[0];
 const MONTH_AGO= new Date(Date.now()-30*86400000).toISOString().split("T")[0];
 const PRESETS  = [{label:"Today",days:0},{label:"This Week",days:7},{label:"This Month",days:30},{label:"This Year",days:365},{label:"All Time",days:-1}];
 
-function toISO(d,end=false){if(!d)return null;return end?`${d}T23:59:59.999Z`:`${d}T00:00:00.000Z`;}
+function toISO(d,end=false){if(!d)return null;return end?`${d}T23:59:59.999+08:00`:`${d}T00:00:00.000+08:00`;}
 function fmt(iso){if(!iso)return"—";const s=iso.endsWith("Z")||iso.includes("+")?iso:iso+"Z";return new Date(s).toLocaleString("en-PH",{timeZone:"Asia/Manila",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:true});}
 function loadChart(){return new Promise(r=>{if(window.Chart){r();return;}const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js";s.onload=r;document.head.appendChild(s);});}
 
@@ -235,10 +235,10 @@ export default function DashboardPage(){
             </div>
             <div className="d-flex align-items-center gap-1 bg-white border rounded px-2 py-1" style={{fontSize:12}}>
               <i className="bi bi-calendar3 text-muted" style={{fontSize:13}}/>
-              <input type="date" className="border-0 p-0 bg-transparent" style={{fontSize:11,width:110,outline:"none"}}
+              <input type="date" className="border-0 p-0 bg-transparent" style={{fontSize:11,width:110,outline:"none",color:"#1A2E1A",colorScheme:"light"}}
                 value={fromDate} max={toDate} onChange={e=>{const v=e.target.value;setFromDate(v);setPreset("Custom");fetchAll(v,toDate,true);}}/>
               <span className="text-muted">—</span>
-              <input type="date" className="border-0 p-0 bg-transparent" style={{fontSize:11,width:110,outline:"none"}}
+              <input type="date" className="border-0 p-0 bg-transparent" style={{fontSize:11,width:110,outline:"none",color:"#1A2E1A",colorScheme:"light"}}
                 value={toDate} min={fromDate} max={TODAY} onChange={e=>{const v=e.target.value;setToDate(v);setPreset("Custom");fetchAll(fromDate,v,true);}}/>
             </div>
 
