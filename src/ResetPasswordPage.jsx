@@ -28,20 +28,22 @@ export default function ResetPasswordPage() {
   }, []);
 
   const submit = async () => {
-    setError(""); setPassErr(false); setConfirmErr(false);
+  setError(""); setPassErr(false); setConfirmErr(false);
 
-    if (!password) { setPassErr(true); setError("Please enter a new password."); return; }
-    if (password.length < 6) { setPassErr(true); setError("Password must be at least 6 characters."); return; }
-    if (!confirm) { setConfirmErr(true); setError("Please confirm your password."); return; }
-    if (password !== confirm) { setConfirmErr(true); setError("Passwords do not match."); return; }
+  if (!password) { setPassErr(true); setError("Please enter a new password."); return; }
+  if (password.length < 6) { setPassErr(true); setError("Password must be at least 6 characters."); return; }
+  if (!confirm) { setConfirmErr(true); setError("Please confirm your password."); return; }
+  if (password !== confirm) { setConfirmErr(true); setError("Passwords do not match."); return; }
 
-    setLoading(true);
-    const { error: updateError } = await supabase.auth.updateUser({ password });
-    setLoading(false);
+  setLoading(true);
+  const { error: updateError } = await supabase.auth.updateUser({ password });
+  if (updateError) { setError(updateError.message); setLoading(false); return; }
 
-    if (updateError) { setError(updateError.message); return; }
-    setDone(true);
-  };
+  // Sign out so app doesn't auto-redirect to dashboard
+  await supabase.auth.signOut();
+  setLoading(false);
+  setDone(true);
+};
 
   return (
     <div className="min-vh-100 d-flex align-items-center justify-content-center"
