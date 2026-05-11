@@ -162,12 +162,81 @@ const ACT_COLORS=["#E8F5E9","#E3F2FD","#FFF3E0","#FCE4EC","#F3E5F5","#E0F7FA","#
 const ACT_ICON_COLORS=["#2D6A2D","#1565C0","#E65100","#C62828","#6A1B9A","#00695C","#827717","#BF360C"];
 
 /* ── MAIN ───────────────────────────────────────────────────── */
+function MiniCalendar({date, setDate, events, announcements}) {
+  const year=date.getFullYear(), month=date.getMonth();
+  const firstDay=new Date(year,month,1).getDay();
+  const daysInMonth=new Date(year,month+1,0).getDate();
+  const today=new Date();
+  const eventDays=new Set((events||[]).map(e=>{
+    const d=e.scheduled_start?new Date(e.scheduled_start):null;
+    return d&&d.getFullYear()===year&&d.getMonth()===month?d.getDate():null;
+  }).filter(Boolean));
+  const announceDays=new Set((announcements||[]).map(a=>{
+    const d=a.published_at?new Date(a.published_at):null;
+    return d&&d.getFullYear()===year&&d.getMonth()===month?d.getDate():null;
+  }).filter(Boolean));
+
+  const prevMonth=()=>setDate(new Date(year,month-1,1));
+  const nextMonth=()=>setDate(new Date(year,month+1,1));
+
+  const days=["Su","Mo","Tu","We","Th","Fr","Sa"];
+  const cells=[];
+  for(let i=0;i<firstDay;i++) cells.push(null);
+  for(let d=1;d<=daysInMonth;d++) cells.push(d);
+
+  return(
+    <div style={{userSelect:"none"}}>
+      {/* Month nav */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <button onClick={prevMonth} style={{background:"none",border:"none",cursor:"pointer",color:"#1A2E1A",fontSize:16,padding:"2px 8px",borderRadius:6}}>‹</button>
+        <div style={{fontWeight:700,fontSize:13,color:"#1A2E1A"}}>
+          {date.toLocaleDateString("en-PH",{month:"long",year:"numeric"})}
+        </div>
+        <button onClick={nextMonth} style={{background:"none",border:"none",cursor:"pointer",color:"#1A2E1A",fontSize:16,padding:"2px 8px",borderRadius:6}}>›</button>
+      </div>
+      {/* Day headers */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+        {days.map(d=><div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:"#aaa",padding:"2px 0"}}>{d}</div>)}
+      </div>
+      {/* Day cells */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+        {cells.map((d,i)=>{
+          if(!d) return <div key={`e${i}`}/>;
+          const isToday=d===today.getDate()&&month===today.getMonth()&&year===today.getFullYear();
+          const hasEvent=eventDays.has(d);
+          const hasAnnounce=announceDays.has(d);
+          return(
+            <div key={d} style={{textAlign:"center",padding:"5px 2px",borderRadius:6,fontSize:12,fontWeight:isToday?800:400,background:isToday?"#2D6A2D":hasEvent?"#E8F5E9":hasAnnounce?"#fffbeb":"transparent",color:isToday?"#fff":hasEvent?"#1A2E1A":hasAnnounce?"#92400e":"#444",position:"relative",cursor:hasEvent?"pointer":"default"}}>
+              {d}
+              {!isToday&&(hasEvent||hasAnnounce)&&(
+                <div style={{display:"flex",justifyContent:"center",gap:2,marginTop:2}}>
+                  {hasEvent&&<div style={{width:4,height:4,borderRadius:"50%",background:"#2D6A2D"}}/>}
+                  {hasAnnounce&&<div style={{width:4,height:4,borderRadius:"50%",background:"#f59e0b"}}/>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {/* Legend */}
+      <div style={{display:"flex",gap:12,marginTop:10,fontSize:10,color:"#888",flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:10,height:10,borderRadius:2,background:"#2D6A2D"}}/> Today</div>
+        <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:6,height:6,borderRadius:"50%",background:"#2D6A2D"}}/> Event</div>
+        <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:6,height:6,borderRadius:"50%",background:"#f59e0b"}}/> Announcement</div>
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage(){
   const [loading,setLoading]=useState(true),[refreshing,setRefreshing]=useState(false);
   const [stats,setStats]=useState({}),[modStats,setModStats]=useState([]),[semStats,setSemStats]=useState([]);
   const [leaderboard,setLeaderboard]=useState([]),[activity,setActivity]=useState([]);
   const [certStats,setCertStats]=useState({}),[assessStats,setAssessStats]=useState({});
   const [recentMods,setRecentMods]=useState([]),[weeklyAct,setWeeklyAct]=useState([]);
+  const [upcomingEvents,setUpcomingEvents]=useState([]);
+  const [calDate,setCalDate]=useState(new Date());
+  const [calAnnouncements,setCalAnnouncements]=useState([]);
   const [fromDate,setFromDate]=useState(MONTH_AGO),[toDate,setToDate]=useState(TODAY),[preset,setPreset]=useState("This Month");
 
   // applyPreset is defined after fetchAll below
@@ -180,9 +249,26 @@ export default function DashboardPage(){
   const fetchLeaderboard=useCallback(async(from,to)=>{let q=supabase.from("student_badges").select("user_id,awarded_at,profiles(full_name)");if(from)q=q.gte("awarded_at",toISO(from));if(to)q=q.lte("awarded_at",toISO(to,true));const{data}=await q;const map={};(data??[]).forEach((r,i)=>{const uid=r.user_id??`u${i}`;if(!map[uid])map[uid]={uid,name:r.profiles?.full_name??"—",count:0};map[uid].count++;});setLeaderboard(Object.values(map).sort((a,b)=>b.count-a.count).slice(0,5));},[]);
   const fetchCertStats=useCallback(async(from,to)=>{let q=supabase.from("certificates").select("reference_type,is_revoked,issued_at");if(from)q=q.gte("issued_at",toISO(from));if(to)q=q.lte("issued_at",toISO(to,true));const{data}=await q;if(!data)return;const byType={},valid=data.filter(c=>!c.is_revoked).length,revoked=data.length-valid;data.forEach(c=>{const t=c.reference_type??"manual";byType[t]=(byType[t]??0)+1;});setCertStats({byType,valid,revoked,total:data.length});},[]);
   const fetchAssessStats=useCallback(async(from,to)=>{let q=supabase.from("assessment_attempts").select("score,passed,submitted_at");if(from)q=q.gte("submitted_at",toISO(from));if(to)q=q.lte("submitted_at",toISO(to,true));const{data}=await q;if(!data||!data.length){setAssessStats({});return;}const passed=data.filter(a=>a.passed).length,avg=Math.round(data.reduce((s,a)=>s+(a.score??0),0)/data.length);setAssessStats({total:data.length,passed,failed:data.length-passed,avg,passRate:Math.round((passed/data.length)*100)});},[]);
+  const fetchCalAnnouncements=useCallback(async()=>{
+    const {data}=await supabase.from("announcements")
+      .select("id,title,published_at,expires_at,is_pinned")
+      .not("published_at",  "is", null)
+      .order("published_at",{ascending:false})
+      .limit(50);
+    setCalAnnouncements(data||[]);
+  },[]);
+
+  const fetchUpcomingEvents=useCallback(async()=>{
+    // Fetch all seminars (not just upcoming) so mini calendar dots are accurate
+    const {data}=await supabase.from("seminars")
+      .select("id,title,scheduled_start,status,venue")
+      .order("scheduled_start",{ascending:true});
+    setUpcomingEvents(data||[]);
+  },[]);
+
   const fetchWeeklyAct=useCallback(async(from,to)=>{const end=to?new Date(to):new Date();const days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],result=[];for(let i=6;i>=0;i--){const d=new Date(end);d.setDate(d.getDate()-i);const s=new Date(d);s.setHours(0,0,0,0);const e=new Date(d);e.setHours(23,59,59,999);const{count}=await supabase.from("activity_logs").select("*",{count:"exact",head:true}).gte("created_at",s.toISOString()).lte("created_at",e.toISOString());result.push({label:days[d.getDay()],value:count??0});}setWeeklyAct(result);},[]);
 
-  const fetchAll=useCallback(async(from,to,isRef=false)=>{isRef?setRefreshing(true):setLoading(true);await Promise.allSettled([fetchStats(from,to),fetchModStats(),fetchSemStats(),fetchLeaderboard(from,to),fetchActivity(from,to),fetchCertStats(from,to),fetchAssessStats(from,to),fetchRecentMods(from,to),fetchWeeklyAct(from,to)]);isRef?setRefreshing(false):setLoading(false);},[fetchStats,fetchModStats,fetchSemStats,fetchLeaderboard,fetchActivity,fetchCertStats,fetchAssessStats,fetchRecentMods,fetchWeeklyAct]); // eslint-disable-line
+  const fetchAll=useCallback(async(from,to,isRef=false)=>{isRef?setRefreshing(true):setLoading(true);await Promise.allSettled([fetchStats(from,to),fetchModStats(),fetchSemStats(),fetchLeaderboard(from,to),fetchActivity(from,to),fetchCertStats(from,to),fetchAssessStats(from,to),fetchRecentMods(from,to),fetchWeeklyAct(from,to),fetchUpcomingEvents(),fetchCalAnnouncements()]);isRef?setRefreshing(false):setLoading(false);},[fetchStats,fetchModStats,fetchSemStats,fetchLeaderboard,fetchActivity,fetchCertStats,fetchAssessStats,fetchRecentMods,fetchWeeklyAct,fetchUpcomingEvents,fetchCalAnnouncements]); // eslint-disable-line
 
   const applyPreset=useCallback((p)=>{
     setPreset(p.label);
@@ -376,6 +462,58 @@ export default function DashboardPage(){
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Calendar + Upcoming Events Row ── */}
+        <div className="row g-3 mb-3">
+          {/* Mini Calendar */}
+          <div className="col-lg-4">
+            <div className="card dash-chart-card h-100">
+              <div className="card-body p-3">
+                <SH title="Calendar" icon="bi-calendar3"/>
+                <MiniCalendar date={calDate} setDate={setCalDate} events={upcomingEvents} announcements={calAnnouncements}/>
+              </div>
+            </div>
+          </div>
+          {/* Upcoming Events */}
+          <div className="col-lg-8">
+            <div className="card dash-chart-card h-100">
+              <div className="card-body p-3">
+                <SH title="Upcoming Events & Seminars" icon="bi-calendar-event"/>
+                {upcomingEvents.filter(ev=>ev.scheduled_start&&new Date(ev.scheduled_start)>=new Date()).length===0?(
+                  <Empty icon="bi-calendar-x" msg="No upcoming events"/>
+                ):(
+                  <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:8}}>
+                    {upcomingEvents.filter(ev=>ev.scheduled_start&&new Date(ev.scheduled_start)>=new Date()).slice(0,6).map(ev=>{
+                      const dt=ev.scheduled_start?new Date(ev.scheduled_start):null;
+                      const isToday=dt&&new Date().toDateString()===dt.toDateString();
+                      const isTomorrow=dt&&new Date(Date.now()+86400000).toDateString()===dt.toDateString();
+                      const dayLabel=isToday?"Today":isTomorrow?"Tomorrow":dt?dt.toLocaleDateString("en-PH",{month:"short",day:"numeric",weekday:"short"}):"—";
+                      const timeLabel=dt?dt.toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit",hour12:true}):"";
+                      return(
+                        <div key={ev.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",background:isToday?"#f0fdf4":"#fafafa",borderRadius:10,border:`1px solid ${isToday?"#86efac":"#e5e7eb"}`}}>
+                          <div style={{minWidth:48,textAlign:"center",background:isToday?"#2D6A2D":"#f3f4f6",borderRadius:8,padding:"6px 4px"}}>
+                            <div style={{fontSize:11,fontWeight:800,color:isToday?"#fff":"#666",textTransform:"uppercase",letterSpacing:.5}}>{dt?dt.toLocaleDateString("en-PH",{month:"short"}):"—"}</div>
+                            <div style={{fontSize:20,fontWeight:900,color:isToday?"#fff":"#1A2E1A",lineHeight:1}}>{dt?dt.getDate():"—"}</div>
+                          </div>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13,fontWeight:700,color:"#1A2E1A",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.title}</div>
+                            <div style={{fontSize:11,color:"#888",marginTop:2}}>
+                              <i className="bi bi-clock me-1"/>{dayLabel}{timeLabel?` · ${timeLabel}`:""}
+                              {ev.venue&&<><i className="bi bi-geo-alt ms-2 me-1"/>{ev.venue}</>}
+                            </div>
+                          </div>
+                          <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:8,background:ev.status==="upcoming"?"#dbeafe":ev.status==="ongoing"?"#dcfce7":"#f3f4f6",color:ev.status==="upcoming"?"#1d4ed8":ev.status==="ongoing"?"#16a34a":"#666",whiteSpace:"nowrap",textTransform:"uppercase"}}>
+                            {ev.status||"upcoming"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           </div>

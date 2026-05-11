@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
 
 const G = {
-  dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
-  light: "#4CAF50", pale:  "#C8E6C9", wash:  "#E8F5E9",
-  cream: "#F5F7F5", white: "#FFFFFF",
+  dark: "#2d4a18", mid: "#3a5a20", base: "#5a7a3a",
+  light: "#8ab060", pale: "#b5cc8e", wash: "#e8f2d8",
+  cream: "#f6f9f0", white: "#fafdf6",
 };
 
 const EVENT_COLORS = ["#5a7a3a", "#2563eb", "#dc2626", "#f59e0b", "#7c3aed", "#0891b2"];
@@ -16,19 +16,19 @@ function formatDate(iso) {
 }
 
 const s = {
-  page:    { padding: "28px 32px", fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", minHeight: "100vh" },
+  page:    { padding: "28px 32px", fontFamily: "'Segoe UI', system-ui, sans-serif", background: G.cream, minHeight: "100vh" },
   header:  { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 },
   title:   { fontSize: 22, fontWeight: 800, color: G.dark, margin: 0 },
-  addBtn:  { padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  addBtn:  { padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
   grid:    { display: "grid", gridTemplateColumns: "1fr 340px", gap: 20, alignItems: "start" },
-  calBox:  { background: "#fff", borderRadius: 10, border: "1px solid #DDE8DD", overflow: "hidden", boxShadow: "0 2px 8px rgba(0,0,0,0.05)" },
+  calBox:  { background: "#fff", borderRadius: 16, border: `1px solid ${G.wash}`, overflow: "hidden", boxShadow: "0 2px 8px rgba(0,0,0,0.05)" },
   calHdr:  { background: G.dark, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" },
   calNav:  { background: "none", border: "none", color: "#fff", fontSize: 18, cursor: "pointer", padding: "4px 8px", borderRadius: 6 },
   calMonth:{ fontSize: 16, fontWeight: 700, color: "#fff" },
   dayGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)" },
   dayHdr:  { padding: "10px 0", textAlign: "center", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase" },
-  dayCell: (today, otherMonth) => ({
-    minHeight: 72, padding: "6px 4px", border: "1px solid #DDE8DD", cursor: "pointer",
+  dayCell: (today, otherMonth, hasEvent) => ({
+    minHeight: 72, padding: "6px 4px", border: `1px solid ${G.wash}`, cursor: "pointer",
     background: today ? G.wash : "#fff",
     opacity: otherMonth ? 0.35 : 1,
     transition: "background .1s",
@@ -36,22 +36,22 @@ const s = {
   dayNum:  (today) => ({ fontSize: 12, fontWeight: today ? 800 : 500, color: today ? G.dark : "#555", marginBottom: 3, display: "block", textAlign: "center" }),
   eventDot:{ fontSize: 10, padding: "1px 5px", borderRadius: 4, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "#fff", fontWeight: 600 },
   sidebar: { display: "flex", flexDirection: "column", gap: 16 },
-  eventCard:{ background: "#fff", borderRadius: 10, padding: "14px 16px", border: "1px solid #DDE8DD", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" },
+  eventCard:{ background: "#fff", borderRadius: 12, padding: "14px 16px", border: `1px solid ${G.wash}`, boxShadow: "0 1px 4px rgba(0,0,0,0.04)" },
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
-  modal:   { background: "#fff", borderRadius: 10, width: "100%", maxWidth: 520, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
+  modal:   { background: "#fff", borderRadius: 16, width: "100%", maxWidth: 520, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
   mHeader: { padding: "20px 24px 16px", borderBottom: `1px solid ${G.wash}`, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#fff", zIndex: 1 },
   mTitle:  { fontSize: 17, fontWeight: 700, color: G.dark },
   mBody:   { padding: "20px 24px" },
   mFooter: { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
   label:   { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
-  input:   { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:  { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  textarea:{ width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 70 },
+  input:   { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:  { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  textarea:{ width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 70 },
   fg:      { marginBottom: 16 },
   row:     { display: "flex", gap: 12 },
-  btnPrimary:  { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  btnSecondary:{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 },
-  btnDanger:   { padding: "7px 12px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12 },
+  btnPrimary:  { padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnSecondary:{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 },
+  btnDanger:   { padding: "7px 12px", background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 12 },
   iconBtn: (c) => ({ background: "none", border: "none", cursor: "pointer", color: c || "#999", fontSize: 14, padding: "4px 6px", borderRadius: 6 }),
   tag:    (c) => ({ display: "inline-flex", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: c + "22", color: c }),
 };
@@ -69,19 +69,64 @@ export default function CalendarPage() {
   const [error, setError]     = useState("");
   const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+  const mergeAllEvents = async () => {
+    // Fetch from events table (manually created)
+    const { data: evData } = await supabase.from("events").select("*").order("start_date");
+    // Fetch from seminars table
+    const { data: semData } = await supabase.from("seminars")
+      .select("id, title, scheduled_start, scheduled_end, status, venue, description")
+      .order("scheduled_start", { ascending: true });
+    // Fetch published announcements
+    const { data: annData } = await supabase.from("announcements")
+      .select("id, title, body, content, published_at, is_pinned")
+      .not("published_at", "is", null)
+      .order("published_at", { ascending: false });
+
+    // Normalize seminars to event shape
+    const semEvents = (semData || []).map(s => ({
+      id: `sem_${s.id}`,
+      title: s.title,
+      start_date: s.scheduled_start?.slice(0, 10) || "",
+      end_date: s.scheduled_end?.slice(0, 10) || s.scheduled_start?.slice(0, 10) || "",
+      description: s.description || "",
+      location: s.venue || "",
+      color_hex: "#2D6A2D",
+      event_type: "seminar",
+      _source: "seminar",
+      _status: s.status,
+    }));
+
+    // Normalize announcements to event shape
+    const annEvents = (annData || []).map(a => ({
+      id: `ann_${a.id}`,
+      title: `📢 ${a.title}`,
+      start_date: a.published_at?.slice(0, 10) || "",
+      end_date: a.published_at?.slice(0, 10) || "",
+      description: a.body || a.content || "",
+      color_hex: "#f59e0b",
+      event_type: "announcement",
+      _source: "announcement",
+      is_pinned: a.is_pinned,
+    }));
+
+    const all = [...(evData || []), ...semEvents, ...annEvents]
+      .sort((a, b) => (a.start_date || "").localeCompare(b.start_date || ""));
+    return all;
+  };
+
   useEffect(() => {
     let active = true;
     (async () => {
       setLoading(true);
-      const { data } = await supabase.from("events").select("*").order("start_date");
-      if (active) { setEvents(data || []); setLoading(false); }
+      const all = await mergeAllEvents();
+      if (active) { setEvents(all); setLoading(false); }
     })();
     return () => { active = false; };
   }, []);
 
   const reload = async () => {
-    const { data } = await supabase.from("events").select("*").order("start_date");
-    setEvents(data || []);
+    const all = await mergeAllEvents();
+    setEvents(all);
   };
 
   const openAdd = (date) => {
@@ -155,8 +200,8 @@ export default function CalendarPage() {
     <div style={s.page}>
       <div style={s.header}>
         <div>
-          <div style={s.title}><i className="bi bi-calendar3 me-1"/> Calendar</div>
-          <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{events.length} events total</div>
+          <div style={s.title}>📅 Calendar</div>
+          <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{events.filter(e=>!e._source).length} custom · {events.filter(e=>e._source==="seminar").length} seminars · {events.filter(e=>e._source==="announcement").length} announcements</div>
         </div>
         <button style={s.addBtn} onClick={() => openAdd(todayStr)}>＋ New Event</button>
       </div>
@@ -195,25 +240,30 @@ export default function CalendarPage() {
 
         {/* Sidebar */}
         <div style={s.sidebar}>
-          <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}><i className="bi bi-calendar-event me-1"/> Upcoming Events</div>
+          <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}>📆 Upcoming Events</div>
           {loading ? <div style={{ color: "#aaa", fontSize: 13 }}>Loading…</div>
             : upcoming.length === 0 ? <div style={{ color: "#aaa", fontSize: 13 }}>No upcoming events</div>
             : upcoming.map(ev => (
               <div key={ev.id} style={{ ...s.eventCard, borderLeft: `4px solid ${ev.color_hex || G.base}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}>{ev.title}</div>
-                    <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>
+                    <div style={{ fontWeight: 700, color: G.dark, fontSize: 13 }}>{ev.title}</div>
+                    <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>
                       {formatDate(ev.start_date)}{ev.end_date && ev.end_date !== ev.start_date ? ` – ${formatDate(ev.end_date)}` : ""}
                     </div>
-                    <div style={{ marginTop: 6 }}>
-                      <span style={s.tag(ev.color_hex || G.base)}>{ev.event_type}</span>
+                    {ev.location && <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}><i className="bi bi-geo-alt me-1"/>{ev.location}</div>}
+                    <div style={{ marginTop: 5, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      <span style={{ ...s.tag(ev.color_hex || G.base), fontSize: 10 }}>{ev._source === "seminar" ? "🎓 Seminar" : ev._source === "announcement" ? "📢 Announcement" : ev.event_type}</span>
+                      {ev._status && <span style={{ ...s.tag("#888"), fontSize: 10 }}>{ev._status}</span>}
+                      {ev.is_pinned && <span style={{ ...s.tag("#f59e0b"), fontSize: 10 }}>📌 Pinned</span>}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 2 }}>
-                    <button style={s.iconBtn(G.base)} onClick={() => openEdit(ev)}><i className="bi bi-pencil me-1"/></button>
-                    <button style={s.iconBtn("#dc2626")} onClick={() => del(ev)}><i className="bi bi-trash me-1"/></button>
-                  </div>
+                  {!ev._source && (
+                    <div style={{ display: "flex", gap: 2 }}>
+                      <button style={s.iconBtn(G.base)} onClick={() => openEdit(ev)}>✏️</button>
+                      <button style={s.iconBtn("#dc2626")} onClick={() => del(ev)}>🗑️</button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))
@@ -227,10 +277,10 @@ export default function CalendarPage() {
           <div style={s.modal}>
             <div style={s.mHeader}>
               <span style={s.mTitle}>{editEvent ? "Edit Event" : "New Event"}</span>
-              <button style={s.iconBtn()} onClick={() => setShowModal(false)}>×</button>
+              <button style={s.iconBtn()} onClick={() => setShowModal(false)}>✕</button>
             </div>
             <div style={s.mBody}>
-              {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
+              {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
               <div style={s.fg}>
                 <label style={s.label}>Title *</label>
                 <input style={s.input} value={form.title || ""} onChange={e => setF("title", e.target.value)} autoFocus />
@@ -266,8 +316,8 @@ export default function CalendarPage() {
                   <input style={s.input} type="date" value={form.end_date || ""} onChange={e => setF("end_date", e.target.value)} />
                 </div>
               </div>
-              <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-                <i className="bi bi-megaphone me-1"/> Events are visible to all students in the mobile app.
+              <div style={{ background: G.wash, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: G.dark }}>
+                📢 Events are visible to all students in the mobile app.
               </div>
             </div>
             <div style={s.mFooter}>

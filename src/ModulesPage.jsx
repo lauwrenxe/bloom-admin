@@ -220,7 +220,16 @@ function ResultsPanel({ assessment }) {
     const { data } = await supabase.from("assessment_attempts")
       .select("*, profiles(full_name,student_id,email)")
       .eq("assessment_id",assessment.id).order("submitted_at",{ascending:false});
-    setAttempts(data||[]); setLoading(false);
+    // Flag attempts that have ungraded short answer questions
+    const attemptsWithFlags = await Promise.all((data||[]).map(async (attempt) => {
+      const { count } = await supabase.from("assessment_answers")
+        .select("id", { count: "exact", head: true })
+        .eq("attempt_id", attempt.id)
+        .eq("is_graded", false)
+        .not("questions", "is", null);
+      return { ...attempt, has_ungraded: (count || 0) > 0 };
+    }));
+    setAttempts(attemptsWithFlags); setLoading(false);
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{ load(); },[assessment.id]);
@@ -230,6 +239,41 @@ function ResultsPanel({ assessment }) {
       .select("*, questions(question_text,question_type), selected_option:question_options!selected_option_id(option_text,is_correct)")
       .eq("attempt_id",attempt.id);
     setSelected({...attempt,answers:answers||[]});
+  };
+
+  const gradeAnswer = async (answerId, isCorrect, attempt) => {
+    const manualScore = isCorrect ? 1 : 0;
+    await supabase.from("assessment_answers")
+      .update({ manual_score: manualScore, is_graded: true })
+      .eq("id", answerId);
+
+    // Update local state immediately
+    setSelected(prev => ({
+      ...prev,
+      answers: prev.answers.map(a => a.id === answerId
+        ? { ...a, manual_score: manualScore, is_graded: true }
+        : a
+      )
+    }));
+
+    // Recalculate total score for this attempt
+    const updatedAnswers = selected.answers.map(a =>
+      a.id === answerId ? { ...a, manual_score: manualScore, is_graded: true } : a
+    );
+    const totalQ = updatedAnswers.length;
+    const correctCount = updatedAnswers.filter(a => {
+      if (a.questions?.question_type === "short_answer") return a.id === answerId ? isCorrect : a.manual_score === 1;
+      return a.selected_option?.is_correct;
+    }).length;
+    const newScore = totalQ > 0 ? Math.round((correctCount / totalQ) * 100) : 0;
+    const passed = newScore >= (assessment.passing_score || 75);
+
+    await supabase.from("assessment_attempts")
+      .update({ score: newScore, passed })
+      .eq("id", attempt.id);
+
+    // Update attempts list
+    setAttempts(prev => prev.map(a => a.id === attempt.id ? { ...a, score: newScore, passed } : a));
   };
 
   const total=attempts.length, passed=attempts.filter(a=>a.passed).length;
@@ -287,7 +331,7 @@ function ResultsPanel({ assessment }) {
                     <span style={{fontSize:17,fontWeight:900,color:a.passed?"#16a34a":"#dc2626"}}>{a.score??0}%</span>
                     <span style={{fontSize:11,color:"#aaa",marginLeft:4}}>/ {assessment.passing_score||75}% to pass</span>
                   </td>
-                  <td style={s.td}><span style={s.tag(a.passed?"green":"red")}>{a.passed?"Passed":"Failed"}</span></td>
+                  <td style={s.td}><span style={s.tag(a.passed?"green":"red")}>{a.passed?"Passed":"Failed"}</span>{a.has_ungraded&&<span style={{...s.tag("orange"),marginLeft:4}}><i className="bi bi-hourglass-split me-1"/>Needs Grading</span>}</td>
                   <td style={s.td}>{formatDate(a.submitted_at)}</td>
                   <td style={s.td}>
                     <button style={s.btnSm(G.wash,G.dark)} onClick={()=>loadDetail(a)}>
@@ -326,7 +370,39 @@ function ResultsPanel({ assessment }) {
                         <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>Q{i+1} · {QTYPE[ans.questions?.question_type]}</div>
                         <div style={{fontSize:14,fontWeight:600,color:G.dark,marginBottom:8}}>{ans.questions?.question_text}</div>
                         {isShort?(
-                          <div style={{fontSize:13,color:"#555",fontStyle:"italic"}}><i className="bi bi-pencil me-1"/>Short answer — review manually</div>
+                          <div>
+                            {/* Student's text response */}
+                            <div style={{background:"#fff",border:`1px solid ${G.pale}`,borderRadius:6,padding:"10px 14px",fontSize:13,color:G.dark,marginBottom:10,lineHeight:1.6}}>
+                              <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}><i className="bi bi-chat-left-text me-1"/>Student Response:</div>
+                              <div style={{fontStyle: ans.text_answer ? "normal" : "italic", color: ans.text_answer ? G.dark : "#aaa"}}>
+                                {ans.text_answer || "No response provided"}
+                              </div>
+                            </div>
+                            {/* Grading buttons */}
+                            {ans.is_graded ? (
+                              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                                <span style={s.tag(ans.manual_score===1?"green":"red")}>
+                                  <i className={`bi bi-${ans.manual_score===1?"check-circle":"x-circle"} me-1`}/>
+                                  {ans.manual_score===1?"Marked Correct":"Marked Incorrect"}
+                                </span>
+                                <button style={{...s.btnSm(G.wash,G.dark),fontSize:11}} onClick={()=>gradeAnswer(ans.id, ans.manual_score!==1, selected)}>
+                                  <i className="bi bi-arrow-counterclockwise"/>Change
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                                <div style={{fontSize:11,color:"#888",marginRight:4}}><i className="bi bi-pencil-square me-1"/>Grade this response:</div>
+                                <button style={{padding:"5px 14px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:6,color:"#16a34a",cursor:"pointer",fontWeight:700,fontSize:12}}
+                                  onClick={()=>gradeAnswer(ans.id, true, selected)}>
+                                  <i className="bi bi-check-circle me-1"/>Correct
+                                </button>
+                                <button style={{padding:"5px 14px",background:"#fff5f5",border:"1px solid #fca5a5",borderRadius:6,color:"#dc2626",cursor:"pointer",fontWeight:700,fontSize:12}}
+                                  onClick={()=>gradeAnswer(ans.id, false, selected)}>
+                                  <i className="bi bi-x-circle me-1"/>Incorrect
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         ):(
                           <div style={{display:"flex",alignItems:"center",gap:8}}>
                             <span style={s.tag(isCorrect?"green":"red")}>
