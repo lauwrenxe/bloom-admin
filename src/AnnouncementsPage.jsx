@@ -60,12 +60,54 @@ function formatDate(iso) {
   const utcStr = iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z";
   return new Date(utcStr).toLocaleString("en-PH", {
     timeZone: "Asia/Manila",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
+    month: "short", day: "numeric", year: "numeric",
   });
 }
 
+// ─────────────────────────────────────────────────────────────────
+//  NOTIFICATION HELPERS
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Insert a notification row for every active user who matches
+ * the announcement's target_audience.
+ * Called only when an announcement is published for the first time.
+ */
+async function insertAnnouncementNotifications(announcement) {
+  try {
+    // Fetch target user IDs based on target_audience
+    let query = supabase.from("profiles").select("id, role").eq("is_active", true);
+    if (announcement.target_audience === "students") {
+      query = query.eq("role", "student");
+    } else if (announcement.target_audience === "admins") {
+      // Admins are not mobile users — skip notification insert
+      return;
+    }
+    // "all" → no additional filter
+
+    const { data: users, error } = await query;
+    if (error || !users?.length) return;
+
+    const now = new Date().toISOString();
+    const rows = users.map(u => ({
+      user_id:        u.id,
+      type:           "announcement",
+      title:          announcement.title,
+      body:           (announcement.body || announcement.content || "").slice(0, 200),
+      reference_type: "announcement",
+      reference_id:   announcement.id,
+      is_read:        false,
+      created_at:     now,
+    }));
+
+    // Batch insert — Supabase accepts arrays
+    await supabase.from("notifications").insert(rows);
+  } catch (e) {
+    console.error("insertAnnouncementNotifications error:", e);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
 export default function AnnouncementsPage() {
   const [announcements, setAnnouncements] = useState([]);
   const [loading,       setLoading]       = useState(true);
@@ -150,32 +192,57 @@ export default function AnnouncementsPage() {
 
     const { data: { user } } = await supabase.auth.getUser();
 
+    const isPublishing = !!form.is_published;
+    const publishedAt  = isPublishing ? new Date().toISOString() : null;
+
     const payload = {
       title:           form.title.trim(),
       body:            form.content.trim(),
       content:         form.content.trim(),
       is_pinned:       !!(form.is_pinned),
-      is_published:    !!(form.is_published),
+      is_published:    isPublishing,
       target_audience: form.target_audience || "all",
       expires_at:      form.expires_at || null,
-      published_at:    form.is_published ? new Date().toISOString() : null,
+      published_at:    publishedAt,
     };
 
-    let err = null;
+    let err  = null;
+    let savedId = null;
 
     if (modal === "add") {
       const result = await supabase
         .from("announcements")
-        .insert({ ...payload, created_by: user?.id ?? null });
-      err = result.error;
+        .insert({ ...payload, created_by: user?.id ?? null })
+        .select("id")
+        .single();
+      err     = result.error;
+      savedId = result.data?.id;
       if (err) console.error("Insert error:", err);
     } else {
+      // Check if this edit is publishing for the first time
+      const wasPublished = !!modal.published_at;
       const result = await supabase
         .from("announcements")
         .update(payload)
         .eq("id", modal.id);
-      err = result.error;
-      if (err) console.error("Update error:", err);
+      err     = result.error;
+      savedId = modal.id;
+
+      // Insert notifications only if newly published (was draft, now published)
+      if (!err && isPublishing && !wasPublished) {
+        await insertAnnouncementNotifications({
+          ...payload,
+          id: savedId,
+        });
+      }
+    }
+
+    // Insert notifications for new announcements that are published immediately
+    if (!err && modal === "add" && isPublishing && savedId) {
+      await insertAnnouncementNotifications({
+        ...payload,
+        id: savedId,
+      });
     }
 
     setSaving(false);
@@ -187,12 +254,27 @@ export default function AnnouncementsPage() {
 
   // ── Toggle publish ─────────────────────────────────────────────
   const togglePublish = async (a) => {
-    const newVal = a.published_at ? null : new Date().toISOString();
+    const wasPublished = !!a.published_at;
+    const newVal       = wasPublished ? null : new Date().toISOString();
+
     const { error: err } = await supabase
       .from("announcements")
       .update({ published_at: newVal })
       .eq("id", a.id);
-    if (!err) fetchData();
+
+    if (!err) {
+      // Insert notifications when publishing for the first time
+      if (!wasPublished && newVal) {
+        await insertAnnouncementNotifications({
+          id:              a.id,
+          title:           a.title,
+          body:            a.body || a.content || "",
+          content:         a.body || a.content || "",
+          target_audience: a.target_audience || "all",
+        });
+      }
+      fetchData();
+    }
   };
 
   // ── Toggle pin ─────────────────────────────────────────────────
@@ -237,12 +319,11 @@ export default function AnnouncementsPage() {
     setShowNotify(true);
   };
 
-  // ── Send via Supabase Edge Function (no CORS issues) ──────────
+  // ── Send via Supabase Edge Function ───────────────────────────
   const sendEmailNotification = async () => {
     setNotifySending(true);
     setNotifyResult(null);
 
-    // Fetch target recipients from Supabase
     let query = supabase.from("profiles").select("email, full_name").eq("is_active", true);
     if (notifyGroup === "department" && notifyDept) query = query.eq("department", notifyDept);
     if (notifyGroup === "specific" && notifyEmails.length > 0) query = query.in("email", notifyEmails);
@@ -254,7 +335,6 @@ export default function AnnouncementsPage() {
       return;
     }
 
-    // Get session token for Edge Function auth
     const { data: { session } } = await supabase.auth.getSession();
 
     const announcement = notifyTarget;
@@ -298,11 +378,7 @@ export default function AnnouncementsPage() {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${session?.access_token}`,
           },
-          body: JSON.stringify({
-            to: recipient.email,
-            subject,
-            html: htmlBody,
-          }),
+          body: JSON.stringify({ to: recipient.email, subject, html: htmlBody }),
         });
         if (res.ok) sent++; else failed++;
       } catch { failed++; }
@@ -421,7 +497,6 @@ export default function AnnouncementsPage() {
             </div>
 
             <div style={{ ...s.mBody, background: G.wash }}>
-              {/* Announcement Preview */}
               <div style={{ background: "#fff", border: `1px solid ${G.pale}`, borderRadius: 8, padding: "12px 16px", marginBottom: 16 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 4 }}>ANNOUNCEMENT</div>
                 <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}>{notifyTarget.title}</div>
@@ -431,7 +506,6 @@ export default function AnnouncementsPage() {
                 </div>
               </div>
 
-              {/* Recipient Group */}
               <div style={s.fg}>
                 <label style={s.label}>Send To</label>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -450,7 +524,6 @@ export default function AnnouncementsPage() {
                 </div>
               </div>
 
-              {/* Department Selector */}
               {notifyGroup === "department" && (
                 <div style={s.fg}>
                   <label style={s.label}>Select Department</label>
@@ -461,7 +534,6 @@ export default function AnnouncementsPage() {
                 </div>
               )}
 
-              {/* Result */}
               {notifyResult && (
                 <div style={{ background: notifyResult.error ? "#fee2e2" : "#f0fdf4", border: `1px solid ${notifyResult.error ? "#fca5a5" : "#86efac"}`, borderRadius: 8, padding: "12px 16px", fontSize: 13 }}>
                   {notifyResult.error

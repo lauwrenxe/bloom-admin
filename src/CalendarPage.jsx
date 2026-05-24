@@ -15,6 +15,33 @@ function formatDate(iso) {
   return new Date(iso).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// ─────────────────────────────────────────────────────────────────
+//  NOTIFICATION HELPER
+// ─────────────────────────────────────────────────────────────────
+async function insertEventNotifications(eventId, eventTitle, startDate) {
+  try {
+    const { data: users } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("is_active", true);
+    if (!users?.length) return;
+    const rows = users.map(u => ({
+      user_id:        u.id,
+      type:           "new_event",
+      title:          "New Event Added",
+      body:           `"${eventTitle}" has been added to the calendar${startDate ? ` on ${startDate}` : ""}.`,
+      reference_type: "event",
+      reference_id:   eventId,
+      is_read:        false,
+    }));
+    for (let i = 0; i < rows.length; i += 500) {
+      await supabase.from("notifications").insert(rows.slice(i, i + 500));
+    }
+  } catch (e) {
+    console.error("insertEventNotifications failed:", e);
+  }
+}
+
 const s = {
   page:    { padding: "28px 32px", fontFamily: "'Segoe UI', system-ui, sans-serif", background: G.cream, minHeight: "100vh" },
   header:  { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 },
@@ -27,7 +54,7 @@ const s = {
   calMonth:{ fontSize: 16, fontWeight: 700, color: "#fff" },
   dayGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)" },
   dayHdr:  { padding: "10px 0", textAlign: "center", fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase" },
-  dayCell: (today, otherMonth, hasEvent) => ({
+  dayCell: (today, otherMonth) => ({
     minHeight: 72, padding: "6px 4px", border: `1px solid ${G.wash}`, cursor: "pointer",
     background: today ? G.wash : "#fff",
     opacity: otherMonth ? 0.35 : 1,
@@ -57,32 +84,28 @@ const s = {
 };
 
 export default function CalendarPage() {
-  const [events, setEvents]   = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [today]               = useState(new Date());
+  const [events, setEvents]     = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [today]                 = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date());
   const [selected, setSelected] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [editEvent, setEditEvent] = useState(null);
-  const [form, setForm]       = useState({});
-  const [saving, setSaving]   = useState(false);
-  const [error, setError]     = useState("");
+  const [form, setForm]         = useState({});
+  const [saving, setSaving]     = useState(false);
+  const [error, setError]       = useState("");
   const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   const mergeAllEvents = async () => {
-    // Fetch from events table (manually created)
     const { data: evData } = await supabase.from("events").select("*").order("start_date");
-    // Fetch from seminars table
     const { data: semData } = await supabase.from("seminars")
       .select("id, title, scheduled_start, scheduled_end, status, venue, description")
       .order("scheduled_start", { ascending: true });
-    // Fetch published announcements
     const { data: annData } = await supabase.from("announcements")
       .select("id, title, body, content, published_at, is_pinned")
       .not("published_at", "is", null)
       .order("published_at", { ascending: false });
 
-    // Normalize seminars to event shape
     const semEvents = (semData || []).map(s => ({
       id: `sem_${s.id}`,
       title: s.title,
@@ -96,7 +119,6 @@ export default function CalendarPage() {
       _status: s.status,
     }));
 
-    // Normalize announcements to event shape
     const annEvents = (annData || []).map(a => ({
       id: `ann_${a.id}`,
       title: `📢 ${a.title}`,
@@ -137,7 +159,8 @@ export default function CalendarPage() {
 
   const openEdit = (ev) => {
     setEditEvent(ev);
-    const { is_public: _ip, ...evWithoutPublic } = ev; setForm(evWithoutPublic);
+    const { is_public: _ip, ...evWithoutPublic } = ev;
+    setForm(evWithoutPublic);
     setError(""); setShowModal(true);
   };
 
@@ -147,20 +170,37 @@ export default function CalendarPage() {
     setSaving(true); setError("");
     const { data: { user } } = await supabase.auth.getUser();
     const payload = {
-      title: form.title.trim(), description: form.description?.trim() || null,
-      event_type: form.event_type || "activity",
-      start_date: form.start_date, end_date: form.end_date || form.start_date,
-      is_all_day: form.is_all_day ?? true,
-      color_hex: form.color_hex || EVENT_COLORS[0],
+      title:       form.title.trim(),
+      description: form.description?.trim() || null,
+      event_type:  form.event_type || "activity",
+      start_date:  form.start_date,
+      end_date:    form.end_date || form.start_date,
+      is_all_day:  form.is_all_day ?? true,
+      color_hex:   form.color_hex || EVENT_COLORS[0],
     };
-    let err;
+
+    // ── Insert or update ─────────────────────────────────────────
+    let err, insertedId;
     if (editEvent) {
       ({ error: err } = await supabase.from("events").update(payload).eq("id", editEvent.id));
     } else {
-      ({ error: err } = await supabase.from("events").insert({ ...payload, created_by: user?.id }));
+      const { data: inserted, error: insertErr } = await supabase
+        .from("events")
+        .insert({ ...payload, created_by: user?.id })
+        .select("id")
+        .single();
+      err = insertErr;
+      insertedId = inserted?.id;
     }
+
     setSaving(false);
     if (err) { setError(err.message); return; }
+
+    // ── Notify all active users on new event only ─────────────────
+    if (!editEvent && insertedId) {
+      await insertEventNotifications(insertedId, payload.title, payload.start_date);
+    }
+
     setShowModal(false); setForm({}); reload();
   };
 
@@ -174,7 +214,7 @@ export default function CalendarPage() {
   // Calendar helpers
   const year  = viewDate.getFullYear();
   const month = viewDate.getMonth();
-  const firstDay = new Date(year, month, 1).getDay();
+  const firstDay    = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const daysInPrev  = new Date(year, month, 0).getDate();
   const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -187,12 +227,14 @@ export default function CalendarPage() {
   });
 
   const cells = [];
-  for (let i = 0; i < firstDay; i++) cells.push({ day: daysInPrev - firstDay + 1 + i, current: false, date: new Date(year, month - 1, daysInPrev - firstDay + 1 + i) });
-  for (let i = 1; i <= daysInMonth; i++) cells.push({ day: i, current: true, date: new Date(year, month, i) });
+  for (let i = 0; i < firstDay; i++)
+    cells.push({ day: daysInPrev - firstDay + 1 + i, current: false, date: new Date(year, month - 1, daysInPrev - firstDay + 1 + i) });
+  for (let i = 1; i <= daysInMonth; i++)
+    cells.push({ day: i, current: true, date: new Date(year, month, i) });
   const remaining = 42 - cells.length;
-  for (let i = 1; i <= remaining; i++) cells.push({ day: i, current: false, date: new Date(year, month + 1, i) });
+  for (let i = 1; i <= remaining; i++)
+    cells.push({ day: i, current: false, date: new Date(year, month + 1, i) });
 
-  // Upcoming events
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   const upcoming = events.filter(e => (e.start_date?.slice(0, 10) || "") >= todayStr).slice(0, 8);
 
@@ -201,13 +243,15 @@ export default function CalendarPage() {
       <div style={s.header}>
         <div>
           <div style={s.title}>📅 Calendar</div>
-          <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{events.filter(e=>!e._source).length} custom · {events.filter(e=>e._source==="seminar").length} seminars · {events.filter(e=>e._source==="announcement").length} announcements</div>
+          <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>
+            {events.filter(e => !e._source).length} custom · {events.filter(e => e._source === "seminar").length} seminars · {events.filter(e => e._source === "announcement").length} announcements
+          </div>
         </div>
         <button style={s.addBtn} onClick={() => openAdd(todayStr)}>＋ New Event</button>
       </div>
 
       <div style={s.grid}>
-        {/* Calendar */}
+        {/* Calendar grid */}
         <div style={s.calBox}>
           <div style={s.calHdr}>
             <button style={s.calNav} onClick={() => setViewDate(new Date(year, month - 1, 1))}>‹</button>
@@ -215,9 +259,10 @@ export default function CalendarPage() {
             <button style={s.calNav} onClick={() => setViewDate(new Date(year, month + 1, 1))}>›</button>
           </div>
           <div style={s.dayGrid}>
-            {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => <div key={d} style={s.dayHdr}>{d}</div>)}
+            {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => (
+              <div key={d} style={s.dayHdr}>{d}</div>
+            ))}
             {cells.map((cell, i) => {
-              // Use local date to avoid UTC offset shifting the day back
               const dateStr = `${cell.date.getFullYear()}-${String(cell.date.getMonth() + 1).padStart(2, '0')}-${String(cell.date.getDate()).padStart(2, '0')}`;
               const isToday = cell.current && cell.date.toDateString() === today.toDateString();
               const dayEvents = eventsForDate(dateStr);
@@ -231,7 +276,9 @@ export default function CalendarPage() {
                       {ev.title}
                     </div>
                   ))}
-                  {dayEvents.length > 2 && <div style={{ fontSize: 9, color: "#888", textAlign: "center" }}>+{dayEvents.length - 2} more</div>}
+                  {dayEvents.length > 2 && (
+                    <div style={{ fontSize: 9, color: "#888", textAlign: "center" }}>+{dayEvents.length - 2} more</div>
+                  )}
                 </div>
               );
             })}
@@ -241,32 +288,40 @@ export default function CalendarPage() {
         {/* Sidebar */}
         <div style={s.sidebar}>
           <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}>📆 Upcoming Events</div>
-          {loading ? <div style={{ color: "#aaa", fontSize: 13 }}>Loading…</div>
-            : upcoming.length === 0 ? <div style={{ color: "#aaa", fontSize: 13 }}>No upcoming events</div>
-            : upcoming.map(ev => (
-              <div key={ev.id} style={{ ...s.eventCard, borderLeft: `4px solid ${ev.color_hex || G.base}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, color: G.dark, fontSize: 13 }}>{ev.title}</div>
-                    <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>
-                      {formatDate(ev.start_date)}{ev.end_date && ev.end_date !== ev.start_date ? ` – ${formatDate(ev.end_date)}` : ""}
+          {loading
+            ? <div style={{ color: "#aaa", fontSize: 13 }}>Loading…</div>
+            : upcoming.length === 0
+              ? <div style={{ color: "#aaa", fontSize: 13 }}>No upcoming events</div>
+              : upcoming.map(ev => (
+                <div key={ev.id} style={{ ...s.eventCard, borderLeft: `4px solid ${ev.color_hex || G.base}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, color: G.dark, fontSize: 13 }}>{ev.title}</div>
+                      <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>
+                        {formatDate(ev.start_date)}{ev.end_date && ev.end_date !== ev.start_date ? ` – ${formatDate(ev.end_date)}` : ""}
+                      </div>
+                      {ev.location && (
+                        <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>
+                          <i className="bi bi-geo-alt me-1"/>{ev.location}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 5, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <span style={{ ...s.tag(ev.color_hex || G.base), fontSize: 10 }}>
+                          {ev._source === "seminar" ? "🎓 Seminar" : ev._source === "announcement" ? "📢 Announcement" : ev.event_type}
+                        </span>
+                        {ev._status   && <span style={{ ...s.tag("#888"),    fontSize: 10 }}>{ev._status}</span>}
+                        {ev.is_pinned && <span style={{ ...s.tag("#f59e0b"), fontSize: 10 }}>📌 Pinned</span>}
+                      </div>
                     </div>
-                    {ev.location && <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}><i className="bi bi-geo-alt me-1"/>{ev.location}</div>}
-                    <div style={{ marginTop: 5, display: "flex", gap: 4, flexWrap: "wrap" }}>
-                      <span style={{ ...s.tag(ev.color_hex || G.base), fontSize: 10 }}>{ev._source === "seminar" ? "🎓 Seminar" : ev._source === "announcement" ? "📢 Announcement" : ev.event_type}</span>
-                      {ev._status && <span style={{ ...s.tag("#888"), fontSize: 10 }}>{ev._status}</span>}
-                      {ev.is_pinned && <span style={{ ...s.tag("#f59e0b"), fontSize: 10 }}>📌 Pinned</span>}
-                    </div>
+                    {!ev._source && (
+                      <div style={{ display: "flex", gap: 2 }}>
+                        <button style={s.iconBtn(G.base)}     onClick={() => openEdit(ev)}>✏️</button>
+                        <button style={s.iconBtn("#dc2626")}  onClick={() => del(ev)}>🗑️</button>
+                      </div>
+                    )}
                   </div>
-                  {!ev._source && (
-                    <div style={{ display: "flex", gap: 2 }}>
-                      <button style={s.iconBtn(G.base)} onClick={() => openEdit(ev)}>✏️</button>
-                      <button style={s.iconBtn("#dc2626")} onClick={() => del(ev)}>🗑️</button>
-                    </div>
-                  )}
                 </div>
-              </div>
-            ))
+              ))
           }
         </div>
       </div>
@@ -280,7 +335,11 @@ export default function CalendarPage() {
               <button style={s.iconBtn()} onClick={() => setShowModal(false)}>✕</button>
             </div>
             <div style={s.mBody}>
-              {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
+              {error && (
+                <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>
+                  {error}
+                </div>
+              )}
               <div style={s.fg}>
                 <label style={s.label}>Title *</label>
                 <input style={s.input} value={form.title || ""} onChange={e => setF("title", e.target.value)} autoFocus />
@@ -292,16 +351,19 @@ export default function CalendarPage() {
               <div style={s.row}>
                 <div style={{ ...s.fg, flex: 1 }}>
                   <label style={s.label}>Event Type</label>
-                  <select style={s.select} value={form.event_type || "academic"} onChange={e => setF("event_type", e.target.value)}>
-                    {EVENT_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-                    {/* Valid: holiday, activity, seminar, deadline, announcement */}
+                  <select style={s.select} value={form.event_type || "activity"} onChange={e => setF("event_type", e.target.value)}>
+                    {EVENT_TYPES.map(t => (
+                      <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+                    ))}
                   </select>
                 </div>
                 <div style={{ ...s.fg, flex: 1 }}>
                   <label style={s.label}>Color</label>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
                     {EVENT_COLORS.map(c => (
-                      <button key={c} onClick={() => setF("color_hex", c)} style={{ width: 28, height: 28, borderRadius: "50%", background: c, border: form.color_hex === c ? "3px solid #333" : "2px solid transparent", cursor: "pointer" }} />
+                      <button key={c} onClick={() => setF("color_hex", c)}
+                        style={{ width: 28, height: 28, borderRadius: "50%", background: c, border: form.color_hex === c ? "3px solid #333" : "2px solid transparent", cursor: "pointer" }}
+                      />
                     ))}
                   </div>
                 </div>
@@ -321,9 +383,13 @@ export default function CalendarPage() {
               </div>
             </div>
             <div style={s.mFooter}>
-              {editEvent && <button style={s.btnDanger} onClick={() => { del(editEvent); setShowModal(false); }}>Delete</button>}
+              {editEvent && (
+                <button style={s.btnDanger} onClick={() => { del(editEvent); setShowModal(false); }}>Delete</button>
+              )}
               <button style={s.btnSecondary} onClick={() => setShowModal(false)}>Cancel</button>
-              <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>{saving ? "Saving…" : editEvent ? "Save Changes" : "Create Event"}</button>
+              <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>
+                {saving ? "Saving…" : editEvent ? "Save Changes" : "Create Event"}
+              </button>
             </div>
           </div>
         </div>

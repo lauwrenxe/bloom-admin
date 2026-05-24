@@ -31,6 +31,107 @@ function formatDate(iso) {
   return new Date(s).toLocaleString("en-PH",{timeZone:"Asia/Manila",month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:true});
 }
 
+// ─────────────────────────────────────────────────────────────────
+//  NOTIFICATION HELPERS
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Inserts a notification row for every active user.
+ * Uses plain INSERT (not upsert) — add the unique constraint below
+ * if you want idempotency:
+ *
+ *   ALTER TABLE notifications
+ *     ADD CONSTRAINT notifications_user_type_reference_unique
+ *     UNIQUE (user_id, type, reference_id);
+ *
+ * The helper checks for existing rows first so it's safe either way.
+ */
+async function insertModuleNotifications(moduleId, moduleTitle) {
+  try {
+    const { data: allUsers, error: usersErr } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("is_active", true);
+
+    if (usersErr || !allUsers?.length) return;
+
+    // Check who already has this notification to avoid duplicates
+    const { data: already } = await supabase
+      .from("notifications")
+      .select("user_id")
+      .eq("type", "new_module")
+      .eq("reference_id", moduleId);
+
+    const alreadySet = new Set((already || []).map(r => r.user_id));
+    const newUsers   = allUsers.filter(u => !alreadySet.has(u.id));
+    if (!newUsers.length) return;
+
+    const now  = new Date().toISOString();
+    const rows = newUsers.map(u => ({
+      user_id:        u.id,
+      type:           "new_module",
+      title:          "New Module Available",
+      body:           `"${moduleTitle}" has been published. Check it out in the Library.`,
+      reference_type: "module",
+      reference_id:   moduleId,
+      is_read:        false,
+      created_at:     now,
+    }));
+
+    // Batch insert in chunks of 500
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await supabase
+        .from("notifications")
+        .insert(rows.slice(i, i + 500));
+      if (error) console.error("insertModuleNotifications batch error:", error);
+    }
+  } catch (e) {
+    console.error("insertModuleNotifications failed:", e);
+  }
+}
+
+async function insertAssessmentNotifications(assessmentId, assessmentTitle, moduleTitle) {
+  try {
+    const { data: allUsers, error: usersErr } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("is_active", true);
+
+    if (usersErr || !allUsers?.length) return;
+
+    const { data: already } = await supabase
+      .from("notifications")
+      .select("user_id")
+      .eq("type", "new_assessment")
+      .eq("reference_id", assessmentId);
+
+    const alreadySet = new Set((already || []).map(r => r.user_id));
+    const newUsers   = allUsers.filter(u => !alreadySet.has(u.id));
+    if (!newUsers.length) return;
+
+    const now  = new Date().toISOString();
+    const rows = newUsers.map(u => ({
+      user_id:        u.id,
+      type:           "new_assessment",
+      title:          "New Assessment Available",
+      body:           `"${assessmentTitle}" for "${moduleTitle}" is now open. Take it in the Library.`,
+      reference_type: "assessment",
+      reference_id:   assessmentId,
+      is_read:        false,
+      created_at:     now,
+    }));
+
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await supabase
+        .from("notifications")
+        .insert(rows.slice(i, i + 500));
+      if (error) console.error("insertAssessmentNotifications batch error:", error);
+    }
+  } catch (e) {
+    console.error("insertAssessmentNotifications failed:", e);
+  }
+}
+
 const s = {
   page:         { display:"flex", height:"100vh", fontFamily:"'Inter','Segoe UI',system-ui,sans-serif", background:"#F5F7F5", overflow:"hidden" },
   sidebar:      { width:280, minWidth:280, background:G.dark, display:"flex", flexDirection:"column", color:"#fff", overflow:"hidden" },
@@ -84,7 +185,6 @@ const s = {
 
 const QTYPE = { multiple_choice:"Multiple Choice", true_false:"True/False", short_answer:"Short Answer" };
 
-// ── Question Modal ────────────────────────────────────────────────
 function QuestionModal({ onSave, onClose, initial, num }) {
   const [qText,   setQText]   = useState(initial?.question_text||"");
   const [qType,   setQType]   = useState(initial?.question_type||"multiple_choice");
@@ -96,7 +196,7 @@ function QuestionModal({ onSave, onClose, initial, num }) {
     if (initial?.question_options?.length) return initial.question_options.findIndex(o=>o.is_correct);
     return 0;
   });
-  const [tfAns,   setTfAns]   = useState(()=>{
+  const [tfAns, setTfAns] = useState(()=>{
     if (initial?.question_type==="true_false") {
       const c=(initial.question_options||[]).find(o=>o.is_correct);
       return c?.option_text==="True"?"true":"false";
@@ -106,8 +206,8 @@ function QuestionModal({ onSave, onClose, initial, num }) {
 
   const setCorrectOpt = (i) => { setCorrect(i); setOpts(o=>o.map((x,j)=>({...x,is_correct:j===i}))); };
   const updateOptText = (i,v) => setOpts(o=>o.map((x,j)=>j===i?{...x,option_text:v}:x));
-  const addOpt        = () => setOpts(o=>[...o,{option_text:"",is_correct:false}]);
-  const removeOpt     = (i) => { if(opts.length>2){setOpts(o=>o.filter((_,j)=>j!==i));if(correct>=i)setCorrect(Math.max(0,correct-1));} };
+  const addOpt   = () => setOpts(o=>[...o,{option_text:"",is_correct:false}]);
+  const removeOpt = (i) => { if(opts.length>2){setOpts(o=>o.filter((_,j)=>j!==i));if(correct>=i)setCorrect(Math.max(0,correct-1));} };
 
   const save = () => {
     if (!qText.trim()) return alert("Please enter the question text.");
@@ -209,7 +309,6 @@ function QuestionModal({ onSave, onClose, initial, num }) {
   );
 }
 
-// ── Results Panel ─────────────────────────────────────────────────
 function ResultsPanel({ assessment }) {
   const [attempts, setAttempts] = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -220,7 +319,6 @@ function ResultsPanel({ assessment }) {
     const { data } = await supabase.from("assessment_attempts")
       .select("*, profiles(full_name,student_id,email)")
       .eq("assessment_id",assessment.id).order("submitted_at",{ascending:false});
-    // Flag attempts that have ungraded short answer questions
     const attemptsWithFlags = await Promise.all((data||[]).map(async (attempt) => {
       const { count } = await supabase.from("assessment_answers")
         .select("id", { count: "exact", head: true })
@@ -246,40 +344,29 @@ function ResultsPanel({ assessment }) {
     await supabase.from("assessment_answers")
       .update({ manual_score: manualScore, is_graded: true })
       .eq("id", answerId);
-
-    // Update local state immediately
     setSelected(prev => ({
       ...prev,
-      answers: prev.answers.map(a => a.id === answerId
-        ? { ...a, manual_score: manualScore, is_graded: true }
-        : a
-      )
+      answers: prev.answers.map(a => a.id === answerId ? { ...a, manual_score: manualScore, is_graded: true } : a)
     }));
-
-    // Recalculate total score for this attempt
     const updatedAnswers = selected.answers.map(a =>
       a.id === answerId ? { ...a, manual_score: manualScore, is_graded: true } : a
     );
-    const totalQ = updatedAnswers.length;
+    const totalQ       = updatedAnswers.length;
     const correctCount = updatedAnswers.filter(a => {
       if (a.questions?.question_type === "short_answer") return a.id === answerId ? isCorrect : a.manual_score === 1;
       return a.selected_option?.is_correct;
     }).length;
     const newScore = totalQ > 0 ? Math.round((correctCount / totalQ) * 100) : 0;
-    const passed = newScore >= (assessment.passing_score || 75);
-
-    await supabase.from("assessment_attempts")
-      .update({ score: newScore, passed })
-      .eq("id", attempt.id);
-
-    // Update attempts list
+    const passed   = newScore >= (assessment.passing_score || 75);
+    await supabase.from("assessment_attempts").update({ score: newScore, passed }).eq("id", attempt.id);
     setAttempts(prev => prev.map(a => a.id === attempt.id ? { ...a, score: newScore, passed } : a));
   };
 
-  const total=attempts.length, passed=attempts.filter(a=>a.passed).length;
-  const failed=total-passed;
-  const avgScore=total>0?Math.round(attempts.reduce((s,a)=>s+(a.score||0),0)/total):0;
-  const passRate=total>0?Math.round((passed/total)*100):0;
+  const total    = attempts.length;
+  const passed   = attempts.filter(a=>a.passed).length;
+  const failed   = total - passed;
+  const avgScore = total>0?Math.round(attempts.reduce((s,a)=>s+(a.score||0),0)/total):0;
+  const passRate = total>0?Math.round((passed/total)*100):0;
 
   if (loading) return <div style={{padding:40,textAlign:"center",color:"#aaa"}}>Loading results…</div>;
 
@@ -299,7 +386,6 @@ function ResultsPanel({ assessment }) {
           </div>
         ))}
       </div>
-
       {attempts.length===0?(
         <div style={{background:"#fff",borderRadius:10,border:`2px dashed ${G.pale}`,padding:"50px 20px",textAlign:"center"}}>
           <i className="bi bi-bar-chart d-block mb-3" style={{fontSize:44,color:G.pale}}/>
@@ -331,7 +417,10 @@ function ResultsPanel({ assessment }) {
                     <span style={{fontSize:17,fontWeight:900,color:a.passed?"#16a34a":"#dc2626"}}>{a.score??0}%</span>
                     <span style={{fontSize:11,color:"#aaa",marginLeft:4}}>/ {assessment.passing_score||75}% to pass</span>
                   </td>
-                  <td style={s.td}><span style={s.tag(a.passed?"green":"red")}>{a.passed?"Passed":"Failed"}</span>{a.has_ungraded&&<span style={{...s.tag("orange"),marginLeft:4}}><i className="bi bi-hourglass-split me-1"/>Needs Grading</span>}</td>
+                  <td style={s.td}>
+                    <span style={s.tag(a.passed?"green":"red")}>{a.passed?"Passed":"Failed"}</span>
+                    {a.has_ungraded&&<span style={{...s.tag("yellow"),marginLeft:4}}><i className="bi bi-hourglass-split me-1"/>Needs Grading</span>}
+                  </td>
                   <td style={s.td}>{formatDate(a.submitted_at)}</td>
                   <td style={s.td}>
                     <button style={s.btnSm(G.wash,G.dark)} onClick={()=>loadDetail(a)}>
@@ -344,7 +433,6 @@ function ResultsPanel({ assessment }) {
           </table>
         </div>
       )}
-
       {selected&&(
         <div style={s.overlay}>
           <div style={s.modal(660)}>
@@ -371,14 +459,12 @@ function ResultsPanel({ assessment }) {
                         <div style={{fontSize:14,fontWeight:600,color:G.dark,marginBottom:8}}>{ans.questions?.question_text}</div>
                         {isShort?(
                           <div>
-                            {/* Student's text response */}
                             <div style={{background:"#fff",border:`1px solid ${G.pale}`,borderRadius:6,padding:"10px 14px",fontSize:13,color:G.dark,marginBottom:10,lineHeight:1.6}}>
                               <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}><i className="bi bi-chat-left-text me-1"/>Student Response:</div>
                               <div style={{fontStyle: ans.text_answer ? "normal" : "italic", color: ans.text_answer ? G.dark : "#aaa"}}>
                                 {ans.text_answer || "No response provided"}
                               </div>
                             </div>
-                            {/* Grading buttons */}
                             {ans.is_graded ? (
                               <div style={{display:"flex",alignItems:"center",gap:8}}>
                                 <span style={s.tag(ans.manual_score===1?"green":"red")}>
@@ -426,7 +512,6 @@ function ResultsPanel({ assessment }) {
   );
 }
 
-// ── Assessment Panel (full-featured, embedded) ────────────────────
 function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   const [assessment, setAssessment] = useState(null);
   const [questions,  setQuestions]  = useState([]);
@@ -440,14 +525,14 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   const [editQIdx,   setEditQIdx]   = useState(null);
   const [form, setForm] = useState({title:"",passingScore:75,timeLimit:30,badgeId:"",isPublished:false});
   const setF = (k,v) => setForm(f=>({...f,[k]:v}));
-  const [showAI, setShowAI]         = useState(false);
-  const [aiPrompt, setAiPrompt]     = useState("");
-  const [aiCount, setAiCount]       = useState(5);
-  const [aiType, setAiType]         = useState("multiple_choice");
-  const [aiLoading, setAiLoading]   = useState(false);
+  const [showAI,      setShowAI]      = useState(false);
+  const [aiPrompt,    setAiPrompt]    = useState("");
+  const [aiCount,     setAiCount]     = useState(5);
+  const [aiType,      setAiType]      = useState("multiple_choice");
+  const [aiLoading,   setAiLoading]   = useState(false);
   const [aiGenerated, setAiGenerated] = useState([]);
-  const [aiSelected, setAiSelected] = useState([]);
-  const [aiError, setAiError]       = useState("");
+  const [aiSelected,  setAiSelected]  = useState([]);
+  const [aiError,     setAiError]     = useState("");
 
   useEffect(()=>{
     let active=true;
@@ -511,7 +596,7 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   const togglePublish = () => {
     if (!assessment) return;
     const newVal=!form.isPublished;
-    onConfirm?.({ 
+    onConfirm?.({
       title: newVal ? "Publish Assessment" : "Unpublish Assessment",
       message: newVal
         ? "Publish this assessment? Students will be able to see and take it immediately."
@@ -522,6 +607,10 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
         setF("isPublished",newVal);
         await supabase.from("assessments").update({is_published:newVal}).eq("id",assessment.id);
         setAssessment(a=>({...a,is_published:newVal}));
+        // ── Notify all users when assessment is published ──────
+        if (newVal) {
+          await insertAssessmentNotifications(assessment.id, form.title, module.title);
+        }
         onAssessmentChange?.();
         onConfirm?.(null);
       }
@@ -562,37 +651,32 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
     if (!assessment) return;
     onConfirm?.({ title:"Save Questions", message:`Save all ${questions.length} question(s) to this assessment?`, confirmLabel:"Save Questions", danger:false,
       onConfirm: async()=>{
-    setSaving(true);
-
-    // Track all real DB IDs that belong to this save (existing + newly inserted)
-    const savedIds = [];
-
-    for (let i=0;i<questions.length;i++) {
-      const q=questions[i]; let qId=q.id;
-      if (q._new) {
-        const {data:nq}=await supabase.from("questions").insert({assessment_id:assessment.id,question_text:q.question_text,question_type:q.question_type,sort_order:i}).select().single();
-        qId=nq?.id;
-      } else {
-        await supabase.from("questions").update({question_text:q.question_text,question_type:q.question_type,sort_order:i}).eq("id",qId);
-        await supabase.from("question_options").delete().eq("question_id",qId);
-      }
-      if (qId) savedIds.push(qId);
-      const opts=q.options||q.question_options||[];
-      for (let j=0;j<opts.length;j++) {
-        await supabase.from("question_options").insert({question_id:qId,option_text:opts[j].option_text,is_correct:opts[j].is_correct,sort_order:j});
-      }
-    }
-
-    // Only delete DB questions that are NOT in savedIds (truly removed by user)
-    const {data:dbQs}=await supabase.from("questions").select("id").eq("assessment_id",assessment.id);
-    for (const dq of (dbQs||[])) {
-      if (!savedIds.includes(dq.id)) {
-        await supabase.from("question_options").delete().eq("question_id",dq.id);
-        await supabase.from("questions").delete().eq("id",dq.id);
-      }
-    }
-    await loadQs(); setSaving(false);
-    onConfirm?.(null);
+        setSaving(true);
+        const savedIds = [];
+        for (let i=0;i<questions.length;i++) {
+          const q=questions[i]; let qId=q.id;
+          if (q._new) {
+            const {data:nq}=await supabase.from("questions").insert({assessment_id:assessment.id,question_text:q.question_text,question_type:q.question_type,sort_order:i}).select().single();
+            qId=nq?.id;
+          } else {
+            await supabase.from("questions").update({question_text:q.question_text,question_type:q.question_type,sort_order:i}).eq("id",qId);
+            await supabase.from("question_options").delete().eq("question_id",qId);
+          }
+          if (qId) savedIds.push(qId);
+          const opts=q.options||q.question_options||[];
+          for (let j=0;j<opts.length;j++) {
+            await supabase.from("question_options").insert({question_id:qId,option_text:opts[j].option_text,is_correct:opts[j].is_correct,sort_order:j});
+          }
+        }
+        const {data:dbQs}=await supabase.from("questions").select("id").eq("assessment_id",assessment.id);
+        for (const dq of (dbQs||[])) {
+          if (!savedIds.includes(dq.id)) {
+            await supabase.from("question_options").delete().eq("question_id",dq.id);
+            await supabase.from("questions").delete().eq("id",dq.id);
+          }
+        }
+        await loadQs(); setSaving(false);
+        onConfirm?.(null);
       }
     });
   };
@@ -604,16 +688,13 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
       const systemPrompt = `GAD e-learning assessment generator for BLOOM (CvSU). Return ONLY a JSON array of EXACTLY ${aiCount} ${aiType} questions. No markdown, no explanation, no extra text.
 Format: [{"question_text":"...","question_type":"${aiType}","options":[{"option_text":"...","is_correct":true/false}]}]
 Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correct; short_answer=empty options [].`;
-
       const apiKey = import.meta.env.VITE_GROQ_API_KEY;
       if (!apiKey) { setAiError("Groq API key not found. Add VITE_GROQ_API_KEY to your .env file and restart the dev server."); setAiLoading(false); return; }
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: "llama-3.1-8b-instant",
-          temperature: 0.4,
-          max_tokens: 3000,
+          model: "llama-3.1-8b-instant", temperature: 0.4, max_tokens: 3000,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: `Module: "${module.title}"\n\nTopic/Content: ${aiPrompt.trim()}\n\nGenerate ${aiCount} ${aiType} questions.` },
@@ -622,20 +703,15 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
       });
       const data = await response.json();
       if (data.error) { setAiError("Groq API Error: " + data.error.message); setAiLoading(false); return; }
-      const text = data.choices?.[0]?.message?.content || "";
-      // Robustly extract JSON array from response
-      // Strip markdown fences, then find the first [ ... ] block
-      let clean = text.replace(/```json|```/g, "").trim();
-      // Extract just the JSON array — find first [ and last ]
+      const text  = data.choices?.[0]?.message?.content || "";
+      let clean   = text.replace(/```json|```/g, "").trim();
       const start = clean.indexOf("[");
       const end   = clean.lastIndexOf("]");
       if (start === -1 || end === -1) throw new Error("No JSON array found in response");
       clean = clean.slice(start, end + 1);
       const parsed = JSON.parse(clean);
       if (!Array.isArray(parsed)) throw new Error("Response is not an array");
-      // Normalise and validate
-      // Trim to exact requested count if AI returned more
-      const trimmed = parsed.slice(0, aiCount);
+      const trimmed    = parsed.slice(0, aiCount);
       const normalised = trimmed.map((q, i) => ({
         id: `ai_${Date.now()}_${i}`,
         question_text: q.question_text || "",
@@ -644,7 +720,7 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
         _new: true,
       }));
       setAiGenerated(normalised);
-      setAiSelected(normalised.map(q => q.id)); // select all by default
+      setAiSelected(normalised.map(q => q.id));
     } catch (e) {
       setAiError("Failed to parse AI response. Please try again. (" + e.message + ")");
     }
@@ -662,7 +738,6 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
 
   if (loading) return <div style={{padding:40,textAlign:"center",color:"#aaa"}}>Loading assessment…</div>;
 
-  // Empty state
   if (!assessment) return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"60px 20px",textAlign:"center"}}>
       <div style={{width:72,height:72,borderRadius:16,background:G.wash,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:16}}>
@@ -671,19 +746,10 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
       <div style={{fontSize:16,fontWeight:700,color:G.dark,marginBottom:6}}>No assessment created for this module</div>
       <div style={{fontSize:13,color:"#888",marginBottom:28,maxWidth:360}}>Create an assessment so students can test their knowledge after completing this module.</div>
       <div style={{width:"100%",maxWidth:380}}>
-        <div style={s.fg}>
-          <label style={s.label}>Assessment Title</label>
-          <input style={s.input} value={form.title} onChange={e=>setF("title",e.target.value)} placeholder={`${module.title} — Assessment`}/>
-        </div>
+        <div style={s.fg}><label style={s.label}>Assessment Title</label><input style={s.input} value={form.title} onChange={e=>setF("title",e.target.value)} placeholder={`${module.title} — Assessment`}/></div>
         <div style={{...s.row,marginBottom:16}}>
-          <div style={{flex:1}}>
-            <label style={s.label}>Passing Score (%)</label>
-            <input style={s.input} type="number" min={0} max={100} value={form.passingScore} onChange={e=>setF("passingScore",+e.target.value)}/>
-          </div>
-          <div style={{flex:1}}>
-            <label style={s.label}>Time Limit (min)</label>
-            <input style={s.input} type="number" min={1} value={form.timeLimit} onChange={e=>setF("timeLimit",+e.target.value)}/>
-          </div>
+          <div style={{flex:1}}><label style={s.label}>Passing Score (%)</label><input style={s.input} type="number" min={0} max={100} value={form.passingScore} onChange={e=>setF("passingScore",+e.target.value)}/></div>
+          <div style={{flex:1}}><label style={s.label}>Time Limit (min)</label><input style={s.input} type="number" min={1} value={form.timeLimit} onChange={e=>setF("timeLimit",+e.target.value)}/></div>
         </div>
         <button style={{...s.btnGreen,width:"100%",justifyContent:"center",padding:"11px 20px",fontSize:14,opacity:creating?0.7:1}} onClick={createAssessment} disabled={creating}>
           {creating?<><i className="bi bi-hourglass-split"/>Creating…</>:<><i className="bi bi-plus-circle"/>Create Assessment</>}
@@ -697,7 +763,6 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
   return(
     <div>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      {/* Settings card */}
       <div style={s.card}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -718,27 +783,16 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
             </button>
           </div>
         </div>
-
         {warnNoQs&&(
           <div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:6,padding:"10px 14px",fontSize:12,color:"#9a3412",marginBottom:14,display:"flex",gap:8,alignItems:"center"}}>
             <i className="bi bi-exclamation-triangle-fill" style={{flexShrink:0}}/>
             This assessment is published but has no questions. Add questions before publishing.
           </div>
         )}
-
         <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-          <div style={{flex:3,minWidth:200,...s.fg}}>
-            <label style={s.label}>Title</label>
-            <input style={s.input} value={form.title} onChange={e=>setF("title",e.target.value)}/>
-          </div>
-          <div style={{flex:1,minWidth:100,...s.fg}}>
-            <label style={s.label}>Passing Score (%)</label>
-            <input style={s.input} type="number" min={0} max={100} value={form.passingScore} onChange={e=>setF("passingScore",+e.target.value)}/>
-          </div>
-          <div style={{flex:1,minWidth:100,...s.fg}}>
-            <label style={s.label}>Time Limit (min)</label>
-            <input style={s.input} type="number" min={1} value={form.timeLimit} onChange={e=>setF("timeLimit",+e.target.value)}/>
-          </div>
+          <div style={{flex:3,minWidth:200,...s.fg}}><label style={s.label}>Title</label><input style={s.input} value={form.title} onChange={e=>setF("title",e.target.value)}/></div>
+          <div style={{flex:1,minWidth:100,...s.fg}}><label style={s.label}>Passing Score (%)</label><input style={s.input} type="number" min={0} max={100} value={form.passingScore} onChange={e=>setF("passingScore",+e.target.value)}/></div>
+          <div style={{flex:1,minWidth:100,...s.fg}}><label style={s.label}>Time Limit (min)</label><input style={s.input} type="number" min={1} value={form.timeLimit} onChange={e=>setF("timeLimit",+e.target.value)}/></div>
         </div>
         <div style={s.fg}>
           <label style={s.label}><i className="bi bi-award me-1"/>Auto-award Badge on Pass</label>
@@ -755,11 +809,9 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
         </div>
       </div>
 
-      {/* Sub-tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${G.wash}`,marginBottom:20}}>
         <div style={s.subTab(subTab==="questions")} onClick={()=>setSubTab("questions")}>
-          <i className="bi bi-file-earmark-text"/>Questions
-          <span style={{...s.badge,marginLeft:4}}>{questions.length}</span>
+          <i className="bi bi-file-earmark-text"/>Questions<span style={{...s.badge,marginLeft:4}}>{questions.length}</span>
         </div>
         <div style={s.subTab(subTab==="results")} onClick={()=>setSubTab("results")}>
           <i className="bi bi-bar-chart"/>Results
@@ -787,7 +839,6 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
               </button>
             </div>
           </div>
-
           {questions.length===0?(
             <div style={{background:"#fff",borderRadius:10,border:`2px dashed ${G.pale}`,padding:"40px 20px",textAlign:"center"}}>
               <i className="bi bi-clipboard-check d-block mb-3" style={{fontSize:44,color:G.pale}}/>
@@ -851,14 +902,12 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
       )}
 
       {subTab==="results"&&<ResultsPanel key={assessment.id} assessment={assessment}/>}
-
       {showAdd&&<QuestionModal num={questions.length+1} onSave={addQ} onClose={()=>setShowAdd(false)}/>}
       {editQ&&<QuestionModal initial={editQ} num={editQIdx+1} onSave={updateQ} onClose={()=>{setEditQ(null);setEditQIdx(null);}}/>}
 
-      {/* ── AI Generate Modal ── */}
       {showAI&&(
         <div style={s.overlay}>
-          <div style={{...s.modal,maxWidth:640,maxHeight:"92vh",overflow:"auto",background:G.wash}}>
+          <div style={{...s.modal(640),maxHeight:"92vh",overflow:"auto",background:G.wash}}>
             <div style={{padding:"16px 24px",background:`linear-gradient(135deg,${G.dark},${G.base})`,borderRadius:"10px 10px 0 0",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:1}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <div style={{width:36,height:36,borderRadius:10,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.25)"}}>
@@ -873,42 +922,28 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
             </div>
             <div style={{...s.mBody,background:G.wash}}>
               {aiError&&<div style={{background:"#fee2e2",color:"#dc2626",borderRadius:6,padding:"10px 14px",fontSize:13,marginBottom:14}}>{aiError}</div>}
-
-              {/* Module context */}
               <div style={{background:"#fff",border:`1px solid ${G.pale}`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:G.dark}}>
                 <i className="bi bi-book me-1"/><strong>Module:</strong> {module.title}
               </div>
-
-              {/* Settings row */}
               <div style={{display:"flex",gap:12,marginBottom:16}}>
-                <div style={{flex:1}}>
-                  <label style={s.label}>Question Type</label>
+                <div style={{flex:1}}><label style={s.label}>Question Type</label>
                   <select style={s.select} value={aiType} onChange={e=>setAiType(e.target.value)}>
                     <option value="multiple_choice">Multiple Choice</option>
                     <option value="true_false">True / False</option>
                     <option value="short_answer">Short Answer</option>
                   </select>
                 </div>
-                <div style={{flex:1}}>
-                  <label style={s.label}>Number of Questions</label>
+                <div style={{flex:1}}><label style={s.label}>Number of Questions</label>
                   <select style={s.select} value={aiCount} onChange={e=>setAiCount(+e.target.value)}>
                     {[3,5,8,10,15].map(n=><option key={n} value={n}>{n} questions</option>)}
                   </select>
                 </div>
               </div>
-
-              {/* Topic / content input */}
               <div style={s.fg}>
                 <label style={s.label}>Topic or Content *</label>
-                <textarea style={{...s.textarea,minHeight:100}} value={aiPrompt}
-                  onChange={e=>setAiPrompt(e.target.value)}
-                  placeholder="Describe the topic, paste module content, or write key concepts the questions should cover. The more detail you provide, the better the questions."/>
-                <div style={{fontSize:11,color:"#888",marginTop:4}}>
-                  <i className="bi bi-lightbulb me-1"/>Tip: You can paste the module description or key learning outcomes here.
-                </div>
+                <textarea style={{...s.textarea,minHeight:100}} value={aiPrompt} onChange={e=>setAiPrompt(e.target.value)} placeholder="Describe the topic, paste module content, or write key concepts…"/>
+                <div style={{fontSize:11,color:"#888",marginTop:4}}><i className="bi bi-lightbulb me-1"/>Tip: Paste the module description or key learning outcomes here.</div>
               </div>
-
-              {/* Generate button */}
               {aiGenerated.length===0&&(
                 <button
                   style={{width:"100%",padding:"11px 20px",background:aiLoading?G.pale:`linear-gradient(135deg,${G.dark},${G.base})`,color:"#fff",border:"none",borderRadius:8,cursor:aiLoading?"not-allowed":"pointer",fontWeight:700,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
@@ -919,14 +954,11 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                   }
                 </button>
               )}
-
-              {/* Generated questions review */}
               {aiGenerated.length>0&&(
                 <div>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
                     <div style={{fontWeight:700,color:G.dark,fontSize:13}}>
-                      <i className="bi bi-check2-all me-1" style={{color:"#16a34a"}}/>
-                      {aiGenerated.length} questions generated — review and select
+                      <i className="bi bi-check2-all me-1" style={{color:"#16a34a"}}/>{aiGenerated.length} questions generated — review and select
                     </div>
                     <div style={{display:"flex",gap:8}}>
                       <button style={{...s.btnSm(G.wash,G.base),fontSize:11}} onClick={()=>setAiSelected(aiGenerated.map(q=>q.id))}>Select All</button>
@@ -939,15 +971,14 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                       const opts=q.options||[];
                       return(
                         <div key={q.id} style={{background:sel?G.wash:"#f9fafb",border:`1.5px solid ${sel?G.light:"#e5e7eb"}`,borderRadius:8,padding:"12px 14px",cursor:"pointer",transition:"all .15s"}}
-                          onClick={()=>setAiSelected(s=>sel?s.filter(id=>id!==q.id):[...s,q.id])}>
+                          onClick={()=>setAiSelected(prev=>sel?prev.filter(id=>id!==q.id):[...prev,q.id])}>
                           <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
                             <div style={{width:20,height:20,borderRadius:4,border:`2px solid ${sel?G.base:"#d1d5db"}`,background:sel?G.base:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>
                               {sel&&<i className="bi bi-check" style={{color:"#fff",fontSize:11}}/>}
                             </div>
                             <div style={{flex:1}}>
                               <div style={{fontSize:13,fontWeight:600,color:G.dark,marginBottom:6,lineHeight:1.5}}>
-                                <span style={{fontSize:11,fontWeight:700,color:G.base,marginRight:6}}>Q{i+1}</span>
-                                {q.question_text}
+                                <span style={{fontSize:11,fontWeight:700,color:G.base,marginRight:6}}>Q{i+1}</span>{q.question_text}
                               </div>
                               {q.question_type!=="short_answer"&&(
                                 <div style={{display:"flex",flexDirection:"column",gap:3}}>
@@ -955,21 +986,18 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                                     <div key={j} style={{fontSize:12,padding:"4px 8px",borderRadius:5,background:o.is_correct?"#dcfce7":"#f3f4f6",color:o.is_correct?"#16a34a":G.dark,display:"flex",alignItems:"center",gap:6}}>
                                       <i className={`bi bi-${o.is_correct?"check-circle-fill":"circle"}`} style={{color:o.is_correct?"#16a34a":"#d1d5db"}}/>
                                       {o.option_text}
-                                      {o.is_correct&&<span style={{marginLeft:"auto",fontSize:10,fontWeight:700}}>✓ Correct</span>}
+                                      {o.is_correct&&<span style={{marginLeft:"auto",fontSize:10,fontWeight:700}}>Correct</span>}
                                     </div>
                                   ))}
                                 </div>
                               )}
-                              {q.question_type==="short_answer"&&(
-                                <div style={{fontSize:12,color:"#888",fontStyle:"italic"}}>Open-ended — students type their answer</div>
-                              )}
+                              {q.question_type==="short_answer"&&<div style={{fontSize:12,color:"#888",fontStyle:"italic"}}>Open-ended — students type their answer</div>}
                             </div>
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                  {/* Regenerate option */}
                   <button style={{...s.btnSm(G.wash,G.base),marginTop:10,fontSize:12}} onClick={()=>{setAiGenerated([]);setAiSelected([]);}}>
                     <i className="bi bi-arrow-clockwise"/>Regenerate
                   </button>
@@ -979,8 +1007,7 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
             <div style={{...s.mFooter,background:G.wash}}>
               <button style={s.btnSecondary} onClick={()=>setShowAI(false)}>Cancel</button>
               {aiGenerated.length>0&&(
-                <button
-                  style={{...s.btnPrimary,background:`linear-gradient(135deg,${G.dark},${G.base})`,opacity:aiSelected.length===0?0.5:1}}
+                <button style={{...s.btnPrimary,background:`linear-gradient(135deg,${G.dark},${G.base})`,opacity:aiSelected.length===0?0.5:1}}
                   onClick={addAIQuestions} disabled={aiSelected.length===0}>
                   <i className="bi bi-plus-circle"/>Add {aiSelected.length} Selected Question{aiSelected.length!==1?"s":""}
                 </button>
@@ -993,7 +1020,6 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
   );
 }
 
-// ── Files Panel ───────────────────────────────────────────────────
 function FilesPanel({ module, onConfirm }) {
   const [files,      setFiles]      = useState([]);
   const [uploading,  setUploading]  = useState(false);
@@ -1074,7 +1100,6 @@ function FilesPanel({ module, onConfirm }) {
   );
 }
 
-// ── Module Form Modal ─────────────────────────────────────────────
 function ModuleModal({ initial, categories, onSave, onClose }) {
   const [form,setForm]=useState({
     title:          initial?.title||"",
@@ -1091,38 +1116,24 @@ function ModuleModal({ initial, categories, onSave, onClose }) {
       <div style={{...s.modal(560),maxHeight:"92vh",overflow:"auto"}}>
         <div style={s.mHeader}><span style={s.mTitle}>{initial?"Edit Module":"Create New Module"}</span><button style={s.iconBtn()} onClick={onClose}>×</button></div>
         <div style={s.mBody}>
-          {/* Title */}
           <div style={s.fg}><label style={s.label}>Module Title *</label><input style={s.input} value={form.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Gender Sensitivity Training" autoFocus/></div>
-          {/* Description */}
           <div style={s.fg}><label style={s.label}>Description</label><textarea style={s.textarea} value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What will students learn?"/></div>
-          {/* Category + Status */}
           <div style={s.row}>
             <div style={{...s.fg,flex:1}}><label style={s.label}>Category</label><select style={s.select} value={form.category_id} onChange={e=>set("category_id",e.target.value)}><option value="">— Select —</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
             <div style={{...s.fg,flex:1}}><label style={s.label}>Status</label><select style={s.select} value={form.status} onChange={e=>set("status",e.target.value)}><option value="draft">Draft</option><option value="published">Published</option></select></div>
           </div>
-          {/* Author + Published Date */}
           <div style={s.row}>
-            <div style={{...s.fg,flex:1}}>
-              <label style={s.label}>Author</label>
-              <input style={s.input} value={form.author} onChange={e=>set("author",e.target.value)} placeholder="e.g. Dr. Maria Santos"/>
-            </div>
-            <div style={{...s.fg,flex:1}}>
-              <label style={s.label}>Publication Date</label>
-              <input style={s.input} type="date" value={form.published_date} onChange={e=>set("published_date",e.target.value)}/>
-            </div>
+            <div style={{...s.fg,flex:1}}><label style={s.label}>Author</label><input style={s.input} value={form.author} onChange={e=>set("author",e.target.value)} placeholder="e.g. Dr. Maria Santos"/></div>
+            <div style={{...s.fg,flex:1}}><label style={s.label}>Publication Date</label><input style={s.input} type="date" value={form.published_date} onChange={e=>set("published_date",e.target.value)}/></div>
           </div>
-          {/* Tags */}
           <div style={s.fg}>
             <label style={s.label}>Tags / Keywords</label>
             <input style={s.input} value={form.tags} onChange={e=>set("tags",e.target.value)} placeholder="e.g. GAD, Women's Rights, VAWC (comma separated)"/>
-            <div style={{fontSize:11,color:"#888",marginTop:4}}><i className="bi bi-tag me-1"/>Separate tags with commas. Used for search and filtering.</div>
-            {/* Tag preview */}
-            {form.tags && (
+            <div style={{fontSize:11,color:"#888",marginTop:4}}><i className="bi bi-tag me-1"/>Separate tags with commas.</div>
+            {form.tags&&(
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
                 {form.tags.split(",").map(t=>t.trim()).filter(Boolean).map((t,i)=>(
-                  <span key={i} style={{background:G.wash,border:`1px solid ${G.pale}`,borderRadius:12,padding:"2px 10px",fontSize:11,color:G.dark,fontWeight:600}}>
-                    #{t}
-                  </span>
+                  <span key={i} style={{background:G.wash,border:`1px solid ${G.pale}`,borderRadius:12,padding:"2px 10px",fontSize:11,color:G.dark,fontWeight:600}}>#{t}</span>
                 ))}
               </div>
             )}
@@ -1133,7 +1144,6 @@ function ModuleModal({ initial, categories, onSave, onClose }) {
           <button style={s.btnSecondary} onClick={onClose}>Cancel</button>
           <button style={s.btnPrimary} onClick={()=>{
             if(!form.title.trim()) return alert("Title required.");
-            // Convert tags string to array
             const tagsArray = form.tags ? form.tags.split(",").map(t=>t.trim()).filter(Boolean) : [];
             onSave({...form, tags: tagsArray});
           }}>{initial?"Save Changes":"Create Module"}</button>
@@ -1143,7 +1153,6 @@ function ModuleModal({ initial, categories, onSave, onClose }) {
   );
 }
 
-// ── MAIN PAGE ─────────────────────────────────────────────────────
 export default function ModulesPage() {
   const [modules,    setModules]    = useState([]);
   const [categories, setCategories] = useState([]);
@@ -1158,11 +1167,16 @@ export default function ModulesPage() {
   const [filterTag,      setFilterTag]      = useState("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo,   setFilterDateTo]   = useState("");
-  const [confirm,    setConfirm]    = useState(null); // {title,message,onConfirm,danger?}
+  const [confirm,    setConfirm]    = useState(null);
 
   const loadModules = async () => {
-    const{data}=await supabase.from("modules").select("*, categories(name), module_files(count), assessments(id,is_published,title), author, published_date, tags").order("created_at",{ascending:false});
-    setModules(data||[]); return data||[];
+    const { data } = await supabase
+      .from("modules")
+      .select("*, categories(name), module_files(count), assessments(id,is_published,title), author, published_date, tags")
+      .order("created_at", { ascending: false });
+    const safe = (data || []).filter(Boolean);
+    setModules(safe);
+    return safe;
   };
 
   useEffect(()=>{
@@ -1173,44 +1187,100 @@ export default function ModulesPage() {
         supabase.from("modules").select("*, categories(name), module_files(count), assessments(id,is_published,title)").order("created_at",{ascending:false}),
         supabase.from("categories").select("*").order("name"),
       ]);
-      if(active){setModules(mods||[]);setCategories(cats||[]);if(mods?.length)setSelected(mods[0]);setLoading(false);}
+      if(active){
+        const safe=(mods||[]).filter(Boolean);
+        setModules(safe);
+        setCategories(cats||[]);
+        if(safe.length) setSelected(safe[0]);
+        setLoading(false);
+      }
     })();
     return()=>{ active=false; };
   },[]);
 
+  // ── Save module (create or edit) ──────────────────────────────
+  // Fires insertModuleNotifications when status is published for the
+  // first time via the modal (not via the togglePublish button).
   const saveModule = async (form) => {
-    const{data:{user}}=await supabase.auth.getUser();
-    if(editMod){
-      const{data}=await supabase.from("modules").update(form).eq("id",editMod.id).select("*, categories(name), module_files(count), assessments(id,is_published,title)").single();
-      setModules(ms=>ms.map(m=>m.id===editMod.id?data:m));
-      if(selected?.id===editMod.id)setSelected(data);
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (editMod) {
+      // Detect publish via modal: was draft, now published
+      const wasPublished = editMod.status === "published";
+      const nowPublished = form.status === "published";
+
+      const { error } = await supabase
+        .from("modules")
+        .update(form)
+        .eq("id", editMod.id);
+      if (error) { alert("Save error: " + error.message); return; }
+
+      // Notify if newly published via modal
+      if (!wasPublished && nowPublished) {
+        await insertModuleNotifications(editMod.id, form.title);
+      }
     } else {
-      const{data}=await supabase.from("modules").insert({...form,created_by:user?.id}).select("*, categories(name), module_files(count), assessments(id,is_published,title)").single();
-      setModules(ms=>[data,...ms]);setSelected(data);
+      const { data: inserted, error } = await supabase
+        .from("modules")
+        .insert({ ...form, created_by: user?.id })
+        .select("id")
+        .single();
+      if (error) { alert("Create error: " + error.message); return; }
+
+      // Notify if created directly as published
+      if (form.status === "published" && inserted?.id) {
+        await insertModuleNotifications(inserted.id, form.title);
+      }
+
+      setShowModal(false);
+      setEditMod(null);
+      const fresh  = await loadModules();
+      const newMod = fresh.find(m => m?.id === inserted?.id) || fresh[0];
+      if (newMod) setSelected(newMod);
+      setTab("files");
+      return;
     }
-    setShowModal(false);setEditMod(null);
+
+    setShowModal(false);
+    setEditMod(null);
+    const fresh = await loadModules();
+    if (editMod) {
+      const updated = fresh.find(m => m?.id === editMod.id);
+      if (updated) setSelected(updated);
+    }
   };
 
+  // ── Publish / unpublish button ────────────────────────────────
   const togglePublish = (mod, e) => {
     e?.stopPropagation();
     const isPublishing = mod.status !== "published";
     if (isPublishing) {
-      setConfirm({ title:"Publish Module", message:`Publish "${mod.title}"? It will become visible to all students in the app.`, confirmLabel:"Publish", danger:false,
+      setConfirm({
+        title: "Publish Module",
+        message: `Publish "${mod.title}"? It will become visible to all students and notify them.`,
+        confirmLabel: "Publish",
+        danger: false,
         onConfirm: async () => {
-          await supabase.from("modules").update({status:"published"}).eq("id",mod.id);
-          const updated={...mod,status:"published"};
-          setModules(ms=>ms.map(m=>m.id===mod.id?updated:m));
-          if(selected?.id===mod.id)setSelected(updated);
+          await supabase.from("modules").update({ status: "published" }).eq("id", mod.id);
+          const updated = { ...mod, status: "published" };
+          setModules(ms => ms.map(m => m?.id === mod.id ? updated : m).filter(Boolean));
+          if (selected?.id === mod.id) setSelected(updated);
+          // ── Notify all active users ────────────────────────────
+          await insertModuleNotifications(mod.id, mod.title);
           setConfirm(null);
         }
       });
     } else {
-      setConfirm({ title:"Unpublish Module", message:`Unpublish "${mod.title}"? Students will no longer see this module.`, confirmLabel:"Unpublish", danger:true,
+      setConfirm({
+        title: "Unpublish Module",
+        message: `Unpublish "${mod.title}"? Students will no longer see this module.`,
+        confirmLabel: "Unpublish",
+        danger: true,
         onConfirm: async () => {
-          await supabase.from("modules").update({status:"draft"}).eq("id",mod.id);
-          const updated={...mod,status:"draft"};
-          setModules(ms=>ms.map(m=>m.id===mod.id?updated:m));
-          if(selected?.id===mod.id)setSelected(updated);
+          await supabase.from("modules").update({ status: "draft" }).eq("id", mod.id);
+          const updated = { ...mod, status: "draft" };
+          setModules(ms => ms.map(m => m?.id === mod.id ? updated : m).filter(Boolean));
+          if (selected?.id === mod.id) setSelected(updated);
           setConfirm(null);
         }
       });
@@ -1226,7 +1296,7 @@ export default function ModulesPage() {
       danger: true,
       onConfirm: async () => {
         await supabase.from("modules").delete().eq("id", selected.id);
-        const rest = modules.filter(m => m.id !== selected.id);
+        const rest = modules.filter(m => m?.id !== selected.id);
         setModules(rest); setSelected(rest[0] || null);
         setConfirm(null);
       }
@@ -1234,26 +1304,29 @@ export default function ModulesPage() {
   };
 
   const handleAssessmentChange = async () => {
-    const data=await loadModules();
-    if(selected){const updated=data.find(m=>m.id===selected.id);if(updated)setSelected(updated);}
+    const data = await loadModules();
+    if (selected) { const updated = data.find(m => m?.id === selected.id); if (updated) setSelected(updated); }
   };
 
-  const filtered = modules.filter(m => {
-    const q = search.toLowerCase();
-    if (q && !m.title.toLowerCase().includes(q) &&
-        !(m.categories?.name||"").toLowerCase().includes(q) &&
-        !(m.author||"").toLowerCase().includes(q) &&
-        !(Array.isArray(m.tags)?m.tags.join(" "):"").toLowerCase().includes(q)) return false;
-    if (filterAuthor   && (m.author||"") !== filterAuthor) return false;
-    if (filterCategory && (m.categories?.name||"") !== filterCategory) return false;
-    if (filterTag      && !(Array.isArray(m.tags)?m.tags:[]).includes(filterTag)) return false;
-    if (filterDateFrom && m.published_date && m.published_date < filterDateFrom) return false;
-    if (filterDateTo   && m.published_date && m.published_date > filterDateTo)   return false;
-    return true;
-  });
-  const uniqueAuthors    = [...new Set(modules.map(m=>m.author).filter(Boolean))].sort();
-  const uniqueCategories = [...new Set(modules.map(m=>m.categories?.name).filter(Boolean))].sort();
-  const uniqueTags       = [...new Set(modules.flatMap(m=>Array.isArray(m.tags)?m.tags:[]))].sort();
+  const filtered = modules
+    .filter(Boolean)
+    .filter(m => {
+      const q = search.toLowerCase();
+      if (q && !m.title.toLowerCase().includes(q) &&
+          !(m.categories?.name||"").toLowerCase().includes(q) &&
+          !(m.author||"").toLowerCase().includes(q) &&
+          !(Array.isArray(m.tags)?m.tags.join(" "):"").toLowerCase().includes(q)) return false;
+      if (filterAuthor   && (m.author||"") !== filterAuthor) return false;
+      if (filterCategory && (m.categories?.name||"") !== filterCategory) return false;
+      if (filterTag      && !(Array.isArray(m.tags)?m.tags:[]).includes(filterTag)) return false;
+      if (filterDateFrom && m.published_date && m.published_date < filterDateFrom) return false;
+      if (filterDateTo   && m.published_date && m.published_date > filterDateTo)   return false;
+      return true;
+    });
+
+  const uniqueAuthors    = [...new Set(modules.filter(Boolean).map(m=>m.author).filter(Boolean))].sort();
+  const uniqueCategories = [...new Set(modules.filter(Boolean).map(m=>m.categories?.name).filter(Boolean))].sort();
+  const uniqueTags       = [...new Set(modules.filter(Boolean).flatMap(m=>Array.isArray(m.tags)?m.tags:[]))].sort();
   const activeFilters    = [filterAuthor,filterCategory,filterTag,filterDateFrom,filterDateTo].filter(Boolean).length;
   const fileCount = (m) => m?.module_files?.[0]?.count||0;
   const hasAssess = (m) => (m?.assessments?.length||0)>0;
@@ -1261,7 +1334,6 @@ export default function ModulesPage() {
 
   return(
     <div style={s.page}>
-      {/* SIDEBAR */}
       <div style={s.sidebar}>
         <div style={s.sidebarHdr}>
           <div style={s.sidebarTitle}><i className="bi bi-book me-2"/>Modules</div>
@@ -1269,53 +1341,32 @@ export default function ModulesPage() {
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search modules…"
             style={{...s.input,marginTop:10,background:"rgba(255,255,255,0.1)",border:"none",color:"#fff",fontSize:12}}/>
         </div>
-
-        {/* ── Filters ── */}
         <div style={{padding:"12px 14px",borderBottom:"1px solid rgba(255,255,255,0.1)"}}>
-          {/* Author */}
-          {uniqueAuthors.length>0&&(
-            <div style={{marginBottom:8}}>
-              <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Author</div>
-              <select value={filterAuthor} onChange={e=>setFilterAuthor(e.target.value)}
-                style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
-                <option value="">All Authors</option>
-                {uniqueAuthors.map(a=><option key={a} value={a} style={{color:"#000"}}>{a}</option>)}
-              </select>
-            </div>
-          )}
-          {/* Category */}
-          {uniqueCategories.length>0&&(
-            <div style={{marginBottom:8}}>
-              <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Category</div>
-              <select value={filterCategory} onChange={e=>setFilterCategory(e.target.value)}
-                style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
-                <option value="">All Categories</option>
-                {uniqueCategories.map(c=><option key={c} value={c} style={{color:"#000"}}>{c}</option>)}
-              </select>
-            </div>
-          )}
-          {/* Tag */}
-          {uniqueTags.length>0&&(
-            <div style={{marginBottom:8}}>
-              <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Tag</div>
-              <select value={filterTag} onChange={e=>setFilterTag(e.target.value)}
-                style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
-                <option value="">All Tags</option>
-                {uniqueTags.map(t=><option key={t} value={t} style={{color:"#000"}}>#{t}</option>)}
-              </select>
-            </div>
-          )}
-          {/* Date Range */}
+          {uniqueAuthors.length>0&&(<div style={{marginBottom:8}}>
+            <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Author</div>
+            <select value={filterAuthor} onChange={e=>setFilterAuthor(e.target.value)} style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
+              <option value="">All Authors</option>{uniqueAuthors.map(a=><option key={a} value={a} style={{color:"#000"}}>{a}</option>)}
+            </select>
+          </div>)}
+          {uniqueCategories.length>0&&(<div style={{marginBottom:8}}>
+            <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Category</div>
+            <select value={filterCategory} onChange={e=>setFilterCategory(e.target.value)} style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
+              <option value="">All Categories</option>{uniqueCategories.map(c=><option key={c} value={c} style={{color:"#000"}}>{c}</option>)}
+            </select>
+          </div>)}
+          {uniqueTags.length>0&&(<div style={{marginBottom:8}}>
+            <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Tag</div>
+            <select value={filterTag} onChange={e=>setFilterTag(e.target.value)} style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
+              <option value="">All Tags</option>{uniqueTags.map(t=><option key={t} value={t} style={{color:"#000"}}>#{t}</option>)}
+            </select>
+          </div>)}
           <div style={{marginBottom:4}}>
             <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Publication Date</div>
             <div style={{display:"flex",gap:4}}>
-              <input type="date" value={filterDateFrom} onChange={e=>setFilterDateFrom(e.target.value)}
-                style={{flex:1,padding:"5px 6px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:10,outline:"none",colorScheme:"dark"}}/>
-              <input type="date" value={filterDateTo} onChange={e=>setFilterDateTo(e.target.value)}
-                style={{flex:1,padding:"5px 6px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:10,outline:"none",colorScheme:"dark"}}/>
+              <input type="date" value={filterDateFrom} onChange={e=>setFilterDateFrom(e.target.value)} style={{flex:1,padding:"5px 6px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:10,outline:"none",colorScheme:"dark"}}/>
+              <input type="date" value={filterDateTo}   onChange={e=>setFilterDateTo(e.target.value)}   style={{flex:1,padding:"5px 6px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:10,outline:"none",colorScheme:"dark"}}/>
             </div>
           </div>
-          {/* Clear filters */}
           {activeFilters>0&&(
             <button onClick={()=>{setFilterAuthor("");setFilterCategory("");setFilterTag("");setFilterDateFrom("");setFilterDateTo("");}}
               style={{marginTop:8,width:"100%",padding:"5px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,color:"#fff",fontSize:11,cursor:"pointer",fontWeight:600}}>
@@ -1323,7 +1374,6 @@ export default function ModulesPage() {
             </button>
           )}
         </div>
-
         <button style={s.addBtn} onClick={()=>{setEditMod(null);setShowModal(true);}}>
           <i className="bi bi-plus-circle"/>New Module
         </button>
@@ -1354,7 +1404,6 @@ export default function ModulesPage() {
         </div>
       </div>
 
-      {/* MAIN */}
       <div style={s.main}>
         {!selected?(
           <div style={{...s.emptyState,flex:1}}>
@@ -1370,24 +1419,12 @@ export default function ModulesPage() {
               <div style={{flex:1,minWidth:0}}>
                 <div style={s.topBarTitle}>{selected.title}</div>
                 <div style={{fontSize:12,color:"#aaa"}}>{selected.categories?.name||"Uncategorized"}{selected.description?` · ${selected.description.slice(0,60)}…`:""}</div>
-                {/* Metadata row */}
                 <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:6,alignItems:"center"}}>
-                  {selected.author&&(
-                    <span style={{fontSize:11,color:"#666",display:"flex",alignItems:"center",gap:4}}>
-                      <i className="bi bi-person" style={{color:G.base}}/>{selected.author}
-                    </span>
-                  )}
-                  {selected.published_date&&(
-                    <span style={{fontSize:11,color:"#666",display:"flex",alignItems:"center",gap:4}}>
-                      <i className="bi bi-calendar3" style={{color:G.base}}/>
-                      {new Date(selected.published_date).toLocaleDateString("en-PH",{month:"short",day:"numeric",year:"numeric"})}
-                    </span>
-                  )}
+                  {selected.author&&(<span style={{fontSize:11,color:"#666",display:"flex",alignItems:"center",gap:4}}><i className="bi bi-person" style={{color:G.base}}/>{selected.author}</span>)}
+                  {selected.published_date&&(<span style={{fontSize:11,color:"#666",display:"flex",alignItems:"center",gap:4}}><i className="bi bi-calendar3" style={{color:G.base}}/>{new Date(selected.published_date).toLocaleDateString("en-PH",{month:"short",day:"numeric",year:"numeric"})}</span>)}
                   {Array.isArray(selected.tags)&&selected.tags.length>0&&(
                     <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                      {selected.tags.map((t,i)=>(
-                        <span key={i} style={{background:G.wash,border:`1px solid ${G.pale}`,borderRadius:10,padding:"1px 8px",fontSize:10,color:G.dark,fontWeight:600}}>#{t}</span>
-                      ))}
+                      {selected.tags.map((t,i)=>(<span key={i} style={{background:G.wash,border:`1px solid ${G.pale}`,borderRadius:10,padding:"1px 8px",fontSize:10,color:G.dark,fontWeight:600}}>#{t}</span>))}
                     </div>
                   )}
                 </div>
@@ -1397,7 +1434,6 @@ export default function ModulesPage() {
               <button style={s.btnSm(G.wash,G.dark)} onClick={()=>{setEditMod(selected);setShowModal(true);}}><i className="bi bi-pencil"/>Edit</button>
               <button style={s.btnSm("#fee2e2","#dc2626")} onClick={deleteMod}><i className="bi bi-trash"/></button>
             </div>
-
             <div style={s.tabBar}>
               <div style={s.tab(tab==="files")} onClick={()=>setTab("files")}>
                 <i className="bi bi-folder2-open"/>Files{fileCount(selected)>0&&<span style={s.badge}>{fileCount(selected)}</span>}
@@ -1407,7 +1443,6 @@ export default function ModulesPage() {
                 {hasAssess(selected)&&<span style={{...s.badge,background:"#dcfce7",color:"#16a34a"}}><i className="bi bi-check"/></span>}
               </div>
             </div>
-
             <div style={s.content}>
               {tab==="files"      &&<FilesPanel      key={selected.id+"_f"} module={selected} onConfirm={setConfirm}/>}
               {tab==="assessment" &&<AssessmentPanel key={selected.id+"_a"} module={selected} onAssessmentChange={handleAssessmentChange} onConfirm={setConfirm}/>}

@@ -239,8 +239,8 @@ function LoginPage({ onLogin }) {
       const role = roleNames.includes("super_admin") ? "super_admin" : "admin";
       setLoading(false);
       onLogin(data.user, role);
-    } catch(err) {
-      setError("An error occurred. Please try again.");
+ } catch {
+  setError("An error occurred. Please try again.");
       setLoading(false);
     }
   };
@@ -679,7 +679,7 @@ export default function App() {
       }
     }).catch(() => { clearTimeout(timeout); setChecking(false); });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
       // Only handle SIGNED_OUT — login is handled directly by LoginPage
       if (event === "SIGNED_OUT") {
         setUser(null); setLoggedIn(false); setUserRole(null);

@@ -55,6 +55,25 @@ const s = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  NOTIFICATION HELPER  ← NEW
+// ─────────────────────────────────────────────────────────────────────────────
+async function insertCertificateNotification(userId, certCode) {
+  try {
+    await supabase.from("notifications").insert({
+      user_id:        userId,
+      type:           "new_certificate",
+      title:          "Certificate Issued",
+      body:           `Your certificate (${certCode}) has been issued. View it in Achievements.`,
+      reference_type: "certificate",
+      reference_id:   null,
+      is_read:        false,
+    });
+  } catch (e) {
+    console.error("insertCertificateNotification failed:", e);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  CERTIFICATE PREVIEW MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 function CertPreviewModal({ cert, onClose }) {
@@ -188,7 +207,7 @@ function CertPreviewModal({ cert, onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ATTENDANCE GATE CHECK (used by manual seminar issue only)
+//  ATTENDANCE GATE CHECK
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkAttendance(userId, seminarId) {
   if (!userId || !seminarId) return { attended: false, checkedInAt: null };
@@ -270,41 +289,42 @@ function CertificatesTab() {
     (async () => { await load(); })();
   }, [load]);
 
-  // ── Attendance gate effect (seminar type only, single recipient) ───────────
- useEffect(() => {
-  let cancelled = false;
+  // ── Attendance gate effect (seminar type only, single recipient) ──────────
+  useEffect(() => {
+    let cancelled = false;
 
-  (async () => {
-    if (form.reference_type !== "seminar") {
-      if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); }
-      return;
-    }
-    const userId    = selectedRecipients[0];
-    const seminarId = form.seminar_id;
-    if (!userId || !seminarId) {
-      if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); }
-      return;
-    }
-    if (!cancelled) setAttendanceCheck("checking");
-    const [attendance, existingCert] = await Promise.all([
-      checkAttendance(userId, seminarId),
-      supabase
-        .from("certificates")
-        .select("id")
-        .eq("user_id", userId)
-        .eq("reference_type", "seminar")
-        .eq("reference_id", seminarId)
-        .eq("is_revoked", false)
-        .maybeSingle(),
-    ]);
-    if (cancelled) return;
-    setAttendanceCheck(attendance);
-    setAlreadyHasCert(!!existingCert.data);
-  })();
+    (async () => {
+      if (form.reference_type !== "seminar") {
+        if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); }
+        return;
+      }
+      const userId    = selectedRecipients[0];
+      const seminarId = form.seminar_id;
+      if (!userId || !seminarId) {
+        if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); }
+        return;
+      }
+      if (!cancelled) setAttendanceCheck("checking");
+      const [attendance, existingCert] = await Promise.all([
+        checkAttendance(userId, seminarId),
+        supabase
+          .from("certificates")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("reference_type", "seminar")
+          .eq("reference_id", seminarId)
+          .eq("is_revoked", false)
+          .maybeSingle(),
+      ]);
+      if (cancelled) return;
+      setAttendanceCheck(attendance);
+      setAlreadyHasCert(!!existingCert.data);
+    })();
 
-  return () => { cancelled = true; };
-}, [selectedRecipients, form.seminar_id, form.reference_type]);
-  // ── Issue certificate(s) ──────────────────────────────────────────────────
+    return () => { cancelled = true; };
+  }, [selectedRecipients, form.seminar_id, form.reference_type]);
+
+  // ── Issue certificate(s) ── UPDATED: notifies each recipient ─────────────
   const issueCert = async () => {
     setError("");
     if (selectedRecipients.length === 0) { setError("Please select at least one recipient."); return; }
@@ -327,16 +347,20 @@ function CertificatesTab() {
     let failed = 0;
 
     for (const uid of selectedRecipients) {
+      // ── Generate unique code per recipient ──────────────────────────
+      const code = genCertCode();
       const { error: err } = await supabase.from("certificates").insert({
         user_id:          uid,
         reference_type:   form.reference_type || "manual",
         reference_id:     form.reference_type === "seminar" ? form.seminar_id : (form.reference_id || null),
-        certificate_code: genCertCode(),
+        certificate_code: code,
         is_revoked:       false,
         issued_at:        new Date().toISOString(),
         issued_by:        user?.id,
       });
-      if (err) failed++;
+      if (err) { failed++; continue; }
+      // ── Notify recipient immediately ────────────────────────────────
+      await insertCertificateNotification(uid, code);
     }
 
     setSaving(false);
@@ -407,7 +431,7 @@ function CertificatesTab() {
     return matchSearch && matchType;
   });
 
-  // ── Attendance indicator (rendered as function, not component) ────────────
+  // ── Attendance indicator ──────────────────────────────────────────────────
   const renderAttendanceGate = () => {
     if (form.reference_type !== "seminar") return null;
     const userId = selectedRecipients[0];
@@ -462,7 +486,6 @@ function CertificatesTab() {
     return map[t] || t;
   };
 
-  // ── Filtered recipient list for the picker ────────────────────────────────
   const filteredStudents = students.filter(st => {
     const q = recipientSearch.toLowerCase();
     return (
@@ -688,7 +711,7 @@ function CertificatesTab() {
 
               {form.reference_type !== "seminar" && (
                 <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-                  <i className="bi bi-lightbulb me-1" />A unique certificate code will be auto-generated per recipient on issue.
+                  <i className="bi bi-lightbulb me-1" />A unique certificate code will be auto-generated per recipient on issue. Each recipient will receive an in-app notification.
                 </div>
               )}
             </div>
@@ -841,20 +864,15 @@ function AutoIssueTab() {
       { data: evaluated,  error: evalErr },
       { data: existing }
     ] = await Promise.all([
-      // Condition 1: registered for this seminar
       supabase
         .from("seminar_registrations")
         .select("user_id, full_name, email, role, department")
         .eq("seminar_id", seminarId),
-
-      // Condition 2: submitted an evaluation for this seminar
       supabase
         .from("seminar_evaluations")
         .select("user_id, submitted_at")
         .eq("seminar_id", seminarId)
         .not("submitted_at", "is", null),
-
-      // Already has a non-revoked cert for this seminar
       supabase
         .from("certificates")
         .select("user_id")
@@ -872,7 +890,6 @@ function AutoIssueTab() {
     const evaluatedIds = new Set((evaluated || []).map(e => e.user_id));
     const certUserIds  = new Set((existing  || []).map(c => c.user_id));
 
-    // Must be registered AND evaluated AND not already have a cert
     const pending = (registered || []).filter(r =>
       evaluatedIds.has(r.user_id) && !certUserIds.has(r.user_id)
     );
@@ -888,17 +905,23 @@ function AutoIssueTab() {
     if (seminarId) loadEligible(seminarId);
   };
 
+  // ── Issue one — UPDATED: notifies recipient ───────────────────────────────
   const issueOne = async (userId, seminarId) => {
     const { data: { user } } = await supabase.auth.getUser();
+    const code = genCertCode();
     const { error: err } = await supabase.from("certificates").insert({
       user_id:          userId,
       reference_type:   "seminar",
       reference_id:     seminarId,
-      certificate_code: genCertCode(),
+      certificate_code: code,
       is_revoked:       false,
       issued_at:        new Date().toISOString(),
       issued_by:        user?.id,
     });
+    if (!err) {
+      // ── Notify recipient immediately ──────────────────────────────
+      await insertCertificateNotification(userId, code);
+    }
     return err;
   };
 
