@@ -150,13 +150,38 @@ function DonutCanvas({segments}){
 
 function getActIcon(a){
   if(!a)return"bi-pin-angle";const t=a.toLowerCase();
+  if(t==="login"||t==="sign_in")return"bi-box-arrow-in-right";
+  if(t==="logout"||t==="sign_out")return"bi-box-arrow-right";
+  if(t.includes("forgot_password")||t.includes("password_reset"))return"bi-key";
   if(t.includes("module"))return"bi-book";
   if(t.includes("seminar"))return"bi-people";
   if(t.includes("certificate"))return"bi-patch-check";
   if(t.includes("assessment"))return"bi-clipboard-check";
-  if(t.includes("login"))return"bi-key";
   if(t.includes("badge"))return"bi-award";
+  if(t.includes("file"))return"bi-file-earmark";
   return"bi-activity";
+}
+
+function getActColor(a){
+  if(!a)return"#888";const t=a.toLowerCase();
+  if(t==="login"||t==="sign_in")return"#16a34a";
+  if(t==="logout"||t==="sign_out")return"#dc2626";
+  if(t.includes("forgot_password")||t.includes("password_reset"))return"#d97706";
+  if(t.includes("module"))return"#2D6A2D";
+  if(t.includes("seminar"))return"#1565C0";
+  if(t.includes("certificate"))return"#E65100";
+  if(t.includes("assessment"))return"#6A1B9A";
+  if(t.includes("badge"))return"#00695C";
+  if(t.includes("file"))return"#827717";
+  return"#888";
+}
+
+function getActBg(a){
+  if(!a)return"#f3f4f6";const t=a.toLowerCase();
+  if(t==="login"||t==="sign_in")return"#f0fdf4";
+  if(t==="logout"||t==="sign_out")return"#fff5f5";
+  if(t.includes("forgot_password")||t.includes("password_reset"))return"#fffbeb";
+  return"#f9fafb";
 }
 const ACT_COLORS=["#E8F5E9","#E3F2FD","#FFF3E0","#FCE4EC","#F3E5F5","#E0F7FA","#F9FBE7","#FBE9E7"];
 const ACT_ICON_COLORS=["#2D6A2D","#1565C0","#E65100","#C62828","#6A1B9A","#00695C","#827717","#BF360C"];
@@ -244,7 +269,7 @@ export default function DashboardPage(){
   const fetchStats=useCallback(async(from,to)=>{const f=toISO(from),t=toISO(to,true);const rng=(q,col="created_at")=>{if(f)q=q.gte(col,f);if(t)q=q.lte(col,t);return q;};const[{count:tm},{count:pm},{count:ta},{count:ts},{count:us},{count:tc},{count:tb},{count:tat}]=await Promise.all([rng(supabase.from("modules").select("*",{count:"exact",head:true})),rng(supabase.from("modules").select("*",{count:"exact",head:true}).eq("status","published")),rng(supabase.from("assessments").select("*",{count:"exact",head:true})),rng(supabase.from("seminars").select("*",{count:"exact",head:true})),rng(supabase.from("seminars").select("*",{count:"exact",head:true}).eq("status","upcoming")),rng(supabase.from("certificates").select("*",{count:"exact",head:true}).eq("is_revoked",false),"issued_at"),rng(supabase.from("student_badges").select("*",{count:"exact",head:true}),"awarded_at"),rng(supabase.from("assessment_attempts").select("*",{count:"exact",head:true}),"submitted_at")]);let students=0;try{const{data:r}=await supabase.from("roles").select("id").eq("name","student").single();if(r){const{count}=await supabase.from("user_roles").select("*",{count:"exact",head:true}).eq("role_id",r.id);students=count??0;}}catch(e){console.error(e);}setStats({totalMods:tm??0,pubMods:pm??0,totalAssess:ta??0,totalSems:ts??0,upcomingSems:us??0,totalCerts:tc??0,totalBadges:tb??0,totalAttempts:tat??0,students});},[]);
   const fetchModStats=useCallback(async()=>{const{data}=await supabase.from("v_module_completion_stats").select("*").order("completion_rate_percent",{ascending:false}).limit(6);setModStats(data??[]);},[]);
   const fetchSemStats=useCallback(async()=>{const{data}=await supabase.from("v_seminar_attendance_summary").select("*").order("scheduled_start",{ascending:false}).limit(5);setSemStats(data??[]);},[]);
-  const fetchActivity=useCallback(async(from,to)=>{let q=supabase.from("activity_logs").select("*").order("created_at",{ascending:false}).limit(10);if(from)q=q.gte("created_at",toISO(from));if(to)q=q.lte("created_at",toISO(to,true));const{data}=await q;setActivity(data??[]);},[]);
+  const fetchActivity=useCallback(async(from,to)=>{let q=supabase.from("activity_logs").select("*, profiles(full_name, email)").order("created_at",{ascending:false}).limit(15);if(from)q=q.gte("created_at",toISO(from));if(to)q=q.lte("created_at",toISO(to,true));const{data}=await q;setActivity(data??[]);},[]);
   const fetchRecentMods=useCallback(async(from,to)=>{let q=supabase.from("modules").select("id,title,status,created_at").order("created_at",{ascending:false}).limit(5);if(from)q=q.gte("created_at",toISO(from));if(to)q=q.lte("created_at",toISO(to,true));const{data}=await q;setRecentMods(data??[]);},[]);
   const fetchLeaderboard=useCallback(async(from,to)=>{let q=supabase.from("student_badges").select("user_id,awarded_at,profiles(full_name)");if(from)q=q.gte("awarded_at",toISO(from));if(to)q=q.lte("awarded_at",toISO(to,true));const{data}=await q;const map={};(data??[]).forEach((r,i)=>{const uid=r.user_id??`u${i}`;if(!map[uid])map[uid]={uid,name:r.profiles?.full_name??"—",count:0};map[uid].count++;});setLeaderboard(Object.values(map).sort((a,b)=>b.count-a.count).slice(0,5));},[]);
   const fetchCertStats=useCallback(async(from,to)=>{let q=supabase.from("certificates").select("reference_type,is_revoked,issued_at");if(from)q=q.gte("issued_at",toISO(from));if(to)q=q.lte("issued_at",toISO(to,true));const{data}=await q;if(!data)return;const byType={},valid=data.filter(c=>!c.is_revoked).length,revoked=data.length-valid;data.forEach(c=>{const t=c.reference_type??"manual";byType[t]=(byType[t]??0)+1;});setCertStats({byType,valid,revoked,total:data.length});},[]);
@@ -564,11 +589,12 @@ export default function DashboardPage(){
                 {activity.length===0?<Empty icon="bi-activity" msg="No activity"/>:activity.map((log,i)=>(
                   <div key={log.id??i} className="dash-activity-item">
                     <div className="dash-icon-circle" style={{background:ACT_COLORS[i%ACT_COLORS.length]}}>
-                      <i className={`bi ${getActIcon(log.action_type)}`} style={{color:ACT_ICON_COLORS[i%ACT_ICON_COLORS.length],fontSize:13}}/>
+                      <i className={`bi ${getActIcon(log.action_type)}`} style={{color:getActColor(log.action_type),fontSize:13}}/>
                     </div>
                     <div className="flex-grow-1 overflow-hidden">
                       <div className="fw-semibold text-truncate" style={{fontSize:12,color:"#1A2E1A"}}>
-                        {(log.action_type??"Activity").replace(/_/g," ")}
+                        {(()=>{const t=log.action_type??"activity";if(t==="login")return"🟢 Logged In";if(t==="logout")return"🔴 Logged Out";if(t==="forgot_password")return"🔑 Forgot Password";if(t==="password_reset")return"🔑 Password Reset";return t.replace(/_/g," ");})()}
+                        {log.profiles?.full_name&&<div style={{fontSize:10,color:"#aaa",marginTop:1}}>{log.profiles.full_name}</div>}
                         {log.reference_type&&<span className="text-muted fw-normal"> · {log.reference_type}</span>}
                       </div>
                       <small className="text-muted" style={{fontSize:11}}>{fmt(log.created_at)}</small>

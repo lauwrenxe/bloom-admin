@@ -74,6 +74,13 @@ export default function StudentsPage() {
         .order("full_name");
       if (studentIds.length > 0) {
         query = query.in("id", studentIds);
+      } else {
+        // No student roles found — exclude all admin/super_admin accounts
+        const { data: allRoles } = await supabase.from("user_roles").select("user_id, roles(name)");
+        const nonStudentIds = (allRoles || [])
+          .filter(r => r.roles?.name === "admin" || r.roles?.name === "super_admin")
+          .map(r => r.user_id).filter(Boolean);
+        if (nonStudentIds.length > 0) query = query.not("id", "in", `(${nonStudentIds.join(",")})`);
       }
       const { data, error } = await query;
       if (error) console.error("Students load error:", error.message);

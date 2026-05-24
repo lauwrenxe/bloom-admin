@@ -1076,24 +1076,67 @@ function FilesPanel({ module, onConfirm }) {
 
 // ── Module Form Modal ─────────────────────────────────────────────
 function ModuleModal({ initial, categories, onSave, onClose }) {
-  const [form,setForm]=useState({title:initial?.title||"",description:initial?.description||"",category_id:initial?.category_id||"",status:initial?.status||"draft"});
+  const [form,setForm]=useState({
+    title:          initial?.title||"",
+    description:    initial?.description||"",
+    category_id:    initial?.category_id||"",
+    status:         initial?.status||"draft",
+    author:         initial?.author||"",
+    published_date: initial?.published_date||"",
+    tags:           Array.isArray(initial?.tags) ? initial.tags.join(", ") : (initial?.tags||""),
+  });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   return(
     <div style={s.overlay}>
-      <div style={s.modal(520)}>
+      <div style={{...s.modal(560),maxHeight:"92vh",overflow:"auto"}}>
         <div style={s.mHeader}><span style={s.mTitle}>{initial?"Edit Module":"Create New Module"}</span><button style={s.iconBtn()} onClick={onClose}>×</button></div>
         <div style={s.mBody}>
+          {/* Title */}
           <div style={s.fg}><label style={s.label}>Module Title *</label><input style={s.input} value={form.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Gender Sensitivity Training" autoFocus/></div>
+          {/* Description */}
           <div style={s.fg}><label style={s.label}>Description</label><textarea style={s.textarea} value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What will students learn?"/></div>
+          {/* Category + Status */}
           <div style={s.row}>
             <div style={{...s.fg,flex:1}}><label style={s.label}>Category</label><select style={s.select} value={form.category_id} onChange={e=>set("category_id",e.target.value)}><option value="">— Select —</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
             <div style={{...s.fg,flex:1}}><label style={s.label}>Status</label><select style={s.select} value={form.status} onChange={e=>set("status",e.target.value)}><option value="draft">Draft</option><option value="published">Published</option></select></div>
+          </div>
+          {/* Author + Published Date */}
+          <div style={s.row}>
+            <div style={{...s.fg,flex:1}}>
+              <label style={s.label}>Author</label>
+              <input style={s.input} value={form.author} onChange={e=>set("author",e.target.value)} placeholder="e.g. Dr. Maria Santos"/>
+            </div>
+            <div style={{...s.fg,flex:1}}>
+              <label style={s.label}>Publication Date</label>
+              <input style={s.input} type="date" value={form.published_date} onChange={e=>set("published_date",e.target.value)}/>
+            </div>
+          </div>
+          {/* Tags */}
+          <div style={s.fg}>
+            <label style={s.label}>Tags / Keywords</label>
+            <input style={s.input} value={form.tags} onChange={e=>set("tags",e.target.value)} placeholder="e.g. GAD, Women's Rights, VAWC (comma separated)"/>
+            <div style={{fontSize:11,color:"#888",marginTop:4}}><i className="bi bi-tag me-1"/>Separate tags with commas. Used for search and filtering.</div>
+            {/* Tag preview */}
+            {form.tags && (
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
+                {form.tags.split(",").map(t=>t.trim()).filter(Boolean).map((t,i)=>(
+                  <span key={i} style={{background:G.wash,border:`1px solid ${G.pale}`,borderRadius:12,padding:"2px 10px",fontSize:11,color:G.dark,fontWeight:600}}>
+                    #{t}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <div style={{background:G.wash,borderRadius:6,padding:"10px 14px",fontSize:12,color:G.dark}}><i className="bi bi-lightbulb me-1"/>Set to <strong>Published</strong> so students can see this module in the app.</div>
         </div>
         <div style={s.mFooter}>
           <button style={s.btnSecondary} onClick={onClose}>Cancel</button>
-          <button style={s.btnPrimary} onClick={()=>{if(!form.title.trim())return alert("Title required.");onSave(form);}}>{initial?"Save Changes":"Create Module"}</button>
+          <button style={s.btnPrimary} onClick={()=>{
+            if(!form.title.trim()) return alert("Title required.");
+            // Convert tags string to array
+            const tagsArray = form.tags ? form.tags.split(",").map(t=>t.trim()).filter(Boolean) : [];
+            onSave({...form, tags: tagsArray});
+          }}>{initial?"Save Changes":"Create Module"}</button>
         </div>
       </div>
     </div>
@@ -1110,10 +1153,15 @@ export default function ModulesPage() {
   const [editMod,    setEditMod]    = useState(null);
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState("");
+  const [filterAuthor,   setFilterAuthor]   = useState("");
+  const [filterCategory, setFilterCategory] = useState("");
+  const [filterTag,      setFilterTag]      = useState("");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo,   setFilterDateTo]   = useState("");
   const [confirm,    setConfirm]    = useState(null); // {title,message,onConfirm,danger?}
 
   const loadModules = async () => {
-    const{data}=await supabase.from("modules").select("*, categories(name), module_files(count), assessments(id,is_published,title)").order("created_at",{ascending:false});
+    const{data}=await supabase.from("modules").select("*, categories(name), module_files(count), assessments(id,is_published,title), author, published_date, tags").order("created_at",{ascending:false});
     setModules(data||[]); return data||[];
   };
 
@@ -1190,7 +1238,23 @@ export default function ModulesPage() {
     if(selected){const updated=data.find(m=>m.id===selected.id);if(updated)setSelected(updated);}
   };
 
-  const filtered  = modules.filter(m=>m.title.toLowerCase().includes(search.toLowerCase()));
+  const filtered = modules.filter(m => {
+    const q = search.toLowerCase();
+    if (q && !m.title.toLowerCase().includes(q) &&
+        !(m.categories?.name||"").toLowerCase().includes(q) &&
+        !(m.author||"").toLowerCase().includes(q) &&
+        !(Array.isArray(m.tags)?m.tags.join(" "):"").toLowerCase().includes(q)) return false;
+    if (filterAuthor   && (m.author||"") !== filterAuthor) return false;
+    if (filterCategory && (m.categories?.name||"") !== filterCategory) return false;
+    if (filterTag      && !(Array.isArray(m.tags)?m.tags:[]).includes(filterTag)) return false;
+    if (filterDateFrom && m.published_date && m.published_date < filterDateFrom) return false;
+    if (filterDateTo   && m.published_date && m.published_date > filterDateTo)   return false;
+    return true;
+  });
+  const uniqueAuthors    = [...new Set(modules.map(m=>m.author).filter(Boolean))].sort();
+  const uniqueCategories = [...new Set(modules.map(m=>m.categories?.name).filter(Boolean))].sort();
+  const uniqueTags       = [...new Set(modules.flatMap(m=>Array.isArray(m.tags)?m.tags:[]))].sort();
+  const activeFilters    = [filterAuthor,filterCategory,filterTag,filterDateFrom,filterDateTo].filter(Boolean).length;
   const fileCount = (m) => m?.module_files?.[0]?.count||0;
   const hasAssess = (m) => (m?.assessments?.length||0)>0;
   const assessPub = (m) => m?.assessments?.[0]?.is_published;
@@ -1205,6 +1269,61 @@ export default function ModulesPage() {
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search modules…"
             style={{...s.input,marginTop:10,background:"rgba(255,255,255,0.1)",border:"none",color:"#fff",fontSize:12}}/>
         </div>
+
+        {/* ── Filters ── */}
+        <div style={{padding:"12px 14px",borderBottom:"1px solid rgba(255,255,255,0.1)"}}>
+          {/* Author */}
+          {uniqueAuthors.length>0&&(
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Author</div>
+              <select value={filterAuthor} onChange={e=>setFilterAuthor(e.target.value)}
+                style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
+                <option value="">All Authors</option>
+                {uniqueAuthors.map(a=><option key={a} value={a} style={{color:"#000"}}>{a}</option>)}
+              </select>
+            </div>
+          )}
+          {/* Category */}
+          {uniqueCategories.length>0&&(
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Category</div>
+              <select value={filterCategory} onChange={e=>setFilterCategory(e.target.value)}
+                style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
+                <option value="">All Categories</option>
+                {uniqueCategories.map(c=><option key={c} value={c} style={{color:"#000"}}>{c}</option>)}
+              </select>
+            </div>
+          )}
+          {/* Tag */}
+          {uniqueTags.length>0&&(
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Tag</div>
+              <select value={filterTag} onChange={e=>setFilterTag(e.target.value)}
+                style={{width:"100%",padding:"5px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:11,outline:"none"}}>
+                <option value="">All Tags</option>
+                {uniqueTags.map(t=><option key={t} value={t} style={{color:"#000"}}>#{t}</option>)}
+              </select>
+            </div>
+          )}
+          {/* Date Range */}
+          <div style={{marginBottom:4}}>
+            <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Publication Date</div>
+            <div style={{display:"flex",gap:4}}>
+              <input type="date" value={filterDateFrom} onChange={e=>setFilterDateFrom(e.target.value)}
+                style={{flex:1,padding:"5px 6px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:10,outline:"none",colorScheme:"dark"}}/>
+              <input type="date" value={filterDateTo} onChange={e=>setFilterDateTo(e.target.value)}
+                style={{flex:1,padding:"5px 6px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:10,outline:"none",colorScheme:"dark"}}/>
+            </div>
+          </div>
+          {/* Clear filters */}
+          {activeFilters>0&&(
+            <button onClick={()=>{setFilterAuthor("");setFilterCategory("");setFilterTag("");setFilterDateFrom("");setFilterDateTo("");}}
+              style={{marginTop:8,width:"100%",padding:"5px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,color:"#fff",fontSize:11,cursor:"pointer",fontWeight:600}}>
+              <i className="bi bi-x-circle me-1"/>Clear {activeFilters} filter{activeFilters!==1?"s":""}
+            </button>
+          )}
+        </div>
+
         <button style={s.addBtn} onClick={()=>{setEditMod(null);setShowModal(true);}}>
           <i className="bi bi-plus-circle"/>New Module
         </button>
@@ -1251,6 +1370,27 @@ export default function ModulesPage() {
               <div style={{flex:1,minWidth:0}}>
                 <div style={s.topBarTitle}>{selected.title}</div>
                 <div style={{fontSize:12,color:"#aaa"}}>{selected.categories?.name||"Uncategorized"}{selected.description?` · ${selected.description.slice(0,60)}…`:""}</div>
+                {/* Metadata row */}
+                <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:6,alignItems:"center"}}>
+                  {selected.author&&(
+                    <span style={{fontSize:11,color:"#666",display:"flex",alignItems:"center",gap:4}}>
+                      <i className="bi bi-person" style={{color:G.base}}/>{selected.author}
+                    </span>
+                  )}
+                  {selected.published_date&&(
+                    <span style={{fontSize:11,color:"#666",display:"flex",alignItems:"center",gap:4}}>
+                      <i className="bi bi-calendar3" style={{color:G.base}}/>
+                      {new Date(selected.published_date).toLocaleDateString("en-PH",{month:"short",day:"numeric",year:"numeric"})}
+                    </span>
+                  )}
+                  {Array.isArray(selected.tags)&&selected.tags.length>0&&(
+                    <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                      {selected.tags.map((t,i)=>(
+                        <span key={i} style={{background:G.wash,border:`1px solid ${G.pale}`,borderRadius:10,padding:"1px 8px",fontSize:10,color:G.dark,fontWeight:600}}>#{t}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <span style={s.tag(selected.status==="published"?"green":"yellow")}>{selected.status==="published"?"Published":"Draft"}</span>
               <button style={s.btnSm(G.wash,G.dark)} onClick={e=>togglePublish(selected,e)}>{selected.status==="published"?"Unpublish":"Publish"}</button>
