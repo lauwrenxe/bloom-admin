@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, createContext, useContext, useCallback } from "react";
 import { supabase } from "./lib/supabase.js";
 import { createClient } from "@supabase/supabase-js";
 import ModulesPage       from "./ModulesPage.jsx";
@@ -190,23 +190,86 @@ const GLOBAL_CSS = `
 /* ─── NAV CONFIG ─────────────────────────────────────────────── */
 const NAV_SECTIONS = [
   { label:"Overview", items:[
-    { id:"dashboard",    icon:"bi-speedometer2",      label:"Dashboard"     },
-    { id:"reports",      icon:"bi-file-earmark-bar-graph", label:"Reports"  },
+    { id:"dashboard",    icon:"bi-speedometer2",          label:"Dashboard"     },
+    { id:"reports",      icon:"bi-file-earmark-bar-graph", label:"Reports"      },
   ]},
   { label:"Learning", items:[
-    { id:"modules",      icon:"bi-book",              label:"Modules"       },
-    { id:"certificates", icon:"bi-patch-check",       label:"Certificates"  },
+    { id:"modules",      icon:"bi-book",                  label:"Modules"       },
+    { id:"certificates", icon:"bi-patch-check",           label:"Certificates"  },
   ]},
   { label:"Events", items:[
-    { id:"seminars",     icon:"bi-people",            label:"Seminars"      },
-    { id:"calendar",     icon:"bi-calendar3",         label:"Calendar"      },
+    { id:"seminars",     icon:"bi-people",                label:"Seminars"      },
+    { id:"calendar",     icon:"bi-calendar3",             label:"Calendar"      },
   ]},
   { label:"Community", items:[
-    { id:"students",     icon:"bi-people",             label:"Users"     },
-    { id:"announcements",icon:"bi-megaphone",         label:"Announcements" },
+    { id:"students",      icon:"bi-people",               label:"Users"         },
+    { id:"announcements", icon:"bi-megaphone",            label:"Announcements" },
   ]},
 ];
 const ALL_NAV = NAV_SECTIONS.flatMap(s => s.items);
+
+/* ─── Toast context ──────────────────────────────────────────── */
+const ToastContext = createContext(null);
+
+export function useToast() {
+  return useContext(ToastContext) ?? ((msg) => alert(msg));
+}
+
+export function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+
+  const toast = useCallback((msg, type = "success") => {
+    const id = Date.now();
+    setToasts(t => [...t, { id, msg, type }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+  }, []);
+
+  return (
+    <ToastContext.Provider value={toast}>
+      {children}
+      <div style={{ position:"fixed", bottom:24, right:24, zIndex:99999, display:"flex", flexDirection:"column", gap:8 }}>
+        {toasts.map(t => (
+          <div key={t.id} style={{
+            padding:"11px 18px", borderRadius:8, fontSize:13, fontWeight:600, color:"#fff",
+            background: t.type==="error" ? "#dc2626" : t.type==="warning" ? "#d97706" : "#16a34a",
+            boxShadow:"0 4px 16px rgba(0,0,0,.18)", animation:"pageIn .2s ease",
+            display:"flex", alignItems:"center", gap:8,
+          }}>
+            <i className={`bi bi-${t.type==="error"?"x-circle":t.type==="warning"?"exclamation-triangle":"check-circle"}`}/>
+            {t.msg}
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+/* ─── Reusable ConfirmModal ──────────────────────────────────── */
+export function ConfirmModal({ title, message, confirmLabel="Confirm", danger=false, onConfirm, onCancel }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16 }}
+      onClick={e=>{ if(e.target===e.currentTarget) onCancel(); }}>
+      <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:400, boxShadow:"0 8px 40px rgba(0,0,0,.18)", overflow:"hidden", animation:"fadeInScale .15s ease" }}>
+        <div style={{ padding:"22px 24px 14px" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:danger?"#fee2e2":"#E8F5E9", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+              <i className={`bi ${danger?"bi-exclamation-triangle-fill":"bi-question-circle-fill"}`}
+                style={{ color:danger?"#dc2626":"#2D6A2D", fontSize:16 }}/>
+            </div>
+            <div style={{ fontSize:15, fontWeight:700, color:"#1A2E1A" }}>{title}</div>
+          </div>
+          <div style={{ fontSize:13, color:"#666", lineHeight:1.65, paddingLeft:46 }}>{message}</div>
+        </div>
+        <div style={{ padding:"12px 24px 20px", display:"flex", gap:8, justifyContent:"flex-end" }}>
+          <button onClick={onCancel} style={{ padding:"9px 20px", background:"#F5F7F5", color:"#1A2E1A", border:"1px solid #DDE8DD", borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>Cancel</button>
+          <button onClick={onConfirm} style={{ padding:"9px 20px", background:danger?"#dc2626":"#1A2E1A", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ─── LOGIN ──────────────────────────────────────────────────── */
 function LoginPage({ onLogin }) {
@@ -239,8 +302,8 @@ function LoginPage({ onLogin }) {
       const role = roleNames.includes("super_admin") ? "super_admin" : "admin";
       setLoading(false);
       onLogin(data.user, role);
- } catch {
-  setError("An error occurred. Please try again.");
+    } catch {
+      setError("An error occurred. Please try again.");
       setLoading(false);
     }
   };
@@ -249,7 +312,6 @@ function LoginPage({ onLogin }) {
     <div className="min-vh-100 d-flex align-items-center justify-content-center"
       style={{ background:"linear-gradient(135deg,#F1F8F1 0%,#E8F5E9 50%,#D7EED7 100%)" }}>
       <div className="card border-0 shadow-lg overflow-hidden" style={{ width:420, borderRadius:14 }}>
-        {/* Brand strip */}
         <div className="p-4 d-flex align-items-center gap-3"
           style={{ background:"linear-gradient(135deg,#2D6A2D,#1A2E1A)" }}>
           <div className="icon-box bg-white bg-opacity-10 text-white" style={{ width:48,height:48,borderRadius:12,fontSize:22 }}>
@@ -260,12 +322,9 @@ function LoginPage({ onLogin }) {
             <div style={{ fontSize:12,color:"rgba(255,255,255,.6)" }}>GADRC CvSU Admin Portal</div>
           </div>
         </div>
-
-        {/* Form */}
         <div className="card-body p-4">
           <h5 className="fw-bold mb-1" style={{ color:"#1A2E1A" }}>Sign in</h5>
           <p className="text-muted mb-4" style={{ fontSize:13 }}>Use your GADRC admin credentials</p>
-
           <div className="mb-3">
             <label className="form-label fw-semibold" style={{ fontSize:12 }}>Email address</label>
             <input className={`form-control ${emailErr?"is-invalid":""}`} type="email"
@@ -280,13 +339,11 @@ function LoginPage({ onLogin }) {
               placeholder="Enter your password" onKeyDown={e=>e.key==="Enter"&&submit()}/>
             {passErr&&<div className="invalid-feedback">This field is required</div>}
           </div>
-
           {error && (
             <div className="alert alert-danger d-flex align-items-center gap-2 py-2" style={{ fontSize:13,borderRadius:8 }}>
               <i className="bi bi-exclamation-triangle-fill"/>{error}
             </div>
           )}
-
           <button className="btn btn-primary w-100 d-flex align-items-center justify-content-center gap-2"
             onClick={submit} disabled={loading} style={{ padding:"10px" }}>
             {loading
@@ -294,7 +351,6 @@ function LoginPage({ onLogin }) {
               : <>Sign in <i className="bi bi-arrow-right"/></>
             }
           </button>
-
           <p className="text-center text-muted mt-3 mb-0" style={{ fontSize:11 }}>
             Admin access only · Contact GADRC IT for support
           </p>
@@ -318,14 +374,8 @@ function SuperAdminLoginPage({ onLogin }) {
     try {
       const { data, error: e } = await supabaseSA.auth.signInWithPassword({ email, password });
       if (e) { setError("Invalid credentials."); setLoading(false); return; }
-
-      // Check if super_admin role
-      const { data: rows } = await supabaseSA
-        .from("user_roles")
-        .select("roles(name)")
-        .eq("user_id", data.user.id);
+      const { data: rows } = await supabaseSA.from("user_roles").select("roles(name)").eq("user_id", data.user.id);
       const roleNames = (rows || []).map(r => r.roles?.name).filter(Boolean);
-
       if (!roleNames.includes("super_admin")) {
         await supabaseSA.auth.signOut();
         setError("Access denied. Super Admin credentials only.");
@@ -344,54 +394,46 @@ function SuperAdminLoginPage({ onLogin }) {
     <div className="min-vh-100 d-flex align-items-center justify-content-center"
       style={{ background: "linear-gradient(135deg,#0d0d1a 0%,#1A1A2E 50%,#16213E 100%)" }}>
       <div className="card border-0 shadow-lg overflow-hidden" style={{ width: 420, borderRadius: 16 }}>
-        {/* Brand strip */}
         <div className="p-4 d-flex align-items-center gap-3"
           style={{ background: "linear-gradient(135deg,#1A1A2E,#E94560)" }}>
-          <div style={{ width: 48, height: 48, borderRadius: 12, background: "rgba(255,255,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <i className="bi bi-shield-fill-check" style={{ color: "#fff", fontSize: 24 }}/>
+          <div style={{ width:48,height:48,borderRadius:12,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center" }}>
+            <i className="bi bi-shield-fill-check" style={{ color:"#fff",fontSize:24 }}/>
           </div>
           <div>
-            <div className="fw-bold text-white" style={{ fontSize: 18 }}>BLOOM GAD</div>
-            <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)" }}>⚡ Super Admin Portal</div>
+            <div className="fw-bold text-white" style={{ fontSize:18 }}>BLOOM GAD</div>
+            <div style={{ fontSize:12,color:"rgba(255,255,255,.6)" }}>⚡ Super Admin Portal</div>
           </div>
         </div>
-
         <div className="card-body p-4">
-          <h5 className="fw-bold mb-1" style={{ color: "#1A1A2E" }}>Super Admin Sign In</h5>
-          <p className="text-muted mb-4" style={{ fontSize: 13 }}>Restricted access — authorized personnel only</p>
-
+          <h5 className="fw-bold mb-1" style={{ color:"#1A1A2E" }}>Super Admin Sign In</h5>
+          <p className="text-muted mb-4" style={{ fontSize:13 }}>Restricted access — authorized personnel only</p>
           <div className="mb-3">
-            <label className="form-label fw-semibold" style={{ fontSize: 12 }}>Email address</label>
+            <label className="form-label fw-semibold" style={{ fontSize:12 }}>Email address</label>
             <input className="form-control" type="email" value={email}
-              onChange={e => setEmail(e.target.value)} placeholder="superadmin@cvsu.edu.ph"
-              onKeyDown={e => e.key === "Enter" && submit()}/>
+              onChange={e=>setEmail(e.target.value)} placeholder="superadmin@cvsu.edu.ph"
+              onKeyDown={e=>e.key==="Enter"&&submit()}/>
           </div>
           <div className="mb-3">
-            <label className="form-label fw-semibold" style={{ fontSize: 12 }}>Password</label>
+            <label className="form-label fw-semibold" style={{ fontSize:12 }}>Password</label>
             <input className="form-control" type="password" value={password}
-              onChange={e => setPassword(e.target.value)} placeholder="Enter your password"
-              onKeyDown={e => e.key === "Enter" && submit()}/>
+              onChange={e=>setPassword(e.target.value)} placeholder="Enter your password"
+              onKeyDown={e=>e.key==="Enter"&&submit()}/>
           </div>
-
           {error && (
-            <div className="alert alert-danger d-flex align-items-center gap-2 py-2" style={{ fontSize: 13, borderRadius: 8 }}>
+            <div className="alert alert-danger d-flex align-items-center gap-2 py-2" style={{ fontSize:13,borderRadius:8 }}>
               <i className="bi bi-exclamation-triangle-fill"/>{error}
             </div>
           )}
-
           <button className="btn w-100 d-flex align-items-center justify-content-center gap-2"
             onClick={submit} disabled={loading}
-            style={{ padding: "10px", background: "linear-gradient(135deg,#1A1A2E,#E94560)", color: "#fff", fontWeight: 700, borderRadius: 8 }}>
+            style={{ padding:"10px",background:"linear-gradient(135deg,#1A1A2E,#E94560)",color:"#fff",fontWeight:700,borderRadius:8 }}>
             {loading
               ? <><span className="spinner-border spinner-border-sm"/>Signing in…</>
               : <>⚡ Sign In as Super Admin</>
             }
           </button>
-
-          <div style={{ textAlign: "center", marginTop: 16 }}>
-            <a href="/" style={{ fontSize: 12, color: "#888", textDecoration: "none" }}>
-              ← Back to Admin Login
-            </a>
+          <div style={{ textAlign:"center",marginTop:16 }}>
+            <a href="/" style={{ fontSize:12,color:"#888",textDecoration:"none" }}>← Back to Admin Login</a>
           </div>
         </div>
       </div>
@@ -408,7 +450,10 @@ function PageSkeleton() {
       <div className="row g-3 mb-4">
         {[1,2,3,4].map(i=>(
           <div key={i} className="col-lg-3">
-            <div className="card p-3"><div className="skeleton mb-2" style={{ height:13,width:"60%" }}/><div className="skeleton" style={{ height:28,width:"40%" }}/></div>
+            <div className="card p-3">
+              <div className="skeleton mb-2" style={{ height:13,width:"60%" }}/>
+              <div className="skeleton" style={{ height:28,width:"40%" }}/>
+            </div>
           </div>
         ))}
       </div>
@@ -424,6 +469,7 @@ function AdminShell({ onLogout, user }) {
   const [pageLoading, setPageLoading] = useState(false);
   const [collapsed,   setCollapsed]   = useState(false);
   const [showSignOut, setShowSignOut] = useState(false);
+
   useEffect(() => {
     loadCSS(INTER_CSS); loadCSS(BI_CSS);
     loadJS(BOOTSTRAP_JS);
@@ -435,8 +481,8 @@ function AdminShell({ onLogout, user }) {
     setTimeout(() => setPageLoading(false), 300);
   };
 
-  const initials  = (user?.email ?? "A").slice(0,1).toUpperCase();
-  const page      = ALL_NAV.find(n => n.id === active);
+  const initials = (user?.email ?? "A").slice(0,1).toUpperCase();
+  const page     = ALL_NAV.find(n => n.id === active);
 
   return (
     <>
@@ -445,8 +491,7 @@ function AdminShell({ onLogout, user }) {
 
         {/* ── Sidebar ── */}
         <aside className={`bloom-sidebar ${collapsed?"collapsed":""}`}>
-          {/* Logo */}
-          <div className="sidebar-logo" style={{ justifyContent: collapsed?"center":"space-between" }}>
+          <div className="sidebar-logo" style={{ justifyContent:collapsed?"center":"space-between" }}>
             {!collapsed && (
               <div className="d-flex align-items-center gap-2">
                 <i className="bi bi-flower2 text-success" style={{ fontSize:22 }}/>
@@ -464,13 +509,10 @@ function AdminShell({ onLogout, user }) {
             </button>
           </div>
 
-          {/* Nav */}
           <nav className="flex-grow-1 overflow-auto p-2">
             {NAV_SECTIONS.map(section => (
               <div key={section.label}>
-                {!collapsed && (
-                  <div className="sidebar-section-label">{section.label}</div>
-                )}
+                {!collapsed && <div className="sidebar-section-label">{section.label}</div>}
                 {section.items.map(item => {
                   const isActive = active === item.id;
                   return (
@@ -478,7 +520,7 @@ function AdminShell({ onLogout, user }) {
                       onClick={() => navigate(item.id)}
                       title={collapsed ? item.label : ""}
                       className={`nav-link-bloom ${isActive?"active":""}`}
-                      style={{ justifyContent: collapsed?"center":"flex-start" }}>
+                      style={{ justifyContent:collapsed?"center":"flex-start" }}>
                       <i className={`bi ${item.icon}`}/>
                       {!collapsed && <span>{item.label}</span>}
                     </button>
@@ -488,13 +530,12 @@ function AdminShell({ onLogout, user }) {
             ))}
           </nav>
 
-          {/* User */}
           <div className="sidebar-user">
             {!collapsed ? (
               <>
                 <div className="d-flex align-items-center gap-2 mb-2 px-1 py-1 rounded"
                   style={{ cursor:"pointer" }}
-                  onClick={() => setShowProfile(true)}>
+                  onClick={()=>setShowProfile(true)}>
                   <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold text-white flex-shrink-0"
                     style={{ width:30,height:30,background:"linear-gradient(135deg,#2D6A2D,#4CAF50)",fontSize:12 }}>
                     {initials}
@@ -509,7 +550,7 @@ function AdminShell({ onLogout, user }) {
                   style={{ color:"rgba(255,255,255,.4)",background:"transparent",fontSize:12 }}
                   onMouseEnter={e=>{e.currentTarget.style.background="rgba(255,255,255,.08)";e.currentTarget.style.color="rgba(255,255,255,.8)";}}
                   onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color="rgba(255,255,255,.4)";}}>
-                  <i className="bi bi-box-arrow-right"/>{!collapsed&&"Sign out"}
+                  <i className="bi bi-box-arrow-right"/>Sign out
                 </button>
               </>
             ) : (
@@ -531,7 +572,6 @@ function AdminShell({ onLogout, user }) {
 
         {/* ── Main ── */}
         <div className="d-flex flex-column flex-grow-1 overflow-hidden" style={{ minWidth:0 }}>
-          {/* Topbar */}
           <header className="bloom-topbar">
             <div className="d-flex align-items-center gap-2">
               <div className="icon-box-sm bg-primary-subtle d-flex align-items-center justify-content-center">
@@ -557,7 +597,6 @@ function AdminShell({ onLogout, user }) {
             </div>
           </header>
 
-          {/* Page content */}
           <main className="flex-grow-1 overflow-auto" style={{ background:"#F5F7F5" }}>
             <div className="page-enter" key={active}>
               {pageLoading ? <PageSkeleton/> : (
@@ -577,66 +616,42 @@ function AdminShell({ onLogout, user }) {
         </div>
       </div>
 
-      {showSignOut&&<ConfirmModal title="Sign Out" message="Are you sure you want to sign out of BLOOM GAD?" confirmLabel="Sign Out" danger={false} onConfirm={()=>{setShowSignOut(false);onLogout();}} onCancel={()=>setShowSignOut(false)}/>}
+      {showSignOut && (
+        <ConfirmModal
+          title="Sign Out"
+          message="Are you sure you want to sign out of BLOOM GAD?"
+          confirmLabel="Sign Out"
+          danger={false}
+          onConfirm={()=>{setShowSignOut(false);onLogout();}}
+          onCancel={()=>setShowSignOut(false)}
+        />
+      )}
       {showProfile && <AdminProfilePage user={user} onClose={()=>setShowProfile(false)}/>}
     </>
-  );
-}
-
-
-/* ─── Reusable ConfirmModal ──────────────────────────────────────── */
-export function ConfirmModal({ title, message, confirmLabel="Confirm", danger=false, onConfirm, onCancel }) {
-  return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:16 }}
-      onClick={e=>{ if(e.target===e.currentTarget) onCancel(); }}>
-      <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:400, boxShadow:"0 8px 40px rgba(0,0,0,.18)", overflow:"hidden", animation:"fadeInScale .15s ease" }}>
-        <div style={{ padding:"22px 24px 14px" }}>
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
-            <div style={{ width:36, height:36, borderRadius:10, background:danger?"#fee2e2":"#E8F5E9", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-              <i className={`bi ${danger?"bi-exclamation-triangle-fill":"bi-question-circle-fill"}`}
-                style={{ color:danger?"#dc2626":"#2D6A2D", fontSize:16 }}/>
-            </div>
-            <div style={{ fontSize:15, fontWeight:700, color:"#1A2E1A" }}>{title}</div>
-          </div>
-          <div style={{ fontSize:13, color:"#666", lineHeight:1.65, paddingLeft:46 }}>{message}</div>
-        </div>
-        <div style={{ padding:"12px 24px 20px", display:"flex", gap:8, justifyContent:"flex-end" }}>
-          <button onClick={onCancel} style={{ padding:"9px 20px", background:"#F5F7F5", color:"#1A2E1A", border:"1px solid #DDE8DD", borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>Cancel</button>
-          <button onClick={onConfirm} style={{ padding:"9px 20px", background:danger?"#dc2626":"#1A2E1A", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 
 /* ─── ROOT ───────────────────────────────────────────────────── */
 async function checkRole(userId) {
   try {
-    // Fetch ALL roles for this user and return the highest privilege one
-    const { data: rows } = await supabase
-      .from("user_roles")
-      .select("roles(name)")
-      .eq("user_id", userId);
+    const { data: rows } = await supabase.from("user_roles").select("roles(name)").eq("user_id", userId);
     if (!rows || rows.length === 0) return null;
     const roleNames = rows.map(r => r.roles?.name).filter(Boolean);
-    // Priority: super_admin > admin > student
     if (roleNames.includes("super_admin")) return "super_admin";
     if (roleNames.includes("admin")) return "admin";
     return roleNames[0] || null;
   } catch { return null; }
 }
+
 export default function App() {
-  const [loggedIn,       setLoggedIn]       = useState(false);
-  const [user,           setUser]           = useState(null);
-  const [checking,       setChecking]       = useState(true);
-  const [userRole,       setUserRole]       = useState(null); // "admin" | "super_admin"
+  const [loggedIn,          setLoggedIn]          = useState(false);
+  const [user,              setUser]              = useState(null);
+  const [checking,          setChecking]          = useState(true);
+  const [userRole,          setUserRole]          = useState(null);
   const [isSuperAdminRoute, setIsSuperAdminRoute] = useState(
     window.location.pathname === "/super-admin" || window.location.hash === "#super-admin"
   );
 
-  // Listen for hash changes so navigating to #super-admin works anytime
   useEffect(() => {
     const onHashChange = () => {
       setIsSuperAdminRoute(window.location.hash === "#super-admin");
@@ -650,19 +665,14 @@ export default function App() {
     loadJS(BOOTSTRAP_JS);
   }, []);
 
-
-
   useEffect(() => {
-    // Safety timeout — if checking takes more than 3 seconds, force it to stop
     const timeout = setTimeout(() => setChecking(false), 3000);
-
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       clearTimeout(timeout);
       try {
         if (session) {
           const role = await checkRole(session.user.id);
           const isSA = window.location.hash === "#super-admin";
-          // If super_admin session restored but not on super-admin route, sign out
           if (role === "super_admin" && !isSA) {
             await supabase.auth.signOut();
             setChecking(false);
@@ -679,8 +689,7 @@ export default function App() {
       }
     }).catch(() => { clearTimeout(timeout); setChecking(false); });
 
-const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
-      // Only handle SIGNED_OUT — login is handled directly by LoginPage
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
       if (event === "SIGNED_OUT") {
         setUser(null); setLoggedIn(false); setUserRole(null);
       }
@@ -711,7 +720,7 @@ const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event)
   };
 
   return (
-    <>
+    <ToastProvider>
       <style>{GLOBAL_CSS}</style>
       {loggedIn && userRole === "super_admin"
         ? <SuperAdminPage superUser={user} onLogout={handleLogout} db={supabaseSA}/>
@@ -723,6 +732,6 @@ const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event)
         ? <AdminShell onLogout={handleLogout} user={user}/>
         : <LoginPage onLogin={(u, role) => { setUser(u); setUserRole(role); setLoggedIn(true); }}/>
       }
-    </>
+    </ToastProvider>
   );
 }
