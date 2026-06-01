@@ -1,339 +1,1105 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./lib/supabase.js";
 
-const TODAY    = new Date().toISOString().split("T")[0];
-const MONTH_AGO= new Date(Date.now()-30*86400000).toISOString().split("T")[0];
-const PRESETS  = [{label:"Today",days:0},{label:"This Week",days:7},{label:"This Month",days:30},{label:"This Year",days:365},{label:"All Time",days:-1}];
+/* ─── date helpers ────────────────────────────────────────── */
+const getToday    = () => new Date().toISOString().split("T")[0];
+const getMonthAgo = () => new Date(Date.now()-30*86400000).toISOString().split("T")[0];
 
-function toISO(d,end=false){if(!d)return null;return end?`${d}T23:59:59.999+08:00`:`${d}T00:00:00.000+08:00`;}
-function fmt(iso){if(!iso)return"—";const s=iso.endsWith("Z")||iso.includes("+")?iso:iso+"Z";return new Date(s).toLocaleString("en-PH",{timeZone:"Asia/Manila",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:true});}
-function loadChart(){return new Promise(r=>{if(window.Chart){r();return;}const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js";s.onload=r;document.head.appendChild(s);});}
+function toISO(d, end=false) {
+  if (!d) return null;
+  return end ? `${d}T23:59:59.999+08:00` : `${d}T00:00:00.000+08:00`;
+}
 
-/* ── LUNO-style extra CSS ───────────────────────────────────── */
+function fmt(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString("en-PH", {
+      timeZone:"Asia/Manila", month:"short", day:"numeric",
+      hour:"2-digit", minute:"2-digit", hour12:true,
+    });
+  } catch { return "—"; }
+}
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString("en-PH", {
+      timeZone:"Asia/Manila", month:"short", day:"numeric", year:"numeric",
+    });
+  } catch { return "—"; }
+}
+
+function toDateStr(iso) {
+  // Returns "YYYY-MM-DD" in local time, safe for both date strings and timestamps
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso.slice(0,10);
+  // Use Manila offset (+08:00) to get the correct local date
+  const manila = new Date(d.toLocaleString("en-US", { timeZone:"Asia/Manila" }));
+  return `${manila.getFullYear()}-${String(manila.getMonth()+1).padStart(2,"0")}-${String(manila.getDate()).padStart(2,"0")}`;
+}
+
+const PRESETS = [
+  {label:"Today",     days:0},
+  {label:"This Week", days:7},
+  {label:"This Month",days:30},
+  {label:"This Year", days:365},
+  {label:"All Time",  days:-1},
+];
+
+/* ─── Chart.js loader (de-duped) ──────────────────────────── */
+let _chartPromise = null;
+function loadChart() {
+  if (!_chartPromise) {
+    _chartPromise = new Promise(resolve => {
+      if (window.Chart) { resolve(); return; }
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js";
+      s.onload = resolve;
+      s.onerror = () => { _chartPromise = null; resolve(); };
+      document.head.appendChild(s);
+    });
+  }
+  return _chartPromise;
+}
+
+/* ─── CSS ─────────────────────────────────────────────────── */
 const CSS = `
-  .dash-stat-card { border:none !important; border-radius:12px !important; box-shadow:0 2px 10px rgba(0,0,0,.06) !important; overflow:hidden; transition:transform .18s,box-shadow .18s; }
-  .dash-stat-card:hover { transform:translateY(-3px); box-shadow:0 8px 24px rgba(0,0,0,.1) !important; }
-  .dash-stat-card .stat-bar { height:4px; border-radius:0 0 0 0; margin-top:auto; }
-  .dash-welcome-card { background:linear-gradient(135deg,#1A2E1A 0%,#2D6A2D 60%,#4CAF50 100%); border-radius:14px !important; border:none !important; color:#fff; overflow:hidden; position:relative; }
-  .dash-welcome-card::before { content:''; position:absolute; width:200px; height:200px; border-radius:50%; background:rgba(255,255,255,.05); top:-60px; right:-40px; }
-  .dash-welcome-card::after  { content:''; position:absolute; width:120px; height:120px; border-radius:50%; background:rgba(255,255,255,.04); bottom:-30px; right:60px; }
-  .dash-chart-card { border-radius:12px !important; border:1px solid #E8F5E9 !important; box-shadow:0 2px 8px rgba(0,0,0,.05) !important; }
-  .section-header-line { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
-  .section-header-line h6 { font-size:13px; font-weight:700; color:#1A2E1A; margin:0; }
-  .dash-activity-item { display:flex; align-items:flex-start; gap:10px; padding:8px 0; border-bottom:1px solid #F0F4F0; }
-  .dash-activity-item:last-child { border-bottom:none; }
-  .dash-icon-circle { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:13px; }
-  .progress-bloom { height:6px; border-radius:4px; background:#E8F5E9; }
-  .progress-bloom .progress-bar { border-radius:4px; }
-  .stat-trend-up   { color:#107C10; font-size:11px; font-weight:700; }
-  .stat-trend-down { color:#C50F1F; font-size:11px; font-weight:700; }
-  @keyframes fadeUp { from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);} }
-  .dash-animate { animation:fadeUp .25s ease forwards; }
-  .dash-animate:nth-child(2){animation-delay:.05s;}
-  .dash-animate:nth-child(3){animation-delay:.1s;}
-  .dash-animate:nth-child(4){animation-delay:.15s;}
+  :root {
+    --bloom-dark:   #1A2E1A;
+    --bloom-mid:    #2D6A2D;
+    --bloom-light:  #4CAF50;
+    --bloom-bg:     #F5F7F5;
+    --bloom-border: #E8F5E9;
+    --bloom-muted:  #9EAD9E;
+  }
+  .dash-stat-card {
+    border: none !important;
+    border-radius: 12px !important;
+    box-shadow: 0 2px 10px rgba(0,0,0,.06) !important;
+    overflow: hidden;
+    transition: transform .18s, box-shadow .18s;
+    height: 100%;
+  }
+  .dash-stat-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(0,0,0,.1) !important;
+  }
+  .dash-stat-card .stat-bar { height: 4px; }
+  .dash-welcome-card {
+    background: linear-gradient(135deg, var(--bloom-dark) 0%, var(--bloom-mid) 60%, var(--bloom-light) 100%);
+    border-radius: 14px !important;
+    border: none !important;
+    color: #fff;
+    overflow: hidden;
+    position: relative;
+    height: 100%;
+  }
+  .dash-welcome-card::before {
+    content: '';
+    position: absolute; width: 200px; height: 200px;
+    border-radius: 50%; background: rgba(255,255,255,.05);
+    top: -60px; right: -40px; pointer-events: none;
+  }
+  .dash-welcome-card::after {
+    content: '';
+    position: absolute; width: 120px; height: 120px;
+    border-radius: 50%; background: rgba(255,255,255,.04);
+    bottom: -30px; right: 60px; pointer-events: none;
+  }
+  .dash-chart-card {
+    border-radius: 12px !important;
+    border: 1px solid var(--bloom-border) !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,.05) !important;
+    height: 100%;
+  }
+  .section-header-line {
+    display: flex; align-items: center;
+    justify-content: space-between; margin-bottom: 14px;
+  }
+  .section-header-line h6 {
+    font-size: 13px; font-weight: 700;
+    color: var(--bloom-dark); margin: 0;
+  }
+  .progress-bloom { height: 6px; border-radius: 4px; background: var(--bloom-border); }
+  .progress-bloom .progress-bar { border-radius: 4px; }
+  .stat-trend-up   { color: #107C10; font-size: 11px; font-weight: 700; }
+  .stat-trend-down { color: #C50F1F; font-size: 11px; font-weight: 700; }
+  /* scroll containers */
+  .dash-scroll-body {
+    overflow-y: auto; overflow-x: hidden;
+    scrollbar-width: thin; scrollbar-color: #ccc transparent;
+  }
+  .dash-scroll-body::-webkit-scrollbar { width: 4px; }
+  .dash-scroll-body::-webkit-scrollbar-thumb { background: #ccc; border-radius: 4px; }
+  /* fixed-height cards */
+  .dash-fixed-card   .card-body { height: 320px; display: flex; flex-direction: column; }
+  .dash-fixed-card-lg .card-body { height: 400px; display: flex; flex-direction: column; }
+  /* calendar cell hover */
+  .cal-cell { transition: background .12s; cursor: pointer; }
+  .cal-cell:hover { background: #E8F5E9 !important; }
+  /* event item hover */
+  .ev-item { transition: background .12s, box-shadow .12s; cursor: pointer; }
+  .ev-item:hover { background: #f0fdf4 !important; box-shadow: 0 2px 10px rgba(0,0,0,.07) !important; }
+  /* modal overlay */
+  .bloom-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.45);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 2000; padding: 16px;
+    animation: fadeIn .15s ease;
+  }
+  .bloom-modal {
+    background: #fff; border-radius: 16px;
+    width: 100%; max-width: 500px;
+    max-height: 88vh; overflow: auto;
+    box-shadow: 0 24px 64px rgba(0,0,0,.22);
+    animation: slideUp .18s ease;
+  }
+  @keyframes fadeIn  { from{opacity:0} to{opacity:1} }
+  @keyframes slideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+  /* animations */
+  @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+  .dash-animate { animation: fadeUp .25s ease forwards; }
+  .dash-animate:nth-child(2){animation-delay:.05s}
+  .dash-animate:nth-child(3){animation-delay:.10s}
+  .dash-animate:nth-child(4){animation-delay:.15s}
+  /* refreshing */
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .refreshing-pulse { animation: pulse 1.2s ease-in-out infinite; }
+  /* skeleton */
+  .skeleton {
+    background: linear-gradient(90deg,#e8ede8 25%,#f0f4f0 50%,#e8ede8 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s infinite;
+    border-radius: 6px;
+  }
+  @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  /* source type badges */
+  .ev-badge-event        { background:#E8F5E9; color:#1A2E1A; }
+  .ev-badge-seminar      { background:#DBEAFE; color:#1D4ED8; }
+  .ev-badge-announcement { background:#FEF3C7; color:#92400E; }
 `;
 
-/* ── Stat card (LUNO-style) ─────────────────────────────────── */
-function StatCard({icon,label,value,sub,color,trend,trendUp}){
-  return(
-    <div className="card dash-stat-card h-100">
+/* ─── Merge calendar events (mirrors CalendarPage.mergeAllEvents) ── */
+/**
+ * Fetches events, seminars, announcements and merges them into a
+ * single unified array — same shape as CalendarPage uses.
+ * Scoped to monthFrom..monthTo window for the mini calendar dots.
+ */
+async function fetchMergedCalendarEvents(monthFrom, monthTo) {
+  const [evRes, semRes, annRes] = await Promise.all([
+    supabase.from("events")
+      .select("id,title,start_date,end_date,description,location,color_hex,event_type")
+      .gte("start_date", monthFrom).lte("start_date", monthTo),
+    supabase.from("seminars")
+      .select("id,title,scheduled_start,scheduled_end,status,venue,description")
+      .gte("scheduled_start", monthFrom).lte("scheduled_start", monthTo),
+    supabase.from("announcements")
+      .select("id,title,body,content,published_at,is_pinned")
+      .not("published_at","is",null)
+      .gte("published_at", monthFrom).lte("published_at", monthTo),
+  ]);
+
+  const semEvents = (semRes.data || []).map(s => ({
+    id: `sem_${s.id}`,
+    _rawId: s.id,
+    title: s.title,
+    start_date: toDateStr(s.scheduled_start),
+    end_date:   toDateStr(s.scheduled_end || s.scheduled_start),
+    scheduled_start: s.scheduled_start,
+    scheduled_end:   s.scheduled_end,
+    description: s.description || "",
+    location: s.venue || "",
+    color_hex: "#2D6A2D",
+    event_type: "seminar",
+    _source: "seminar",
+    _status: s.status,
+  }));
+
+  const annEvents = (annRes.data || []).map(a => ({
+    id: `ann_${a.id}`,
+    _rawId: a.id,
+    title: a.title,
+    start_date: toDateStr(a.published_at),
+    end_date:   toDateStr(a.published_at),
+    description: a.body || a.content || "",
+    color_hex: "#f59e0b",
+    event_type: "announcement",
+    _source: "announcement",
+    is_pinned: a.is_pinned,
+  }));
+
+  return [
+    ...(evRes.data || []),
+    ...semEvents,
+    ...annEvents,
+  ].sort((a, b) => (a.start_date || "").localeCompare(b.start_date || ""));
+}
+
+/**
+ * Fetches upcoming merged events (future only, no date window cap).
+ * Used for the Upcoming Events list — mirrors CalendarPage sidebar.
+ */
+async function fetchUpcomingMerged() {
+  const now     = new Date().toISOString();
+  const nowDate = getToday();
+
+  const [evRes, semRes] = await Promise.all([
+    supabase.from("events")
+      .select("id,title,start_date,end_date,description,location,color_hex,event_type")
+      .gte("end_date", nowDate)
+      .order("start_date", { ascending: true })
+      .limit(30),
+    supabase.from("seminars")
+      .select("id,title,scheduled_start,scheduled_end,status,venue,description")
+      .gte("scheduled_start", now)
+      .order("scheduled_start", { ascending: true })
+      .limit(30),
+  ]);
+
+  const semMapped = (semRes.data || []).map(s => ({
+    id: `sem_${s.id}`,
+    _rawId: s.id,
+    title: s.title,
+    start_date: toDateStr(s.scheduled_start),
+    end_date:   toDateStr(s.scheduled_end || s.scheduled_start),
+    scheduled_start: s.scheduled_start,
+    scheduled_end:   s.scheduled_end,
+    description: s.description || "",
+    location: s.venue || "",
+    color_hex: "#2D6A2D",
+    event_type: "seminar",
+    _source: "seminar",
+    _status: s.status,
+  }));
+
+  return [
+    ...(evRes.data || []),
+    ...semMapped,
+  ].sort((a, b) => (a.start_date || "").localeCompare(b.start_date || ""));
+}
+
+/* ─── Sub-components ──────────────────────────────────────── */
+function StatCard({icon, label, value, sub, color}) {
+  return (
+    <div className="card dash-stat-card">
       <div className="card-body p-3 d-flex flex-column">
         <div className="d-flex align-items-start justify-content-between mb-2">
           <div>
-            <div className="text-uppercase fw-bold mb-1" style={{fontSize:10,letterSpacing:.8,color:"#9EAD9E"}}>{label}</div>
-            <div style={{fontSize:26,fontWeight:800,color:"#1A2E1A",lineHeight:1}}>{value??"—"}</div>
-            {sub&&<small className="text-muted" style={{fontSize:11}}>{sub}</small>}
+            <div className="text-uppercase fw-bold mb-1"
+              style={{fontSize:10,letterSpacing:.8,color:"var(--bloom-muted)"}}>
+              {label}
+            </div>
+            <div style={{fontSize:26,fontWeight:800,color:"var(--bloom-dark)",lineHeight:1}}>
+              {value ?? "—"}
+            </div>
+            {sub && <small className="text-muted" style={{fontSize:11}}>{sub}</small>}
           </div>
-          <div className="d-flex align-items-center justify-content-center rounded-3" style={{width:42,height:42,background:`${color}15`,flexShrink:0}}>
+          <div className="d-flex align-items-center justify-content-center rounded-3"
+            style={{width:42,height:42,background:`${color}15`,flexShrink:0}}>
             <i className={`bi ${icon}`} style={{fontSize:19,color}}/>
           </div>
         </div>
-        {trend!=null&&(
-          <div className="mt-auto pt-2">
-            <span className={trendUp?"stat-trend-up":"stat-trend-down"}>
-              <i className={`bi bi-arrow-${trendUp?"up":"down"}-short`}/>
-              {Math.abs(trend)}%
-            </span>
-            <span className="text-muted ms-1" style={{fontSize:11}}>vs last period</span>
-          </div>
-        )}
       </div>
       <div className="stat-bar" style={{background:color}}/>
     </div>
   );
 }
 
-/* ── Section header ─────────────────────────────────────────── */
-function SH({title,icon,action,onAction}){
-  return(
+function SH({title, icon, linkTo, badge, action, onAction}) {
+  return (
     <div className="section-header-line">
-      <h6><i className={`bi ${icon} me-2`} style={{color:"#2D6A2D"}}/>{title}</h6>
-      {action&&<button className="btn btn-sm btn-outline-secondary py-0 px-2" style={{fontSize:11}} onClick={onAction}>{action}</button>}
+      <h6>
+        <i className={`bi ${icon} me-2`} style={{color:"var(--bloom-mid)"}}/>
+        {title}
+        {badge != null && (
+          <span className="badge ms-2 rounded-pill"
+            style={{background:"#E8F5E9",color:"var(--bloom-dark)",fontSize:10}}>
+            {badge}
+          </span>
+        )}
+      </h6>
+      <div className="d-flex gap-1">
+        {action && (
+          <button className="btn btn-sm btn-outline-secondary py-0 px-2"
+            style={{fontSize:11}} onClick={onAction}>
+            {action}
+          </button>
+        )}
+        {linkTo && (
+          <a href={linkTo} className="btn btn-sm py-0 px-2"
+            style={{fontSize:11,background:"#E8F5E9",color:"var(--bloom-dark)",fontWeight:600,textDecoration:"none"}}>
+            View all →
+          </a>
+        )}
+      </div>
     </div>
   );
 }
 
-/* ── Mini progress bar ──────────────────────────────────────── */
-function MBar({label,value,max,color,sub}){
-  const pct=max>0?Math.min(Math.round((value/max)*100),100):0;
-  return(
+function MBar({label, value, max, color, sub}) {
+  const pct = max > 0 ? Math.min(Math.round((value / max) * 100), 100) : 0;
+  return (
     <div className="mb-3">
       <div className="d-flex justify-content-between mb-1">
-        <span className="text-truncate fw-semibold" style={{fontSize:12,color:"#1A2E1A",maxWidth:180}}>{label}</span>
-        <span className="fw-bold ms-2" style={{fontSize:12,color:"#1A2E1A",flexShrink:0}}>{sub??`${pct}%`}</span>
+        <span className="text-truncate fw-semibold"
+          style={{fontSize:12,color:"var(--bloom-dark)",maxWidth:180}}>
+          {label}
+        </span>
+        <span className="fw-bold ms-2"
+          style={{fontSize:12,color:"var(--bloom-dark)",flexShrink:0}}>
+          {sub ?? `${pct}%`}
+        </span>
       </div>
-      <div className="progress-bloom"><div className="progress-bar" style={{width:`${pct}%`,background:color||"#2D6A2D"}}/></div>
+      <div className="progress-bloom">
+        <div className="progress-bar" style={{width:`${pct}%`,background:color||"var(--bloom-mid)"}}/>
+      </div>
     </div>
   );
 }
 
-/* ── Empty state ────────────────────────────────────────────── */
-function Empty({icon,msg}){
-  return(<div className="text-center py-4 text-muted"><i className={`bi ${icon} d-block mb-2`} style={{fontSize:28,opacity:.4}}/><span style={{fontSize:13}}>{msg}</span></div>);
+function Empty({icon, msg}) {
+  return (
+    <div className="text-center py-4 text-muted flex-grow-1 d-flex flex-column align-items-center justify-content-center">
+      <i className={`bi ${icon} d-block mb-2`} style={{fontSize:28,opacity:.4}}/>
+      <span style={{fontSize:13}}>{msg}</span>
+    </div>
+  );
 }
 
-/* ── Chart.js canvases ─────────────────────────────────────── */
-function BarCanvas({data}){
-  const ref=useRef(null),chart=useRef(null);
-  useEffect(()=>{
-    loadChart().then(()=>{
-      if(!ref.current||!window.Chart)return;
-      if(chart.current)chart.current.destroy();
-      chart.current=new window.Chart(ref.current,{
-        type:"bar",
-        data:{
-          labels:data.map(d=>d.label),
-          datasets:[{
-            data:data.map(d=>d.value),
-            backgroundColor:data.map((_,i)=>`rgba(45,106,45,${0.4+i*0.09})`),
-            borderRadius:5,borderSkipped:false,
-          }]
-        },
-        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(c)=>`${c.raw} actions`}}},scales:{y:{beginAtZero:true,grid:{color:"rgba(0,0,0,.04)"},ticks:{font:{size:10},color:"#9E9E9E"}},x:{grid:{display:false},ticks:{font:{size:10},color:"#9E9E9E"}}}}
-      });
-    });
-    return()=>{if(chart.current)chart.current.destroy();};
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[JSON.stringify(data)]);
-  return <canvas ref={ref} style={{maxHeight:160}}/>;
+function ErrorState({msg, onRetry}) {
+  return (
+    <div className="text-center py-3 flex-grow-1 d-flex flex-column align-items-center justify-content-center">
+      <i className="bi bi-exclamation-circle d-block mb-2 text-danger" style={{fontSize:24,opacity:.6}}/>
+      <span className="text-muted" style={{fontSize:12}}>{msg || "Failed to load"}</span>
+      {onRetry && (
+        <button className="btn btn-sm btn-outline-danger mt-2 py-0 px-2"
+          style={{fontSize:11}} onClick={onRetry}>
+          Retry
+        </button>
+      )}
+    </div>
+  );
 }
 
-function DonutCanvas({segments}){
-  const ref=useRef(null),chart=useRef(null);
-  useEffect(()=>{
-    if(!segments.length)return;
-    loadChart().then(()=>{
-      if(!ref.current||!window.Chart)return;
-      if(chart.current)chart.current.destroy();
-      const total=segments.reduce((s,g)=>s+g.value,0);
-      chart.current=new window.Chart(ref.current,{
-        type:"doughnut",
-        data:{
-          labels:segments.map(s=>s.label),
-          datasets:[{data:segments.map(s=>s.value),backgroundColor:["#2D6A2D","#4CAF50","#81C784","#A5D6A7"],borderWidth:3,borderColor:"#fff",hoverBorderColor:"#fff"}]
-        },
-        options:{
-          responsive:true,maintainAspectRatio:false,cutout:"70%",
-          plugins:{
-            legend:{position:"bottom",labels:{font:{size:11},boxWidth:10,padding:12,color:"#616161"}},
-            tooltip:{callbacks:{label:(c)=>`${c.label}: ${c.raw} (${Math.round((c.raw/total)*100)}%)`}}
-          }
+/* ─── Event source badge ──────────────────────────────────── */
+function SourceBadge({ev}) {
+  if (ev._source === "seminar")      return <span className="badge ev-badge-seminar"      style={{fontSize:9,fontWeight:700}}>Seminar</span>;
+  if (ev._source === "announcement") return <span className="badge ev-badge-announcement" style={{fontSize:9,fontWeight:700}}>Announcement</span>;
+  const label = ev.event_type ? ev.event_type.charAt(0).toUpperCase()+ev.event_type.slice(1) : "Event";
+  return <span className="badge ev-badge-event" style={{fontSize:9,fontWeight:700}}>{label}</span>;
+}
+
+/* ─── Day Events Modal (clicked from mini calendar) ───────── */
+function DayEventsModal({date, events, onClose}) {
+  const label = new Date(date + "T00:00:00").toLocaleDateString("en-PH", {
+    weekday:"long", month:"long", day:"numeric", year:"numeric",
+  });
+  return (
+    <div className="bloom-overlay" onClick={onClose}>
+      <div className="bloom-modal" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="d-flex align-items-start justify-content-between p-4 pb-3"
+          style={{borderBottom:"1px solid #E8F5E9",position:"sticky",top:0,background:"#fff",zIndex:1}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:16,color:"var(--bloom-dark)"}}>{label}</div>
+            <div style={{fontSize:12,color:"#888",marginTop:2}}>
+              {events.length} event{events.length!==1?"s":""}
+            </div>
+          </div>
+          <button className="btn btn-sm btn-outline-secondary py-0 px-2" onClick={onClose}>✕</button>
+        </div>
+        {/* Body */}
+        <div className="p-4">
+          {events.length === 0 ? (
+            <Empty icon="bi-calendar-x" msg="No events on this date"/>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {events.map(ev => (
+                <div key={ev.id} style={{
+                  borderLeft:`4px solid ${ev.color_hex||"#2D6A2D"}`,
+                  background:(ev.color_hex||"#2D6A2D")+"12",
+                  borderRadius:"0 10px 10px 0",
+                  padding:"12px 14px",
+                }}>
+                  <div className="d-flex align-items-center justify-content-between mb-2">
+                    <SourceBadge ev={ev}/>
+                    {ev._status && (
+                      <span className="badge bg-light text-secondary" style={{fontSize:9}}>{ev._status}</span>
+                    )}
+                  </div>
+                  <div style={{fontWeight:700,color:"var(--bloom-dark)",fontSize:14,marginBottom:4}}>
+                    {ev.title}
+                  </div>
+                  <div style={{fontSize:12,color:"#666",marginBottom:4}}>
+                    {ev.scheduled_start
+                      ? fmt(ev.scheduled_start)
+                      : fmtDate(ev.start_date)}
+                    {ev.scheduled_end && ev.scheduled_end !== ev.scheduled_start
+                      ? ` → ${fmt(ev.scheduled_end)}`
+                      : ev.end_date && ev.end_date !== ev.start_date
+                        ? ` → ${fmtDate(ev.end_date)}`
+                        : ""}
+                  </div>
+                  {ev.location && (
+                    <div style={{fontSize:12,color:"#888",marginBottom:4}}>
+                      <i className="bi bi-geo-alt me-1"/>{ev.location}
+                    </div>
+                  )}
+                  {ev.description && (
+                    <div style={{fontSize:12,color:"#555",lineHeight:1.5,marginTop:6}}>
+                      {ev.description}
+                    </div>
+                  )}
+                  {ev.is_pinned && (
+                    <span className="badge mt-2" style={{background:"#FEF3C7",color:"#92400E",fontSize:9}}>
+                      📌 Pinned
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="d-flex justify-content-end p-3 pt-0">
+          <button className="btn btn-sm" style={{background:"#E8F5E9",color:"var(--bloom-dark)",fontWeight:600}}
+            onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Event Detail Modal (clicked from upcoming list) ─────── */
+function EventDetailModal({ev, onClose}) {
+  if (!ev) return null;
+  const startLabel = ev.scheduled_start ? fmt(ev.scheduled_start) : fmtDate(ev.start_date);
+  const endLabel   = ev.scheduled_end   ? fmt(ev.scheduled_end)   : (ev.end_date && ev.end_date !== ev.start_date ? fmtDate(ev.end_date) : null);
+  const borderColor = ev.color_hex || "#2D6A2D";
+  return (
+    <div className="bloom-overlay" onClick={onClose}>
+      <div className="bloom-modal" style={{maxWidth:460}} onClick={e => e.stopPropagation()}>
+        {/* Colored top strip */}
+        <div style={{height:6,borderRadius:"16px 16px 0 0",background:borderColor}}/>
+        {/* Header */}
+        <div className="d-flex align-items-start justify-content-between px-4 pt-4 pb-3"
+          style={{borderBottom:"1px solid #E8F5E9"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div className="d-flex align-items-center gap-2 mb-2">
+              <SourceBadge ev={ev}/>
+              {ev._status && (
+                <span className="badge" style={{
+                  background:ev._status==="upcoming"?"#DBEAFE":ev._status==="ongoing"?"#DCFCE7":"#F3F4F6",
+                  color:ev._status==="upcoming"?"#1D4ED8":ev._status==="ongoing"?"#16A34A":"#666",
+                  fontSize:9,fontWeight:700,textTransform:"uppercase",
+                }}>
+                  {ev._status}
+                </span>
+              )}
+            </div>
+            <div style={{fontWeight:800,fontSize:17,color:"var(--bloom-dark)",lineHeight:1.3}}>
+              {ev.title}
+            </div>
+          </div>
+          <button className="btn btn-sm btn-outline-secondary py-0 px-2 ms-3 flex-shrink-0"
+            onClick={onClose}>✕</button>
+        </div>
+        {/* Body */}
+        <div className="px-4 py-3" style={{display:"flex",flexDirection:"column",gap:10}}>
+          {/* Date/time */}
+          <div className="d-flex align-items-start gap-3 p-3 rounded-3"
+            style={{background:"#F5F7F5"}}>
+            <i className="bi bi-calendar-event" style={{color:"var(--bloom-mid)",fontSize:16,marginTop:2}}/>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:"var(--bloom-dark)"}}>
+                {startLabel}
+              </div>
+              {endLabel && (
+                <div style={{fontSize:12,color:"#888",marginTop:2}}>
+                  Ends: {endLabel}
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Location */}
+          {ev.location && (
+            <div className="d-flex align-items-start gap-3 p-3 rounded-3"
+              style={{background:"#F5F7F5"}}>
+              <i className="bi bi-geo-alt" style={{color:"var(--bloom-mid)",fontSize:16,marginTop:2}}/>
+              <div style={{fontSize:13,color:"var(--bloom-dark)"}}>{ev.location}</div>
+            </div>
+          )}
+          {/* Description */}
+          {ev.description && (
+            <div className="p-3 rounded-3" style={{background:"#F5F7F5"}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>
+                Description
+              </div>
+              <div style={{fontSize:13,color:"#444",lineHeight:1.6}}>{ev.description}</div>
+            </div>
+          )}
+          {ev.is_pinned && (
+            <span className="badge align-self-start" style={{background:"#FEF3C7",color:"#92400E",fontSize:10}}>
+              📌 Pinned Announcement
+            </span>
+          )}
+        </div>
+        <div className="d-flex justify-content-end p-3 pt-0">
+          <button className="btn btn-sm" style={{background:"#E8F5E9",color:"var(--bloom-dark)",fontWeight:600}}
+            onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Mini Calendar ───────────────────────────────────────── */
+function MiniCalendar({date, setDate, calEvents, onDayClick}) {
+  const year      = date.getFullYear();
+  const month     = date.getMonth();
+  const firstDay  = new Date(year, month, 1).getDay();
+  const daysInMo  = new Date(year, month+1, 0).getDate();
+  const today     = new Date();
+
+  // Build date→events map for fast lookup
+  const dayMap = useMemo(() => {
+    const map = {};
+    (calEvents||[]).forEach(ev => {
+      const start = (ev.start_date||"").slice(0,10);
+      const end   = (ev.end_date||ev.start_date||"").slice(0,10);
+      if (!start) return;
+      // Mark every day in the event's range that falls in this month
+      const s = new Date(start+"T00:00:00");
+      const e = new Date((end||start)+"T00:00:00");
+      for (let d = new Date(s); d <= e; d.setDate(d.getDate()+1)) {
+        if (d.getFullYear()===year && d.getMonth()===month) {
+          const key = d.getDate();
+          if (!map[key]) map[key] = [];
+          map[key].push(ev);
         }
-      });
+      }
     });
-    return()=>{if(chart.current)chart.current.destroy();};
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[JSON.stringify(segments)]);
-  return <canvas ref={ref} style={{maxHeight:180}}/>;
-}
+    return map;
+  }, [calEvents, year, month]);
 
-function getActIcon(a){
-  if(!a)return"bi-pin-angle";const t=a.toLowerCase();
-  if(t==="login"||t==="sign_in")return"bi-box-arrow-in-right";
-  if(t==="logout"||t==="sign_out")return"bi-box-arrow-right";
-  if(t.includes("forgot_password")||t.includes("password_reset"))return"bi-key";
-  if(t.includes("module"))return"bi-book";
-  if(t.includes("seminar"))return"bi-people";
-  if(t.includes("certificate"))return"bi-patch-check";
-  if(t.includes("assessment"))return"bi-clipboard-check";
-  if(t.includes("badge"))return"bi-award";
-  if(t.includes("file"))return"bi-file-earmark";
-  return"bi-activity";
-}
+  const cells = [];
+  for (let i=0; i<firstDay; i++) cells.push(null);
+  for (let d=1; d<=daysInMo; d++) cells.push(d);
 
-function getActColor(a){
-  if(!a)return"#888";const t=a.toLowerCase();
-  if(t==="login"||t==="sign_in")return"#16a34a";
-  if(t==="logout"||t==="sign_out")return"#dc2626";
-  if(t.includes("forgot_password")||t.includes("password_reset"))return"#d97706";
-  if(t.includes("module"))return"#2D6A2D";
-  if(t.includes("seminar"))return"#1565C0";
-  if(t.includes("certificate"))return"#E65100";
-  if(t.includes("assessment"))return"#6A1B9A";
-  if(t.includes("badge"))return"#00695C";
-  if(t.includes("file"))return"#827717";
-  return"#888";
-}
+  const DAY_HEADERS = ["Su","Mo","Tu","We","Th","Fr","Sa"];
 
-function getActBg(a){
-  if(!a)return"#f3f4f6";const t=a.toLowerCase();
-  if(t==="login"||t==="sign_in")return"#f0fdf4";
-  if(t==="logout"||t==="sign_out")return"#fff5f5";
-  if(t.includes("forgot_password")||t.includes("password_reset"))return"#fffbeb";
-  return"#f9fafb";
-}
-const ACT_COLORS=["#E8F5E9","#E3F2FD","#FFF3E0","#FCE4EC","#F3E5F5","#E0F7FA","#F9FBE7","#FBE9E7"];
-const ACT_ICON_COLORS=["#2D6A2D","#1565C0","#E65100","#C62828","#6A1B9A","#00695C","#827717","#BF360C"];
-
-/* ── MAIN ───────────────────────────────────────────────────── */
-function MiniCalendar({date, setDate, events, announcements}) {
-  const year=date.getFullYear(), month=date.getMonth();
-  const firstDay=new Date(year,month,1).getDay();
-  const daysInMonth=new Date(year,month+1,0).getDate();
-  const today=new Date();
-  const eventDays=new Set((events||[]).map(e=>{
-    const d=e.scheduled_start?new Date(e.scheduled_start):null;
-    return d&&d.getFullYear()===year&&d.getMonth()===month?d.getDate():null;
-  }).filter(Boolean));
-  const announceDays=new Set((announcements||[]).map(a=>{
-    const d=a.published_at?new Date(a.published_at):null;
-    return d&&d.getFullYear()===year&&d.getMonth()===month?d.getDate():null;
-  }).filter(Boolean));
-
-  const prevMonth=()=>setDate(new Date(year,month-1,1));
-  const nextMonth=()=>setDate(new Date(year,month+1,1));
-
-  const days=["Su","Mo","Tu","We","Th","Fr","Sa"];
-  const cells=[];
-  for(let i=0;i<firstDay;i++) cells.push(null);
-  for(let d=1;d<=daysInMonth;d++) cells.push(d);
-
-  return(
+  return (
     <div style={{userSelect:"none"}}>
       {/* Month nav */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-        <button onClick={prevMonth} style={{background:"none",border:"none",cursor:"pointer",color:"#1A2E1A",fontSize:16,padding:"2px 8px",borderRadius:6}}>‹</button>
-        <div style={{fontWeight:700,fontSize:13,color:"#1A2E1A"}}>
+        <button onClick={()=>setDate(new Date(year,month-1,1))}
+          style={{background:"none",border:"none",cursor:"pointer",color:"var(--bloom-dark)",fontSize:18,padding:"2px 8px",borderRadius:6,lineHeight:1}}>
+          ‹
+        </button>
+        <div style={{fontWeight:700,fontSize:13,color:"var(--bloom-dark)"}}>
           {date.toLocaleDateString("en-PH",{month:"long",year:"numeric"})}
         </div>
-        <button onClick={nextMonth} style={{background:"none",border:"none",cursor:"pointer",color:"#1A2E1A",fontSize:16,padding:"2px 8px",borderRadius:6}}>›</button>
+        <button onClick={()=>setDate(new Date(year,month+1,1))}
+          style={{background:"none",border:"none",cursor:"pointer",color:"var(--bloom-dark)",fontSize:18,padding:"2px 8px",borderRadius:6,lineHeight:1}}>
+          ›
+        </button>
       </div>
+
       {/* Day headers */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
-        {days.map(d=><div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:"#aaa",padding:"2px 0"}}>{d}</div>)}
+        {DAY_HEADERS.map(d => (
+          <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:"#aaa",padding:"2px 0"}}>
+            {d}
+          </div>
+        ))}
       </div>
+
       {/* Day cells */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
-        {cells.map((d,i)=>{
-          if(!d) return <div key={`e${i}`}/>;
-          const isToday=d===today.getDate()&&month===today.getMonth()&&year===today.getFullYear();
-          const hasEvent=eventDays.has(d);
-          const hasAnnounce=announceDays.has(d);
-          return(
-            <div key={d} style={{textAlign:"center",padding:"5px 2px",borderRadius:6,fontSize:12,fontWeight:isToday?800:400,background:isToday?"#2D6A2D":hasEvent?"#E8F5E9":hasAnnounce?"#fffbeb":"transparent",color:isToday?"#fff":hasEvent?"#1A2E1A":hasAnnounce?"#92400e":"#444",position:"relative",cursor:hasEvent?"pointer":"default"}}>
+        {cells.map((d,i) => {
+          if (!d) return <div key={`e${i}`}/>;
+          const isToday   = d===today.getDate() && month===today.getMonth() && year===today.getFullYear();
+          const dayEvents = dayMap[d] || [];
+          const hasSeminar = dayEvents.some(ev => ev._source==="seminar");
+          const hasAnn     = dayEvents.some(ev => ev._source==="announcement");
+          const hasCustom  = dayEvents.some(ev => !ev._source);
+          const hasAny     = dayEvents.length > 0;
+
+          const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+
+          return (
+            <div
+              key={d}
+              className="cal-cell"
+              onClick={() => onDayClick(dateStr, dayEvents)}
+              title={hasAny ? `${dayEvents.length} event${dayEvents.length>1?"s":""}` : ""}
+              style={{
+                textAlign:"center",padding:"5px 2px",borderRadius:6,fontSize:12,
+                fontWeight:isToday?800:400,
+                background:isToday?"var(--bloom-mid)":hasAny?"#F0FAF0":"transparent",
+                color:isToday?"#fff":"#444",
+                position:"relative",
+                border: hasAny && !isToday ? "1px solid #C8E6C9" : "1px solid transparent",
+              }}>
               {d}
-              {!isToday&&(hasEvent||hasAnnounce)&&(
-                <div style={{display:"flex",justifyContent:"center",gap:2,marginTop:2}}>
-                  {hasEvent&&<div style={{width:4,height:4,borderRadius:"50%",background:"#2D6A2D"}}/>}
-                  {hasAnnounce&&<div style={{width:4,height:4,borderRadius:"50%",background:"#f59e0b"}}/>}
+              {!isToday && hasAny && (
+                <div style={{display:"flex",justifyContent:"center",gap:2,marginTop:2,flexWrap:"wrap"}}>
+                  {hasCustom  && <div style={{width:4,height:4,borderRadius:"50%",background:"var(--bloom-mid)"}}/>}
+                  {hasSeminar && <div style={{width:4,height:4,borderRadius:"50%",background:"#2563EB"}}/>}
+                  {hasAnn     && <div style={{width:4,height:4,borderRadius:"50%",background:"#f59e0b"}}/>}
                 </div>
               )}
             </div>
           );
         })}
       </div>
+
       {/* Legend */}
-      <div style={{display:"flex",gap:12,marginTop:10,fontSize:10,color:"#888",flexWrap:"wrap"}}>
-        <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:10,height:10,borderRadius:2,background:"#2D6A2D"}}/> Today</div>
-        <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:6,height:6,borderRadius:"50%",background:"#2D6A2D"}}/> Event</div>
-        <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:6,height:6,borderRadius:"50%",background:"#f59e0b"}}/> Announcement</div>
+      <div style={{display:"flex",gap:10,marginTop:10,fontSize:10,color:"#888",flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:3}}>
+          <div style={{width:10,height:10,borderRadius:2,background:"var(--bloom-mid)"}}/> Today
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:3}}>
+          <div style={{width:6,height:6,borderRadius:"50%",background:"var(--bloom-mid)"}}/> Event
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:3}}>
+          <div style={{width:6,height:6,borderRadius:"50%",background:"#2563EB"}}/> Seminar
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:3}}>
+          <div style={{width:6,height:6,borderRadius:"50%",background:"#f59e0b"}}/> Announcement
+        </div>
       </div>
     </div>
   );
 }
 
-export default function DashboardPage(){
-  const [loading,setLoading]=useState(true),[refreshing,setRefreshing]=useState(false);
-  const [stats,setStats]=useState({}),[modStats,setModStats]=useState([]),[semStats,setSemStats]=useState([]);
-  const [leaderboard,setLeaderboard]=useState([]),[activity,setActivity]=useState([]);
-  const [certStats,setCertStats]=useState({}),[assessStats,setAssessStats]=useState({});
-  const [recentMods,setRecentMods]=useState([]),[weeklyAct,setWeeklyAct]=useState([]);
-  const [upcomingEvents,setUpcomingEvents]=useState([]);
-  const [calDate,setCalDate]=useState(new Date());
-  const [calAnnouncements,setCalAnnouncements]=useState([]);
-  const [fromDate,setFromDate]=useState(MONTH_AGO),[toDate,setToDate]=useState(TODAY),[preset,setPreset]=useState("This Month");
+/* ─── Chart canvases ─────────────────────────────────────── */
+function BarCanvas({data, version}) {
+  const ref=useRef(null), chart=useRef(null);
+  useEffect(() => {
+    loadChart().then(() => {
+      if (!ref.current||!window.Chart) return;
+      if (chart.current) chart.current.destroy();
+      chart.current = new window.Chart(ref.current, {
+        type:"bar",
+        data:{
+          labels:data.map(d=>d.label),
+          datasets:[{
+            data:data.map(d=>d.value),
+            backgroundColor:data.map((_,i)=>`rgba(45,106,45,${0.4+i*0.09})`),
+            borderRadius:5, borderSkipped:false,
+          }],
+        },
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          plugins:{legend:{display:false}, tooltip:{callbacks:{label:(c)=>`${c.raw} actions`}}},
+          scales:{
+            y:{beginAtZero:true,grid:{color:"rgba(0,0,0,.04)"},ticks:{font:{size:10},color:"#9E9E9E"}},
+            x:{grid:{display:false},ticks:{font:{size:10},color:"#9E9E9E"}},
+          },
+        },
+      });
+    });
+    return () => { if (chart.current) chart.current.destroy(); };
+  }, [version]);
+  return <canvas ref={ref} style={{maxHeight:160}}/>;
+}
 
-  // applyPreset is defined after fetchAll below
+function DonutCanvas({segments, version}) {
+  const ref=useRef(null), chart=useRef(null);
+  useEffect(() => {
+    if (!segments.length) return;
+    loadChart().then(() => {
+      if (!ref.current||!window.Chart) return;
+      if (chart.current) chart.current.destroy();
+      const total = segments.reduce((s,g)=>s+g.value, 0);
+      chart.current = new window.Chart(ref.current, {
+        type:"doughnut",
+        data:{
+          labels:segments.map(s=>s.label),
+          datasets:[{
+            data:segments.map(s=>s.value),
+            backgroundColor:["#2D6A2D","#4CAF50","#81C784","#A5D6A7"],
+            borderWidth:3, borderColor:"#fff",
+          }],
+        },
+        options:{
+          responsive:true, maintainAspectRatio:false, cutout:"70%",
+          plugins:{
+            legend:{position:"bottom",labels:{font:{size:11},boxWidth:10,padding:12,color:"#616161"}},
+            tooltip:{callbacks:{label:(c)=>`${c.label}: ${c.raw} (${Math.round((c.raw/total)*100)}%)`}},
+          },
+        },
+      });
+    });
+    return () => { if (chart.current) chart.current.destroy(); };
+  }, [version]);
+  return <canvas ref={ref} style={{maxHeight:180}}/>;
+}
 
-  const fetchStats=useCallback(async(from,to)=>{const f=toISO(from),t=toISO(to,true);const rng=(q,col="created_at")=>{if(f)q=q.gte(col,f);if(t)q=q.lte(col,t);return q;};const[{count:tm},{count:pm},{count:ta},{count:ts},{count:us},{count:tc},{count:tb},{count:tat}]=await Promise.all([rng(supabase.from("modules").select("*",{count:"exact",head:true})),rng(supabase.from("modules").select("*",{count:"exact",head:true}).eq("status","published")),rng(supabase.from("assessments").select("*",{count:"exact",head:true})),rng(supabase.from("seminars").select("*",{count:"exact",head:true})),rng(supabase.from("seminars").select("*",{count:"exact",head:true}).eq("status","upcoming")),rng(supabase.from("certificates").select("*",{count:"exact",head:true}).eq("is_revoked",false),"issued_at"),rng(supabase.from("student_badges").select("*",{count:"exact",head:true}),"awarded_at"),rng(supabase.from("assessment_attempts").select("*",{count:"exact",head:true}),"submitted_at")]);let students=0;try{const{data:r}=await supabase.from("roles").select("id").eq("name","student").single();if(r){const{count}=await supabase.from("user_roles").select("*",{count:"exact",head:true}).eq("role_id",r.id);students=count??0;}}catch(e){console.error(e);}setStats({totalMods:tm??0,pubMods:pm??0,totalAssess:ta??0,totalSems:ts??0,upcomingSems:us??0,totalCerts:tc??0,totalBadges:tb??0,totalAttempts:tat??0,students});},[]);
-  const fetchModStats=useCallback(async()=>{const{data}=await supabase.from("v_module_completion_stats").select("*").order("completion_rate_percent",{ascending:false}).limit(6);setModStats(data??[]);},[]);
-  const fetchSemStats=useCallback(async()=>{const{data}=await supabase.from("v_seminar_attendance_summary").select("*").order("scheduled_start",{ascending:false}).limit(5);setSemStats(data??[]);},[]);
-  const fetchActivity=useCallback(async(from,to)=>{let q=supabase.from("activity_logs").select("*, profiles(full_name, email)").order("created_at",{ascending:false}).limit(15);if(from)q=q.gte("created_at",toISO(from));if(to)q=q.lte("created_at",toISO(to,true));const{data}=await q;setActivity(data??[]);},[]);
-  const fetchRecentMods=useCallback(async(from,to)=>{let q=supabase.from("modules").select("id,title,status,created_at").order("created_at",{ascending:false}).limit(5);if(from)q=q.gte("created_at",toISO(from));if(to)q=q.lte("created_at",toISO(to,true));const{data}=await q;setRecentMods(data??[]);},[]);
-  const fetchLeaderboard=useCallback(async(from,to)=>{let q=supabase.from("student_badges").select("user_id,awarded_at,profiles(full_name)");if(from)q=q.gte("awarded_at",toISO(from));if(to)q=q.lte("awarded_at",toISO(to,true));const{data}=await q;const map={};(data??[]).forEach((r,i)=>{const uid=r.user_id??`u${i}`;if(!map[uid])map[uid]={uid,name:r.profiles?.full_name??"—",count:0};map[uid].count++;});setLeaderboard(Object.values(map).sort((a,b)=>b.count-a.count).slice(0,5));},[]);
-  const fetchCertStats=useCallback(async(from,to)=>{let q=supabase.from("certificates").select("reference_type,is_revoked,issued_at");if(from)q=q.gte("issued_at",toISO(from));if(to)q=q.lte("issued_at",toISO(to,true));const{data}=await q;if(!data)return;const byType={},valid=data.filter(c=>!c.is_revoked).length,revoked=data.length-valid;data.forEach(c=>{const t=c.reference_type??"manual";byType[t]=(byType[t]??0)+1;});setCertStats({byType,valid,revoked,total:data.length});},[]);
-  const fetchAssessStats=useCallback(async(from,to)=>{let q=supabase.from("assessment_attempts").select("score,passed,submitted_at");if(from)q=q.gte("submitted_at",toISO(from));if(to)q=q.lte("submitted_at",toISO(to,true));const{data}=await q;if(!data||!data.length){setAssessStats({});return;}const passed=data.filter(a=>a.passed).length,avg=Math.round(data.reduce((s,a)=>s+(a.score??0),0)/data.length);setAssessStats({total:data.length,passed,failed:data.length-passed,avg,passRate:Math.round((passed/data.length)*100)});},[]);
-  const fetchCalAnnouncements=useCallback(async()=>{
-    const {data}=await supabase.from("announcements")
-      .select("id,title,published_at,expires_at,is_pinned")
-      .not("published_at",  "is", null)
-      .order("published_at",{ascending:false})
-      .limit(50);
-    setCalAnnouncements(data||[]);
-  },[]);
-
-  const fetchUpcomingEvents=useCallback(async()=>{
-    // Fetch all seminars (not just upcoming) so mini calendar dots are accurate
-    const {data}=await supabase.from("seminars")
-      .select("id,title,scheduled_start,status,venue")
-      .order("scheduled_start",{ascending:true});
-    setUpcomingEvents(data||[]);
-  },[]);
-
-  const fetchWeeklyAct=useCallback(async(from,to)=>{const end=to?new Date(to):new Date();const days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],result=[];for(let i=6;i>=0;i--){const d=new Date(end);d.setDate(d.getDate()-i);const s=new Date(d);s.setHours(0,0,0,0);const e=new Date(d);e.setHours(23,59,59,999);const{count}=await supabase.from("activity_logs").select("*",{count:"exact",head:true}).gte("created_at",s.toISOString()).lte("created_at",e.toISOString());result.push({label:days[d.getDay()],value:count??0});}setWeeklyAct(result);},[]);
-
-  const fetchAll=useCallback(async(from,to,isRef=false)=>{isRef?setRefreshing(true):setLoading(true);await Promise.allSettled([fetchStats(from,to),fetchModStats(),fetchSemStats(),fetchLeaderboard(from,to),fetchActivity(from,to),fetchCertStats(from,to),fetchAssessStats(from,to),fetchRecentMods(from,to),fetchWeeklyAct(from,to),fetchUpcomingEvents(),fetchCalAnnouncements()]);isRef?setRefreshing(false):setLoading(false);},[fetchStats,fetchModStats,fetchSemStats,fetchLeaderboard,fetchActivity,fetchCertStats,fetchAssessStats,fetchRecentMods,fetchWeeklyAct,fetchUpcomingEvents,fetchCalAnnouncements]); // eslint-disable-line
-
-  const applyPreset=useCallback((p)=>{
-    setPreset(p.label);
-    let from,to=TODAY;
-    if(p.days===-1){from="2020-01-01";}
-    else if(p.days===0){from=TODAY;}
-    else{const d=new Date();d.setDate(d.getDate()-p.days);from=d.toISOString().split("T")[0];}
-    setFromDate(from);setToDate(to);
-    fetchAll(from,to,true);
-  },[fetchAll]);
-
-  useState(()=>{fetchAll(MONTH_AGO,TODAY);});
-
-  const certSegs=Object.entries(certStats.byType??{}).map(([t,v])=>({label:t,value:v}));
-  const draftCount=(stats.totalMods??0)-(stats.pubMods??0);
-  const hour=new Date().getHours();
-  const greeting=hour<12?"Good morning":hour<17?"Good afternoon":"Good evening";
-
-  if(loading) return(
+/* ─── Skeleton ────────────────────────────────────────────── */
+function DashboardSkeleton() {
+  return (
     <div className="p-4">
-      <div className="skeleton mb-2" style={{width:220,height:26,borderRadius:6}}/><div className="skeleton mb-4" style={{width:140,height:14,borderRadius:4}}/>
-      <div className="row g-3 mb-4">{[1,2,3,4].map(i=><div key={i} className="col-lg-3 col-6"><div className="card" style={{height:100,borderRadius:12}}><div className="card-body p-3"><div className="skeleton mb-2" style={{height:11,width:"55%"}}/><div className="skeleton" style={{height:28,width:"35%"}}/></div></div></div>)}</div>
-      <div className="row g-3">{[1,2].map(i=><div key={i} className="col-lg-6"><div className="card" style={{height:220,borderRadius:12}}/></div>)}</div>
+      <div className="skeleton mb-2" style={{width:220,height:26}}/>
+      <div className="skeleton mb-4" style={{width:140,height:14}}/>
+      <div className="row g-3 mb-4">
+        {Array.from({length:8}).map((_,i)=>(
+          <div key={i} className="col-xl-3 col-md-4 col-6">
+            <div className="card" style={{height:100,borderRadius:12}}>
+              <div className="card-body p-3">
+                <div className="skeleton mb-2" style={{height:11,width:"55%"}}/>
+                <div className="skeleton" style={{height:28,width:"35%"}}/>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {[220,280,340].map((h,i)=>(
+        <div key={i} className="row g-3 mb-3">
+          {[6,6].map((span,j)=>(
+            <div key={j} className={`col-lg-${span}`}>
+              <div className="skeleton" style={{height:h,borderRadius:12}}/>
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
+}
 
-  return(
+/* ═══════════════════════════════════════════════════════════
+   MAIN COMPONENT
+═══════════════════════════════════════════════════════════ */
+export default function DashboardPage() {
+  /* ── state ── */
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [errors,     setErrors]     = useState({});
+
+  const [fromDate, setFromDate] = useState(getMonthAgo);
+  const [toDate,   setToDate]   = useState(getToday);
+  const [preset,   setPreset]   = useState("This Month");
+
+  // stats
+  const [stats,       setStats]       = useState({});
+  const [modStats,    setModStats]    = useState([]);
+  const [semStats,    setSemStats]    = useState([]);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [certStats,   setCertStats]   = useState({});
+  const [assessStats, setAssessStats] = useState({});
+  const [recentMods,  setRecentMods]  = useState([]);
+  const [weeklyAct,   setWeeklyAct]   = useState([]);
+
+  // [C] calendar events — merged from all 3 sources, scoped to visible month
+  const [calDate,     setCalDate]     = useState(new Date());
+  const [calEvents,   setCalEvents]   = useState([]);   // for MiniCalendar dots
+
+  // [D] upcoming merged events — for the Upcoming Events list
+  const [upcomingEvents, setUpcomingEvents] = useState([]);
+
+  // [E][F] modal state
+  const [dayModal,    setDayModal]    = useState(null);  // { date, events }
+  const [detailModal, setDetailModal] = useState(null);  // ev object
+
+  // chart version counters
+  const [chartBarVer,   setChartBarVer]   = useState(0);
+  const [chartDonutVer, setChartDonutVer] = useState(0);
+
+  // Realtime channels ref
+  const channelsRef = useRef([]);
+
+  /* ── calendar month window helper ── */
+  const getCalWindow = useCallback((d) => {
+    const y = d.getFullYear(), m = d.getMonth();
+    return {
+      from: new Date(y, m-1, 1).toISOString().split("T")[0],
+      to:   new Date(y, m+2, 0).toISOString().split("T")[0],
+    };
+  }, []);
+
+  /* ── [C] fetch calendar events for mini calendar ── */
+  const refreshCalEvents = useCallback(async (forDate) => {
+    const d = forDate || calDate;
+    const { from, to } = getCalWindow(d);
+    try {
+      const merged = await fetchMergedCalendarEvents(
+        from + "T00:00:00.000+08:00",
+        to   + "T23:59:59.999+08:00"
+      );
+      setCalEvents(merged);
+    } catch(e) {
+      console.error("[Dashboard] calEvents:", e);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calDate, getCalWindow]);
+
+  /* ── [D] fetch upcoming merged events ── */
+  const refreshUpcoming = useCallback(async () => {
+    try {
+      const merged = await fetchUpcomingMerged();
+      setUpcomingEvents(merged);
+    } catch(e) {
+      console.error("[Dashboard] upcoming:", e);
+      setErrors(prev => ({...prev, events:"Failed to load events"}));
+    }
+  }, []);
+
+  /* ── stat fetchers ── */
+  const fetchStats = useCallback(async (from, to) => {
+    const f = toISO(from), t = toISO(to, true);
+    const rng = (q, col="created_at") => {
+      if (f) q = q.gte(col, f);
+      if (t) q = q.lte(col, t);
+      return q;
+    };
+    const results = await Promise.allSettled([
+      rng(supabase.from("modules").select("*",{count:"exact",head:true})),
+      rng(supabase.from("modules").select("*",{count:"exact",head:true}).eq("status","published")),
+      rng(supabase.from("assessments").select("*",{count:"exact",head:true})),
+      rng(supabase.from("seminars").select("*",{count:"exact",head:true})),
+      rng(supabase.from("seminars").select("*",{count:"exact",head:true}).eq("status","upcoming")),
+      rng(supabase.from("certificates").select("*",{count:"exact",head:true}).eq("is_revoked",false),"issued_at"),
+      rng(supabase.from("student_badges").select("*",{count:"exact",head:true}),"awarded_at"),
+      rng(supabase.from("assessment_attempts").select("*",{count:"exact",head:true}),"submitted_at"),
+      supabase.from("user_roles")
+        .select("user_id, roles!inner(name)",{count:"exact",head:true})
+        .eq("roles.name","student"),
+    ]);
+    const get = i => results[i].status==="fulfilled" ? (results[i].value.count ?? 0) : 0;
+    setStats({
+      totalMods:get(0), pubMods:get(1), totalAssess:get(2),
+      totalSems:get(3), upcomingSems:get(4), totalCerts:get(5),
+      totalBadges:get(6), totalAttempts:get(7), students:get(8),
+    });
+  }, []);
+
+  const fetchModStats = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("v_module_completion_stats")
+      .select("*").order("completion_rate_percent",{ascending:false}).limit(6);
+    if (error) throw new Error("Module stats failed");
+    setModStats(data ?? []);
+  }, []);
+
+  const fetchSemStats = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("v_seminar_attendance_summary")
+      .select("*").order("scheduled_start",{ascending:false}).limit(5);
+    if (error) throw new Error("Seminar stats failed");
+    setSemStats(data ?? []);
+  }, []);
+
+  const fetchLeaderboard = useCallback(async (from, to) => {
+    let q = supabase.from("student_badges").select("user_id,awarded_at,profiles(full_name)");
+    if (from) q = q.gte("awarded_at", toISO(from));
+    if (to)   q = q.lte("awarded_at", toISO(to, true));
+    const { data, error } = await q;
+    if (error) throw new Error("Leaderboard failed");
+    const map = {};
+    (data??[]).forEach((r,i)=>{
+      const uid = r.user_id??`u${i}`;
+      if (!map[uid]) map[uid]={uid,name:r.profiles?.full_name??"—",count:0};
+      map[uid].count++;
+    });
+    setLeaderboard(Object.values(map).sort((a,b)=>b.count-a.count).slice(0,5));
+  }, []);
+
+  const fetchCertStats = useCallback(async (from, to) => {
+    let q = supabase.from("certificates").select("reference_type,is_revoked,issued_at");
+    if (from) q = q.gte("issued_at", toISO(from));
+    if (to)   q = q.lte("issued_at", toISO(to, true));
+    const { data, error } = await q;
+    if (error) throw new Error("Certificate stats failed");
+    if (!data) return;
+    const byType={}, valid=data.filter(c=>!c.is_revoked).length;
+    data.forEach(c=>{const t=c.reference_type??"manual"; byType[t]=(byType[t]??0)+1;});
+    setCertStats({byType,valid,revoked:data.length-valid,total:data.length});
+    setChartDonutVer(v=>v+1);
+  }, []);
+
+  const fetchAssessStats = useCallback(async (from, to) => {
+    let q = supabase.from("assessment_attempts").select("score,passed,submitted_at");
+    if (from) q = q.gte("submitted_at", toISO(from));
+    if (to)   q = q.lte("submitted_at", toISO(to, true));
+    const { data, error } = await q;
+    if (error) throw new Error("Assessment stats failed");
+    if (!data||!data.length) { setAssessStats({}); return; }
+    const passed = data.filter(a=>a.passed).length;
+    const avg    = Math.round(data.reduce((s,a)=>s+(a.score??0),0)/data.length);
+    setAssessStats({total:data.length,passed,failed:data.length-passed,avg,passRate:Math.round((passed/data.length)*100)});
+  }, []);
+
+  const fetchRecentMods = useCallback(async (from, to) => {
+    let q = supabase.from("modules").select("id,title,status,created_at")
+      .order("created_at",{ascending:false}).limit(5);
+    if (from) q = q.gte("created_at", toISO(from));
+    if (to)   q = q.lte("created_at", toISO(to, true));
+    const { data, error } = await q;
+    if (error) throw new Error("Recent modules failed");
+    setRecentMods(data??[]);
+  }, []);
+
+  const fetchWeeklyAct = useCallback(async (to) => {
+    const endDate   = to ? new Date(to) : new Date();
+    const startDate = new Date(endDate);
+    startDate.setDate(startDate.getDate()-6);
+    startDate.setHours(0,0,0,0);
+    endDate.setHours(23,59,59,999);
+    const { data } = await supabase.from("activity_logs")
+      .select("created_at")
+      .gte("created_at", startDate.toISOString())
+      .lte("created_at", endDate.toISOString());
+    const DAYS    = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+    const buckets = {};
+    for (let i=6; i>=0; i--) {
+      const d = new Date(endDate); d.setDate(d.getDate()-i);
+      buckets[d.toDateString()] = {label:DAYS[d.getDay()], value:0};
+    }
+    (data??[]).forEach(r=>{
+      const key = new Date(r.created_at).toDateString();
+      if (buckets[key]) buckets[key].value++;
+    });
+    setWeeklyAct(Object.values(buckets));
+    setChartBarVer(v=>v+1);
+  }, []);
+
+  /* ── fetchAll orchestrator ── */
+  const fetchAll = useCallback(async (from, to, isRefresh=false) => {
+    isRefresh ? setRefreshing(true) : setLoading(true);
+    setErrors({});
+    const run = async (key, fn) => {
+      try { await fn(); }
+      catch(err) {
+        console.error(`[Dashboard] ${key}:`, err);
+        setErrors(prev => ({...prev, [key]:err.message??"Failed"}));
+      }
+    };
+    await Promise.allSettled([
+      run("stats",       ()=>fetchStats(from,to)),
+      run("modStats",    ()=>fetchModStats()),
+      run("semStats",    ()=>fetchSemStats()),
+      run("leaderboard", ()=>fetchLeaderboard(from,to)),
+      run("certStats",   ()=>fetchCertStats(from,to)),
+      run("assessStats", ()=>fetchAssessStats(from,to)),
+      run("recentMods",  ()=>fetchRecentMods(from,to)),
+      run("weeklyAct",   ()=>fetchWeeklyAct(to)),
+      // [C][D] calendar + upcoming use their own fetchers
+      run("calEvents",   ()=>refreshCalEvents(calDate)),
+      run("upcoming",    ()=>refreshUpcoming()),
+    ]);
+    isRefresh ? setRefreshing(false) : setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    fetchStats, fetchModStats, fetchSemStats, fetchLeaderboard,
+    fetchCertStats, fetchAssessStats, fetchRecentMods, fetchWeeklyAct,
+    refreshCalEvents, refreshUpcoming,
+  ]);
+
+  /* ── Initial load ── */
+  useEffect(() => {
+    const today    = getToday();
+    const monthAgo = getMonthAgo();
+    setFromDate(monthAgo); setToDate(today);
+    fetchAll(monthAgo, today);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── [G] Realtime subscriptions on all 3 calendar tables ── */
+  useEffect(() => {
+    channelsRef.current.forEach(ch => supabase.removeChannel(ch));
+    channelsRef.current = [];
+
+    // When any calendar source changes → refresh both calendar dots AND upcoming list
+    const refreshBoth = () => {
+      refreshCalEvents(calDate);
+      refreshUpcoming();
+    };
+
+    const evCh = supabase.channel("dash-events-v3")
+      .on("postgres_changes", {event:"*",schema:"public",table:"events"}, refreshBoth)
+      .subscribe();
+
+    const semCh = supabase.channel("dash-seminars-v3")
+      .on("postgres_changes", {event:"*",schema:"public",table:"seminars"}, refreshBoth)
+      .subscribe();
+
+    const annCh = supabase.channel("dash-announcements-v3")
+      .on("postgres_changes", {event:"*",schema:"public",table:"announcements"}, refreshBoth)
+      .subscribe();
+
+    channelsRef.current = [evCh, semCh, annCh];
+    return () => {
+      channelsRef.current.forEach(ch => supabase.removeChannel(ch));
+      channelsRef.current = [];
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ── Re-fetch calendar events when month changes ── */
+  useEffect(() => {
+    refreshCalEvents(calDate);
+  }, [calDate, refreshCalEvents]);
+
+  /* ── applyPreset ── */
+  const applyPreset = useCallback((p) => {
+    const today = getToday();
+    setPreset(p.label);
+    let from;
+    if      (p.days===-1) from = "2020-01-01";
+    else if (p.days===0)  from = today;
+    else {
+      const d = new Date(); d.setDate(d.getDate()-p.days);
+      from = d.toISOString().split("T")[0];
+    }
+    setFromDate(from); setToDate(today);
+    fetchAll(from, today, true);
+  }, [fetchAll]);
+
+  /* ── [E] Day click handler ── */
+  const handleDayClick = useCallback((dateStr, dayEvents) => {
+    setDayModal({ date: dateStr, events: dayEvents });
+  }, []);
+
+  /* ── derived ── */
+  const certSegs   = Object.entries(certStats.byType??{}).map(([t,v])=>({label:t,value:v}));
+  const draftCount = (stats.totalMods??0)-(stats.pubMods??0);
+  const hour       = new Date().getHours();
+  const greeting   = hour<12?"Good morning":hour<17?"Good afternoon":"Good evening";
+
+  if (loading) return <DashboardSkeleton/>;
+
+  /* ════════════════════════════════════════════════════════
+     RENDER
+  ════════════════════════════════════════════════════════ */
+  return (
     <>
       <style>{CSS}</style>
-      <div className="p-4" style={{maxWidth:1400,margin:"0 auto",background:"#F5F7F5",minHeight:"100vh"}}>
+      <div className="p-4" style={{background:"var(--bloom-bg)",minHeight:"100vh"}}>
 
         {/* ── Page header ── */}
         <div className="d-flex align-items-start justify-content-between mb-4 flex-wrap gap-3">
           <div>
-            <h4 className="fw-bold mb-1" style={{color:"#1A2E1A",fontSize:22}}>{greeting}, Admin</h4>
+            <h4 className="fw-bold mb-1" style={{color:"var(--bloom-dark)",fontSize:22}}>
+              {greeting}, Admin
+              {refreshing && (
+                <span className="ms-2 refreshing-pulse"
+                  style={{fontSize:13,color:"var(--bloom-mid)",fontWeight:400}}>
+                  <i className="bi bi-arrow-repeat me-1"/>Refreshing…
+                </span>
+              )}
+            </h4>
             <p className="mb-0" style={{fontSize:13,color:"#6C757D"}}>
               Here's what's happening in your GADRC system today.
             </p>
           </div>
-          {/* Filter bar inline */}
+
+          {/* Date filter bar */}
           <div className="d-flex align-items-center gap-2 flex-wrap">
             <div className="btn-group btn-group-sm" role="group">
               {PRESETS.map(p=>(
@@ -344,44 +1110,55 @@ export default function DashboardPage(){
                 </button>
               ))}
             </div>
-            <div className="d-flex align-items-center gap-1 bg-white border rounded px-2 py-1" style={{fontSize:12}}>
+            <div className="d-flex align-items-center gap-1 bg-white border rounded px-2 py-1">
               <i className="bi bi-calendar3 text-muted" style={{fontSize:13}}/>
-              <input type="date" className="border-0 p-0 bg-transparent" style={{fontSize:11,width:110,outline:"none",color:"#1A2E1A",colorScheme:"light"}}
-                value={fromDate} max={toDate} onChange={e=>{const v=e.target.value;setFromDate(v);setPreset("Custom");fetchAll(v,toDate,true);}}/>
-              <span className="text-muted">—</span>
-              <input type="date" className="border-0 p-0 bg-transparent" style={{fontSize:11,width:110,outline:"none",color:"#1A2E1A",colorScheme:"light"}}
-                value={toDate} min={fromDate} max={TODAY} onChange={e=>{const v=e.target.value;setToDate(v);setPreset("Custom");fetchAll(fromDate,v,true);}}/>
+              <input type="date" className="border-0 p-0 bg-transparent"
+                style={{fontSize:11,width:110,outline:"none",color:"var(--bloom-dark)",colorScheme:"light"}}
+                value={fromDate} max={toDate}
+                onChange={e=>{const v=e.target.value;setFromDate(v);setPreset("Custom");fetchAll(v,toDate,true);}}/>
+              <span className="text-muted" style={{fontSize:12}}>—</span>
+              <input type="date" className="border-0 p-0 bg-transparent"
+                style={{fontSize:11,width:110,outline:"none",color:"var(--bloom-dark)",colorScheme:"light"}}
+                value={toDate} min={fromDate} max={getToday()}
+                onChange={e=>{const v=e.target.value;setToDate(v);setPreset("Custom");fetchAll(fromDate,v,true);}}/>
             </div>
-
+            <button className="btn btn-sm btn-outline-secondary"
+              style={{fontSize:11}} disabled={refreshing}
+              onClick={()=>fetchAll(fromDate,toDate,true)}>
+              <i className={`bi bi-arrow-clockwise me-1 ${refreshing?"refreshing-pulse":""}`}/>
+              Refresh
+            </button>
           </div>
         </div>
 
-        {/* ── Row 1: 8 Stat cards ── */}
+        {/* ── Row 1: 8 stat cards — [A] full width, equal cols ── */}
         <div className="row g-3 mb-4">
           {[
-            {icon:"bi-mortarboard",     label:"Students",      value:stats.students??0,                                          color:"#1A2E1A"},
-            {icon:"bi-book",            label:"Modules",       value:stats.totalMods??0,   sub:`${stats.pubMods??0} pub · ${draftCount} draft`, color:"#2D6A2D"},
-            {icon:"bi-clipboard-check", label:"Assessments",   value:stats.totalAssess??0,                                       color:"#2563EB"},
-            {icon:"bi-people",          label:"Seminars",      value:stats.totalSems??0,   sub:`${stats.upcomingSems??0} upcoming`, color:"#7C3AED"},
-            {icon:"bi-award",           label:"Badges",        value:stats.totalBadges??0,                                       color:"#D97706"},
-            {icon:"bi-patch-check",     label:"Certificates",  value:stats.totalCerts??0,                                        color:"#059669"},
-            {icon:"bi-pencil-square",   label:"Quiz Attempts", value:stats.totalAttempts??0,                                     color:"#0891B2"},
-            {icon:"bi-graph-up-arrow",  label:"Pass Rate",     value:assessStats.passRate!=null?`${assessStats.passRate}%`:"—",  color:"#DC2626"},
+            {icon:"bi-mortarboard",     label:"Students",      value:stats.students??0,                                                      color:"#1A2E1A"},
+            {icon:"bi-book",            label:"Modules",       value:stats.totalMods??0,    sub:`${stats.pubMods??0} pub · ${draftCount} draft`, color:"#2D6A2D"},
+            {icon:"bi-clipboard-check", label:"Assessments",   value:stats.totalAssess??0,                                                     color:"#2563EB"},
+            {icon:"bi-people",          label:"Seminars",      value:stats.totalSems??0,    sub:`${stats.upcomingSems??0} upcoming`,              color:"#7C3AED"},
+            {icon:"bi-award",           label:"Badges",        value:stats.totalBadges??0,                                                      color:"#D97706"},
+            {icon:"bi-patch-check",     label:"Certificates",  value:stats.totalCerts??0,                                                       color:"#059669"},
+            {icon:"bi-pencil-square",   label:"Quiz Attempts", value:stats.totalAttempts??0,                                                    color:"#0891B2"},
+            {icon:"bi-graph-up-arrow",  label:"Pass Rate",     value:assessStats.passRate!=null?`${assessStats.passRate}%`:"—",                  color:"#DC2626"},
           ].map((c,i)=>(
-            <div key={i} className={`col-xl-3 col-md-4 col-6 dash-animate`} style={{animationDelay:`${i*0.04}s`}}>
+            /* [A] col-xl-3 col-md-4 col-6 → always fills row evenly */
+            <div key={i} className="col-xl-3 col-md-4 col-6 dash-animate"
+              style={{animationDelay:`${i*0.04}s`}}>
               <StatCard {...c}/>
             </div>
           ))}
         </div>
 
-        {/* ── Row 2: Welcome card + Activity chart ── */}
+        {/* ── Row 2: Welcome card + Activity chart — [A] equal halves ── */}
         <div className="row g-3 mb-3">
-          {/* Welcome gradient card */}
           <div className="col-lg-4">
-            <div className="card dash-welcome-card h-100 p-4">
+            <div className="card dash-welcome-card p-4">
               <div style={{position:"relative",zIndex:1}}>
                 <div className="d-flex align-items-center gap-2 mb-3">
-                  <div className="rounded-circle d-flex align-items-center justify-content-center" style={{width:42,height:42,background:"rgba(255,255,255,.2)"}}>
+                  <div className="rounded-circle d-flex align-items-center justify-content-center"
+                    style={{width:42,height:42,background:"rgba(255,255,255,.2)"}}>
                     <i className="bi bi-flower2 text-white" style={{fontSize:20}}/>
                   </div>
                   <div>
@@ -397,15 +1174,18 @@ export default function DashboardPage(){
                 </p>
                 <div className="row g-2">
                   {[
-                    {label:"Active Students", value:stats.students??0,   icon:"bi-people"},
-                    {label:"Published Mods",  value:stats.pubMods??0,    icon:"bi-book"},
-                    {label:"Upcoming Sems",   value:stats.upcomingSems??0,icon:"bi-calendar3"},
+                    {label:"Total Students",  value:stats.students??0,     icon:"bi-people"},
+                    {label:"Published Mods",  value:stats.pubMods??0,      icon:"bi-book"},
+                    {label:"Upcoming Sems",   value:stats.upcomingSems??0,  icon:"bi-calendar3"},
                   ].map(s=>(
                     <div key={s.label} className="col-4">
-                      <div className="text-center p-2 rounded-3" style={{background:"rgba(255,255,255,.12)"}}>
+                      <div className="text-center p-2 rounded-3"
+                        style={{background:"rgba(255,255,255,.12)"}}>
                         <i className={`bi ${s.icon} d-block mb-1 text-white`} style={{fontSize:16}}/>
                         <div className="fw-bold text-white" style={{fontSize:16}}>{s.value}</div>
-                        <div style={{fontSize:9,color:"rgba(255,255,255,.6)",textTransform:"uppercase",letterSpacing:.4}}>{s.label}</div>
+                        <div style={{fontSize:9,color:"rgba(255,255,255,.6)",textTransform:"uppercase",letterSpacing:.4}}>
+                          {s.label}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -414,14 +1194,18 @@ export default function DashboardPage(){
             </div>
           </div>
 
-          {/* Activity bar chart */}
           <div className="col-lg-8">
-            <div className="card dash-chart-card h-100">
+            <div className="card dash-chart-card">
               <div className="card-body p-3">
-                <div className="d-flex align-items-center justify-content-between mb-3">
+                <div className="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
                   <SH title="System Activity This Week" icon="bi-bar-chart-line"/>
                   <div className="d-flex gap-3">
-                    {[{label:"Attempts",value:assessStats.total??0,color:"#2563EB"},{label:"Passed",value:assessStats.passed??0,color:"#059669"},{label:"Failed",value:assessStats.failed??0,color:"#DC2626"},{label:"Avg Score",value:assessStats.avg!=null?`${assessStats.avg}%`:"—",color:"#2D6A2D"}].map(s=>(
+                    {[
+                      {label:"Attempts",  value:assessStats.total??0,                            color:"#2563EB"},
+                      {label:"Passed",    value:assessStats.passed??0,                           color:"#059669"},
+                      {label:"Failed",    value:assessStats.failed??0,                           color:"#DC2626"},
+                      {label:"Avg Score", value:assessStats.avg!=null?`${assessStats.avg}%`:"—", color:"#2D6A2D"},
+                    ].map(s=>(
                       <div key={s.label} className="text-center">
                         <div className="fw-bold" style={{fontSize:15,color:s.color}}>{s.value}</div>
                         <small className="text-muted" style={{fontSize:9,textTransform:"uppercase",letterSpacing:.4}}>{s.label}</small>
@@ -429,187 +1213,314 @@ export default function DashboardPage(){
                     ))}
                   </div>
                 </div>
-                {weeklyAct.length>0?<BarCanvas data={weeklyAct}/>:<Empty icon="bi-bar-chart" msg="No activity data"/>}
+                {errors.weeklyAct
+                  ? <ErrorState msg={errors.weeklyAct} onRetry={()=>fetchWeeklyAct(toDate)}/>
+                  : weeklyAct.length>0
+                    ? <BarCanvas data={weeklyAct} version={chartBarVer}/>
+                    : <Empty icon="bi-bar-chart" msg="No activity data"/>
+                }
               </div>
             </div>
           </div>
         </div>
 
-        {/* ── Row 3: Module bars + Certs donut + Leaderboard ── */}
+        {/* ── Row 3: Module bars + Certs donut + Leaderboard — [A] equal thirds ── */}
         <div className="row g-3 mb-3">
-          <div className="col-lg-5">
-            <div className="card dash-chart-card h-100">
+          <div className="col-lg-4">
+            <div className="card dash-chart-card dash-fixed-card">
               <div className="card-body p-3">
                 <SH title="Module Completion Rate" icon="bi-book"/>
-                {modStats.length===0?<Empty icon="bi-book" msg="No data yet"/>:modStats.map((m,i)=>(
-                  <MBar key={m.module_id??i} label={m.module_title??"Untitled"} value={m.completion_rate_percent??0} max={100}
-                    color={["#1A2E1A","#2D6A2D","#3A7A3A","#4CAF50","#81C784","#A5D6A7"][i]||"#2D6A2D"}
-                    sub={`${m.completion_rate_percent??0}% · ${m.completed_count??0}/${m.total_students??0}`}/>
-                ))}
+                {errors.modStats
+                  ? <ErrorState msg={errors.modStats} onRetry={fetchModStats}/>
+                  : modStats.length===0
+                    ? <Empty icon="bi-book" msg="No data yet"/>
+                    : <div className="dash-scroll-body flex-grow-1">
+                        {modStats.map((m,i)=>(
+                          <MBar key={m.module_id??i}
+                            label={m.module_title??"Untitled"}
+                            value={m.completion_rate_percent??0} max={100}
+                            color={["#1A2E1A","#2D6A2D","#3A7A3A","#4CAF50","#81C784","#A5D6A7"][i]||"#2D6A2D"}
+                            sub={`${m.completion_rate_percent??0}% · ${m.completed_count??0}/${m.total_students??0}`}
+                          />
+                        ))}
+                      </div>
+                }
               </div>
             </div>
           </div>
 
-          <div className="col-lg-3">
-            <div className="card dash-chart-card h-100">
+          <div className="col-lg-4">
+            <div className="card dash-chart-card dash-fixed-card">
               <div className="card-body p-3">
                 <SH title="Certificates" icon="bi-patch-check"/>
-                {!certStats.total?<Empty icon="bi-patch-check" msg="None in this period"/>:(
-                  <>
-                    <DonutCanvas segments={certSegs}/>
-                    <div className="row g-2 mt-2">
-                      <div className="col-6"><div className="rounded-3 text-center py-2" style={{background:"#DFF6DD"}}><div className="fw-bold text-success" style={{fontSize:18}}>{certStats.valid??0}</div><small className="text-success fw-semibold" style={{fontSize:9,textTransform:"uppercase"}}>Valid</small></div></div>
-                      <div className="col-6"><div className="rounded-3 text-center py-2" style={{background:"#FDE7E9"}}><div className="fw-bold text-danger" style={{fontSize:18}}>{certStats.revoked??0}</div><small className="text-danger fw-semibold" style={{fontSize:9,textTransform:"uppercase"}}>Revoked</small></div></div>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="col-lg-4">
-            <div className="card dash-chart-card h-100">
-              <div className="card-body p-3">
-                <SH title="Badge Leaderboard" icon="bi-trophy"/>
-                {leaderboard.length===0?<Empty icon="bi-award" msg="No badges yet"/>:leaderboard.map((r,i)=>(
-                  <div key={r.uid} className={`d-flex align-items-center gap-3 p-2 rounded-3 mb-1 ${i===0?"":"hover-row"}`}
-                    style={{background:i===0?"linear-gradient(135deg,#F9FBE7,#E8F5E9)":"transparent",transition:"background .15s"}}>
-                    <div className="fw-bold text-center" style={{width:24,fontSize:i<3?18:13,color:i===0?"#F59E0B":i===1?"#9E9E9E":i===2?"#CD7F32":"#6C757D"}}>
-                      {i===0?"#1":i===1?"#2":i===2?"#3":`#${i+1}`}
-                    </div>
-                    <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold text-white flex-shrink-0"
-                      style={{width:32,height:32,background:`linear-gradient(135deg,#2D6A2D,#4CAF50)`,fontSize:12}}>
-                      {r.name.slice(0,1).toUpperCase()}
-                    </div>
-                    <span className="flex-grow-1 text-truncate fw-semibold" style={{fontSize:12}}>{r.name}</span>
-                    <span className="badge rounded-pill" style={{background:"#FEF3C7",color:"#D97706",fontSize:11}}>
-                      <i className="bi bi-award me-1"/>{r.count}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Calendar + Upcoming Events Row ── */}
-        <div className="row g-3 mb-3">
-          {/* Mini Calendar */}
-          <div className="col-lg-4">
-            <div className="card dash-chart-card h-100">
-              <div className="card-body p-3">
-                <SH title="Calendar" icon="bi-calendar3"/>
-                <MiniCalendar date={calDate} setDate={setCalDate} events={upcomingEvents} announcements={calAnnouncements}/>
-              </div>
-            </div>
-          </div>
-          {/* Upcoming Events */}
-          <div className="col-lg-8">
-            <div className="card dash-chart-card h-100">
-              <div className="card-body p-3">
-                <SH title="Upcoming Events & Seminars" icon="bi-calendar-event"/>
-                {upcomingEvents.filter(ev=>ev.scheduled_start&&new Date(ev.scheduled_start)>=new Date()).length===0?(
-                  <Empty icon="bi-calendar-x" msg="No upcoming events"/>
-                ):(
-                  <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:8}}>
-                    {upcomingEvents.filter(ev=>ev.scheduled_start&&new Date(ev.scheduled_start)>=new Date()).slice(0,6).map(ev=>{
-                      const dt=ev.scheduled_start?new Date(ev.scheduled_start):null;
-                      const isToday=dt&&new Date().toDateString()===dt.toDateString();
-                      const isTomorrow=dt&&new Date(Date.now()+86400000).toDateString()===dt.toDateString();
-                      const dayLabel=isToday?"Today":isTomorrow?"Tomorrow":dt?dt.toLocaleDateString("en-PH",{month:"short",day:"numeric",weekday:"short"}):"—";
-                      const timeLabel=dt?dt.toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit",hour12:true}):"";
-                      return(
-                        <div key={ev.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",background:isToday?"#f0fdf4":"#fafafa",borderRadius:10,border:`1px solid ${isToday?"#86efac":"#e5e7eb"}`}}>
-                          <div style={{minWidth:48,textAlign:"center",background:isToday?"#2D6A2D":"#f3f4f6",borderRadius:8,padding:"6px 4px"}}>
-                            <div style={{fontSize:11,fontWeight:800,color:isToday?"#fff":"#666",textTransform:"uppercase",letterSpacing:.5}}>{dt?dt.toLocaleDateString("en-PH",{month:"short"}):"—"}</div>
-                            <div style={{fontSize:20,fontWeight:900,color:isToday?"#fff":"#1A2E1A",lineHeight:1}}>{dt?dt.getDate():"—"}</div>
-                          </div>
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:13,fontWeight:700,color:"#1A2E1A",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.title}</div>
-                            <div style={{fontSize:11,color:"#888",marginTop:2}}>
-                              <i className="bi bi-clock me-1"/>{dayLabel}{timeLabel?` · ${timeLabel}`:""}
-                              {ev.venue&&<><i className="bi bi-geo-alt ms-2 me-1"/>{ev.venue}</>}
+                {errors.certStats
+                  ? <ErrorState msg={errors.certStats} onRetry={()=>fetchCertStats(fromDate,toDate)}/>
+                  : !certStats.total
+                    ? <Empty icon="bi-patch-check" msg="None in this period"/>
+                    : <>
+                        <DonutCanvas segments={certSegs} version={chartDonutVer}/>
+                        <div className="row g-2 mt-2">
+                          <div className="col-6">
+                            <div className="rounded-3 text-center py-2" style={{background:"#DFF6DD"}}>
+                              <div className="fw-bold text-success" style={{fontSize:18}}>{certStats.valid??0}</div>
+                              <small className="text-success fw-semibold" style={{fontSize:9,textTransform:"uppercase"}}>Valid</small>
                             </div>
                           </div>
-                          <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:8,background:ev.status==="upcoming"?"#dbeafe":ev.status==="ongoing"?"#dcfce7":"#f3f4f6",color:ev.status==="upcoming"?"#1d4ed8":ev.status==="ongoing"?"#16a34a":"#666",whiteSpace:"nowrap",textTransform:"uppercase"}}>
-                            {ev.status||"upcoming"}
-                          </span>
+                          <div className="col-6">
+                            <div className="rounded-3 text-center py-2" style={{background:"#FDE7E9"}}>
+                              <div className="fw-bold text-danger" style={{fontSize:18}}>{certStats.revoked??0}</div>
+                              <small className="text-danger fw-semibold" style={{fontSize:9,textTransform:"uppercase"}}>Revoked</small>
+                            </div>
+                          </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
+                      </>
+                }
+              </div>
+            </div>
+          </div>
+
+          <div className="col-lg-4">
+            <div className="card dash-chart-card dash-fixed-card">
+              <div className="card-body p-3">
+                <SH title="Badge Leaderboard" icon="bi-trophy"/>
+                {errors.leaderboard
+                  ? <ErrorState msg={errors.leaderboard} onRetry={()=>fetchLeaderboard(fromDate,toDate)}/>
+                  : leaderboard.length===0
+                    ? <Empty icon="bi-award" msg="No badges yet"/>
+                    : <div className="dash-scroll-body flex-grow-1">
+                        {leaderboard.map((r,i)=>(
+                          <div key={r.uid}
+                            className="d-flex align-items-center gap-3 p-2 rounded-3 mb-1"
+                            style={{background:i===0?"linear-gradient(135deg,#F9FBE7,#E8F5E9)":"transparent"}}>
+                            <div className="fw-bold text-center"
+                              style={{width:24,fontSize:i<3?18:13,color:i===0?"#F59E0B":i===1?"#9E9E9E":i===2?"#CD7F32":"#6C757D"}}>
+                              #{i+1}
+                            </div>
+                            <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold text-white flex-shrink-0"
+                              style={{width:32,height:32,background:"linear-gradient(135deg,#2D6A2D,#4CAF50)",fontSize:12}}>
+                              {r.name.slice(0,1).toUpperCase()}
+                            </div>
+                            <span className="flex-grow-1 text-truncate fw-semibold" style={{fontSize:12}}>{r.name}</span>
+                            <span className="badge rounded-pill" style={{background:"#FEF3C7",color:"#D97706",fontSize:11}}>
+                              <i className="bi bi-award me-1"/>{r.count}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                }
               </div>
             </div>
           </div>
         </div>
 
-        {/* ── Row 4: Seminar attendance + Recent modules + Activity log ── */}
-        <div className="row g-3">
+        {/* ── Row 4: [C][D][E][F] Calendar + Upcoming Events — full width ── */}
+        <div className="row g-3 mb-3">
+          {/* Mini Calendar — [C] dots from all 3 sources, [E] clickable days */}
           <div className="col-lg-4">
             <div className="card dash-chart-card h-100">
               <div className="card-body p-3">
-                <SH title="Seminar Attendance" icon="bi-people"/>
-                {semStats.length===0?<Empty icon="bi-people" msg="No seminars yet"/>:semStats.map((s,i)=>(
-                  <MBar key={s.seminar_id??i} label={s.seminar_title??"Untitled"} value={s.attendance_rate_percent??0} max={100}
-                    color={i===0?"#7C3AED":"#2563EB"}
-                    sub={`${s.attendance_rate_percent??0}% · ${s.attended_count??0}/${s.registered_count??0}`}/>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="col-lg-3">
-            <div className="card dash-chart-card h-100">
-              <div className="card-body p-3">
-                <SH title="Recent Modules" icon="bi-clock-history"/>
-                {recentMods.length===0?<Empty icon="bi-book" msg="No modules"/>:recentMods.map(m=>(
-                  <div key={m.id} className="d-flex align-items-center gap-2 py-2" style={{borderBottom:"1px solid #F0F4F0"}}>
-                    <div className="rounded-2 d-flex align-items-center justify-content-center flex-shrink-0"
-                      style={{width:30,height:30,background:m.status==="published"?"#DFF6DD":"#FFF4CE"}}>
-                      <i className={`bi bi-book`} style={{fontSize:13,color:m.status==="published"?"#107C10":"#835B00"}}/>
-                    </div>
-                    <div className="flex-grow-1 overflow-hidden">
-                      <div className="fw-semibold text-truncate" style={{fontSize:12}}>{m.title}</div>
-                      <small className="text-muted" style={{fontSize:10}}>{fmt(m.created_at)}</small>
-                    </div>
-                    <span className={`badge rounded-pill ${m.status==="published"?"bg-success-subtle text-success":"bg-warning-subtle text-warning"}`} style={{fontSize:9}}>
-                      {m.status}
-                    </span>
+                <SH title="Calendar" icon="bi-calendar3"
+                  badge={calEvents.length||undefined}/>
+                <MiniCalendar
+                  date={calDate}
+                  setDate={setCalDate}
+                  calEvents={calEvents}
+                  onDayClick={handleDayClick}
+                />
+                <div className="mt-3 pt-3" style={{borderTop:"1px solid #E8F5E9"}}>
+                  <div style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>
+                    This month
                   </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="col-lg-5">
-            <div className="card dash-chart-card h-100">
-              <div className="card-body p-3">
-                <SH title="Recent Activity" icon="bi-activity" action="Refresh" onAction={()=>fetchActivity(fromDate,toDate)}/>
-                {activity.length===0?<Empty icon="bi-activity" msg="No activity"/>:activity.map((log,i)=>(
-                  <div key={log.id??i} className="dash-activity-item">
-                    <div className="dash-icon-circle" style={{background:ACT_COLORS[i%ACT_COLORS.length]}}>
-                      <i className={`bi ${getActIcon(log.action_type)}`} style={{color:getActColor(log.action_type),fontSize:13}}/>
-                    </div>
-                    <div className="flex-grow-1 overflow-hidden">
-                      <div className="fw-semibold text-truncate" style={{fontSize:12,color:"#1A2E1A"}}>
-                        {(()=>{const t=log.action_type??"activity";if(t==="login")return"🟢 Logged In";if(t==="logout")return"🔴 Logged Out";if(t==="forgot_password")return"🔑 Forgot Password";if(t==="password_reset")return"🔑 Password Reset";return t.replace(/_/g," ");})()}
-                        {log.profiles?.full_name&&<div style={{fontSize:10,color:"#aaa",marginTop:1}}>{log.profiles.full_name}</div>}
-                        {log.reference_type&&<span className="text-muted fw-normal"> · {log.reference_type}</span>}
+                  <div className="d-flex gap-2 flex-wrap">
+                    {[
+                      {label:"Events",        count:calEvents.filter(e=>!e._source).length,             color:"var(--bloom-mid)"},
+                      {label:"Seminars",      count:calEvents.filter(e=>e._source==="seminar").length,  color:"#2563EB"},
+                      {label:"Announcements", count:calEvents.filter(e=>e._source==="announcement").length, color:"#f59e0b"},
+                    ].map(s=>(
+                      <div key={s.label} className="text-center px-2 py-1 rounded-2"
+                        style={{background:"#F5F7F5",minWidth:64}}>
+                        <div style={{fontWeight:800,fontSize:16,color:s.color}}>{s.count}</div>
+                        <div style={{fontSize:10,color:"#888"}}>{s.label}</div>
                       </div>
-                      <small className="text-muted" style={{fontSize:11}}>{fmt(log.created_at)}</small>
-                    </div>
-                    <span className="badge rounded-pill bg-light text-secondary" style={{fontSize:10,flexShrink:0}}>
-                      {(log.action_type??"—").split("_")[0]}
-                    </span>
+                    ))}
                   </div>
-                ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* [D][F] Upcoming Events — merged events+seminars, clickable items */}
+          <div className="col-lg-8">
+            <div className="card dash-chart-card dash-fixed-card-lg">
+              <div className="card-body p-3">
+                <SH
+                  title="Upcoming Events & Seminars"
+                  icon="bi-calendar-event"
+                  badge={upcomingEvents.length||undefined}
+                  linkTo="/calendar"
+                />
+                {errors.upcoming
+                  ? <ErrorState msg={errors.upcoming} onRetry={refreshUpcoming}/>
+                  : upcomingEvents.length===0
+                    ? <Empty icon="bi-calendar-x" msg="No upcoming events — add one from the Calendar page"/>
+                    : <div className="dash-scroll-body flex-grow-1" style={{paddingRight:4}}>
+                        {upcomingEvents.slice(0,12).map(ev=>{
+                          const dt = ev.scheduled_start
+                            ? new Date(ev.scheduled_start)
+                            : ev.start_date
+                              ? new Date(ev.start_date+"T00:00:00")
+                              : null;
+                          const today0  = new Date(); today0.setHours(0,0,0,0);
+                          const isToday    = dt && dt.toDateString()===today0.toDateString();
+                          const isTomorrow = dt && new Date(today0.getTime()+86400000).toDateString()===dt.toDateString();
+                          const dayLabel   = isToday?"Today":isTomorrow?"Tomorrow"
+                            : dt ? dt.toLocaleDateString("en-PH",{month:"short",day:"numeric",weekday:"short"}) : "—";
+                          const timeLabel  = ev.scheduled_start
+                            ? new Date(ev.scheduled_start).toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit",hour12:true})
+                            : "";
+                          const borderColor = ev.color_hex || "#2D6A2D";
+                          return (
+                            /* [F] Clickable event item → opens EventDetailModal */
+                            <div key={ev.id}
+                              className="ev-item"
+                              onClick={()=>setDetailModal(ev)}
+                              style={{
+                                display:"flex",alignItems:"center",gap:12,
+                                padding:"10px 14px",marginBottom:8,
+                                background:isToday?"#f0fdf4":"#fafafa",
+                                borderRadius:10,
+                                border:`1px solid ${isToday?"#86efac":"#e5e7eb"}`,
+                                borderLeft:`4px solid ${borderColor}`,
+                              }}>
+                              {/* Date badge */}
+                              <div style={{
+                                minWidth:48,textAlign:"center",
+                                background:isToday?"var(--bloom-mid)":"#f3f4f6",
+                                borderRadius:8,padding:"6px 4px",flexShrink:0,
+                              }}>
+                                <div style={{fontSize:11,fontWeight:800,color:isToday?"#fff":"#666",textTransform:"uppercase",letterSpacing:.5}}>
+                                  {dt?dt.toLocaleDateString("en-PH",{month:"short"}):"—"}
+                                </div>
+                                <div style={{fontSize:20,fontWeight:900,color:isToday?"#fff":"var(--bloom-dark)",lineHeight:1}}>
+                                  {dt?dt.getDate():"—"}
+                                </div>
+                              </div>
+                              {/* Info */}
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:13,fontWeight:700,color:"var(--bloom-dark)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                                  {ev.title}
+                                </div>
+                                <div style={{fontSize:11,color:"#888",marginTop:2}}>
+                                  <i className="bi bi-clock me-1"/>
+                                  {dayLabel}{timeLabel?` · ${timeLabel}`:""}
+                                  {ev.location&&<><i className="bi bi-geo-alt ms-2 me-1"/>{ev.location}</>}
+                                </div>
+                                <div className="mt-1">
+                                  <SourceBadge ev={ev}/>
+                                </div>
+                              </div>
+                              {/* Status / chevron */}
+                              <div className="d-flex align-items-center gap-2 flex-shrink-0">
+                                {ev._status && (
+                                  <span style={{
+                                    fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:8,
+                                    background:ev._status==="upcoming"?"#dbeafe":ev._status==="ongoing"?"#dcfce7":"#f3f4f6",
+                                    color:ev._status==="upcoming"?"#1d4ed8":ev._status==="ongoing"?"#16a34a":"#666",
+                                    textTransform:"uppercase",
+                                  }}>
+                                    {ev._status}
+                                  </span>
+                                )}
+                                <i className="bi bi-chevron-right text-muted" style={{fontSize:11}}/>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Row 5: Seminar attendance + Recent modules — [A][B] equal halves ── */}
+        {/* Recent Activity removed per [B] */}
+        <div className="row g-3">
+          <div className="col-lg-6">
+            <div className="card dash-chart-card dash-fixed-card">
+              <div className="card-body p-3">
+                <SH title="Seminar Attendance" icon="bi-people"/>
+                {errors.semStats
+                  ? <ErrorState msg={errors.semStats} onRetry={fetchSemStats}/>
+                  : semStats.length===0
+                    ? <Empty icon="bi-people" msg="No seminars yet"/>
+                    : <div className="dash-scroll-body flex-grow-1">
+                        {semStats.map((s,i)=>(
+                          <MBar key={s.seminar_id??i}
+                            label={s.seminar_title??"Untitled"}
+                            value={s.attendance_rate_percent??0} max={100}
+                            color={i===0?"#7C3AED":"#2563EB"}
+                            sub={`${s.attendance_rate_percent??0}% · ${s.attended_count??0}/${s.registered_count??0}`}
+                          />
+                        ))}
+                      </div>
+                }
+              </div>
+            </div>
+          </div>
+
+          <div className="col-lg-6">
+            <div className="card dash-chart-card dash-fixed-card">
+              <div className="card-body p-3">
+                <SH title="Recent Modules" icon="bi-clock-history" linkTo="/modules"/>
+                {errors.recentMods
+                  ? <ErrorState msg={errors.recentMods} onRetry={()=>fetchRecentMods(fromDate,toDate)}/>
+                  : recentMods.length===0
+                    ? <Empty icon="bi-book" msg="No modules"/>
+                    : <div className="dash-scroll-body flex-grow-1">
+                        {recentMods.map(m=>(
+                          <div key={m.id} className="d-flex align-items-center gap-2 py-2"
+                            style={{borderBottom:"1px solid #F0F4F0"}}>
+                            <div className="rounded-2 d-flex align-items-center justify-content-center flex-shrink-0"
+                              style={{width:30,height:30,background:m.status==="published"?"#DFF6DD":"#FFF4CE"}}>
+                              <i className="bi bi-book"
+                                style={{fontSize:13,color:m.status==="published"?"#107C10":"#835B00"}}/>
+                            </div>
+                            <div className="flex-grow-1 overflow-hidden">
+                              <div className="fw-semibold text-truncate" style={{fontSize:12}}>{m.title}</div>
+                              <small className="text-muted" style={{fontSize:10}}>{fmt(m.created_at)}</small>
+                            </div>
+                            <span className={`badge rounded-pill ${m.status==="published"?"bg-success-subtle text-success":"bg-warning-subtle text-warning"}`}
+                              style={{fontSize:9}}>
+                              {m.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                }
               </div>
             </div>
           </div>
         </div>
 
       </div>
+
+      {/* ── [E] Day Events Modal ── */}
+      {dayModal && (
+        <DayEventsModal
+          date={dayModal.date}
+          events={dayModal.events}
+          onClose={()=>setDayModal(null)}
+        />
+      )}
+
+      {/* ── [F] Event Detail Modal ── */}
+      {detailModal && (
+        <EventDetailModal
+          ev={detailModal}
+          onClose={()=>setDetailModal(null)}
+        />
+      )}
     </>
   );
 }
