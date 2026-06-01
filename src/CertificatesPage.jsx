@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase.js";
-import { ConfirmModal } from "./App.jsx";
+import { ConfirmModal, useToast } from "./App.jsx";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -16,6 +16,14 @@ function formatDate(iso) {
   const utcStr = iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z";
   return new Date(utcStr).toLocaleDateString("en-PH", {
     timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric",
+  });
+}
+
+function formatDateLong(iso) {
+  if (!iso) return "—";
+  const utcStr = iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z";
+  return new Date(utcStr).toLocaleDateString("en-PH", {
+    timeZone: "Asia/Manila", month: "long", day: "numeric", year: "numeric",
   });
 }
 
@@ -38,7 +46,7 @@ const s = {
   mFooter:     { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
   label:       { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
   input:       { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:      { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:      { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, appearance: "auto" },
   textarea:    { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 70 },
   fg:          { marginBottom: 16 },
   row:         { display: "flex", gap: 12 },
@@ -50,20 +58,223 @@ const s = {
   emptyBox:    { background: "#fff", borderRadius: 14, border: `2px dashed ${G.pale}`, padding: "50px 20px", textAlign: "center" },
   badgeCard:   { background: "#fff", borderRadius: 10, padding: "16px", border: "1px solid #DDE8DD", display: "flex", alignItems: "center", gap: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.04)" },
   toolbar:     { display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" },
-  searchBar:   { padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", width: 260 },
+  // Fixed: added color, appearance, and consistent sizing
+  searchBar:   { padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", color: G.dark, width: 260 },
+  filterSelect:{ padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", color: G.dark, appearance: "auto", cursor: "pointer", minWidth: 140 },
   infoBox:    (c) => ({ background: c === "green" ? "#f0fdf4" : c === "red" ? "#fef2f2" : c === "yellow" ? "#fffbeb" : "#eff6ff", border: `1px solid ${c === "green" ? "#bbf7d0" : c === "red" ? "#fecaca" : c === "yellow" ? "#fed7aa" : "#bfdbfe"}`, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: c === "green" ? "#15803d" : c === "red" ? "#b91c1c" : c === "yellow" ? "#92400e" : "#1d4ed8", display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 14 }),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  NOTIFICATION HELPER  ← NEW
+//  SIGNATORY SETTINGS  (persisted in app_settings table)
 // ─────────────────────────────────────────────────────────────────────────────
-async function insertCertificateNotification(userId, certCode) {
+const DEFAULT_SIGS = {
+  sig1_name:  "GAD Coordinator",
+  sig1_title: "Cavite State University",
+  sig2_name:  "GADRC Director",
+  sig2_title: "Cavite State University",
+};
+
+async function loadSignatorySettings() {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("key, value")
+    .in("key", ["sig1_name", "sig1_title", "sig2_name", "sig2_title"]);
+  if (error || !data?.length) return { ...DEFAULT_SIGS };
+  const result = { ...DEFAULT_SIGS };
+  data.forEach(row => { result[row.key] = row.value; });
+  return result;
+}
+
+async function saveSignatorySettings(sigs) {
+  const rows = Object.entries(sigs).map(([key, value]) => ({ key, value }));
+  const { error } = await supabase
+    .from("app_settings")
+    .upsert(rows, { onConflict: "key" });
+  return error;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SIGNATORY SETTINGS PANEL (rendered at top of Certificates page)
+// ─────────────────────────────────────────────────────────────────────────────
+function SignatorySettingsPanel({ sigs, onChange }) {
+  const toast = useToast();
+  const [open,   setOpen]   = useState(false);
+  const [form,   setForm]   = useState({ ...sigs });
+  const [saving, setSaving] = useState(false);
+
+  // Sync form when sigs prop changes (on first load)
+  useEffect(() => { setForm({ ...sigs }); }, [sigs]);
+
+  const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const save = async () => {
+    setSaving(true);
+    const err = await saveSignatorySettings(form);
+    setSaving(false);
+    if (err) { toast("Failed to save settings.", "error"); return; }
+    onChange(form);
+    setOpen(false);
+    toast("Signatory settings saved.", "success");
+  };
+
+  const reset = () => setForm({ ...sigs });
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      {/* Collapsed bar */}
+      <div
+        onClick={() => { setOpen(v => !v); setForm({ ...sigs }); }}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "#fff", border: "1px solid #DDE8DD", borderRadius: open ? "8px 8px 0 0" : 8,
+          padding: "10px 16px", cursor: "pointer", userSelect: "none",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <i className="bi bi-pen" style={{ color: G.base, fontSize: 14 }} />
+          <span style={{ fontSize: 13, fontWeight: 700, color: G.dark }}>Signatory Settings</span>
+          {!open && (
+            <span style={{ fontSize: 12, color: "#888", marginLeft: 4 }}>
+              {sigs.sig1_name} &amp; {sigs.sig2_name}
+            </span>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {!open && (
+            <span style={{
+              fontSize: 11, fontWeight: 600, color: G.base,
+              background: G.wash, padding: "2px 8px", borderRadius: 10,
+            }}>
+              <i className="bi bi-pencil me-1" style={{ fontSize: 10 }} />Edit
+            </span>
+          )}
+          <i className={`bi bi-chevron-${open ? "up" : "down"}`} style={{ color: "#aaa", fontSize: 12 }} />
+        </div>
+      </div>
+
+      {/* Expanded form */}
+      {open && (
+        <div style={{
+          background: "#fff", border: "1px solid #DDE8DD", borderTop: "none",
+          borderRadius: "0 0 8px 8px", padding: "16px 20px",
+        }}>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>
+            <i className="bi bi-info-circle me-1" />
+            These names appear on every certificate by default. Admins can still override them per certificate if needed.
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            {/* Left signatory */}
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                <i className="bi bi-person-badge me-1" style={{ color: G.base }} />Left Signatory
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <label style={s.label}>Name</label>
+                <input style={s.input} value={form.sig1_name || ""} onChange={e => setF("sig1_name", e.target.value)} placeholder="e.g. Dr. Maria Santos" />
+              </div>
+              <div>
+                <label style={s.label}>Title / Position</label>
+                <input style={s.input} value={form.sig1_title || ""} onChange={e => setF("sig1_title", e.target.value)} placeholder="e.g. GAD Coordinator" />
+              </div>
+            </div>
+            {/* Divider */}
+            <div style={{ width: 1, background: "#DDE8DD", margin: "0 4px", alignSelf: "stretch" }} />
+            {/* Right signatory */}
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                <i className="bi bi-person-badge me-1" style={{ color: G.base }} />Right Signatory
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <label style={s.label}>Name</label>
+                <input style={s.input} value={form.sig2_name || ""} onChange={e => setF("sig2_name", e.target.value)} placeholder="e.g. Dr. Jose Reyes" />
+              </div>
+              <div>
+                <label style={s.label}>Title / Position</label>
+                <input style={s.input} value={form.sig2_title || ""} onChange={e => setF("sig2_title", e.target.value)} placeholder="e.g. GADRC Director" />
+              </div>
+            </div>
+          </div>
+          {/* Preview strip */}
+          <div style={{ marginTop: 14, background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark, display: "flex", gap: 24, flexWrap: "wrap" }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontWeight: 700 }}>{form.sig1_name || "—"}</div>
+              <div style={{ color: "#888", fontSize: 11 }}>{form.sig1_title || "—"}</div>
+            </div>
+            <div style={{ color: "#ccc", alignSelf: "center" }}>|</div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontWeight: 700 }}>{form.sig2_name || "—"}</div>
+              <div style={{ color: "#888", fontSize: 11 }}>{form.sig2_title || "—"}</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
+            <button onClick={reset} style={{ padding: "8px 16px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
+              Reset
+            </button>
+            <button onClick={() => { setOpen(false); reset(); }} style={{ padding: "8px 16px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
+              Cancel
+            </button>
+            <button onClick={save} disabled={saving} style={{ padding: "8px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6, opacity: saving ? 0.7 : 1 }}>
+              <i className="bi bi-check-lg" />{saving ? "Saving…" : "Save Settings"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CERTIFICATE TITLE MAP
+// ─────────────────────────────────────────────────────────────────────────────
+const CERT_TITLES = {
+  seminar:    "Certificate of Participation",
+  module:     "Certificate of Completion",
+  assessment: "Certificate of Achievement",
+  manual:     "Certificate of Recognition",
+};
+
+function certTitle(refType) {
+  return CERT_TITLES[refType] || "Certificate of Achievement";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DEFAULT TEMPLATE GENERATOR
+// ─────────────────────────────────────────────────────────────────────────────
+function buildDefaultTemplate({ seminar, recipientName = "[Participant Name]", refType = "seminar", sigs = DEFAULT_SIGS }) {
+  const semTitle   = seminar?.title || "the seminar";
+  const semDate    = seminar?.scheduled_start ? formatDateLong(seminar.scheduled_start) : "";
+  const semVenue   = seminar?.venue || "";
+  const dateClause = semDate ? ` held on ${semDate}${semVenue ? ` at ${semVenue}` : ""}` : "";
+
+  const bodyMap = {
+    seminar:    `has successfully participated in "${semTitle}"${dateClause}, organized by the Gender and Development Resource Center (GADRC) of Cavite State University. This certificate is awarded in recognition of active participation and commitment to advancing Gender and Development advocacy.`,
+    module:     `has successfully completed the module "${semTitle}"${dateClause} as part of the BLOOM GAD e-Learning Program. This certificate is awarded in recognition of dedication to learning and Gender and Development advocacy.`,
+    assessment: `has successfully passed the assessment for "${semTitle}"${dateClause} under the BLOOM GAD e-Learning Program. This certificate is awarded in recognition of outstanding performance and commitment to Gender and Development principles.`,
+    manual:     `is hereby recognized for outstanding contribution and participation in Gender and Development activities organized by the GADRC of Cavite State University.`,
+  };
+
+  return {
+    body_text:   bodyMap[refType] || bodyMap.manual,
+    sig1_name:   sigs.sig1_name  || DEFAULT_SIGS.sig1_name,
+    sig1_title:  sigs.sig1_title || DEFAULT_SIGS.sig1_title,
+    sig2_name:   sigs.sig2_name  || DEFAULT_SIGS.sig2_name,
+    sig2_title:  sigs.sig2_title || DEFAULT_SIGS.sig2_title,
+    theme_color: "#2D6A2D",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  NOTIFICATION HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+async function insertCertificateNotification(userId, certCode, seminarTitle) {
   try {
     await supabase.from("notifications").insert({
       user_id:        userId,
       type:           "new_certificate",
       title:          "Certificate Issued",
-      body:           `Your certificate (${certCode}) has been issued. View it in Achievements.`,
+      body:           seminarTitle
+        ? `Your certificate for "${seminarTitle}" has been issued (${certCode}). View it in Achievements.`
+        : `Your certificate (${certCode}) has been issued. View it in Achievements.`,
       reference_type: "certificate",
       reference_id:   null,
       is_read:        false,
@@ -73,14 +284,87 @@ async function insertCertificateNotification(userId, certCode) {
   }
 }
 
+function genCertCode() {
+  return `CERT-${Date.now().toString(36).toUpperCase()}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-//  CERTIFICATE PREVIEW MODAL
+//  MINI CERTIFICATE PREVIEW
+// ─────────────────────────────────────────────────────────────────────────────
+function MiniCertPreview({ recipientName, refType, seminarTitle, template }) {
+  const title      = certTitle(refType);
+  const themeColor = template.theme_color || "#2D6A2D";
+  const bodyText   = template.body_text   || "";
+  const sig1Name   = template.sig1_name   || "GAD Coordinator";
+  const sig1Title  = template.sig1_title  || "Cavite State University";
+  const sig2Name   = template.sig2_name   || "GADRC Director";
+  const sig2Title  = template.sig2_title  || "Cavite State University";
+  const today      = new Date().toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" });
+
+  return (
+    <div style={{
+      width: "100%", aspectRatio: "842/595",
+      border: `6px double ${themeColor}`,
+      background: "linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%)",
+      padding: "16px 20px", boxSizing: "border-box",
+      fontFamily: "'Georgia', serif",
+      boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
+      borderRadius: 6, position: "relative",
+      display: "flex", flexDirection: "column", justifyContent: "space-between",
+    }}>
+      <div style={{ position: "absolute", inset: 10, border: `1px solid ${themeColor}22`, borderRadius: 2, pointerEvents: "none" }} />
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 8, fontWeight: 700, color: themeColor, letterSpacing: 3, textTransform: "uppercase", fontFamily: "'Inter',sans-serif" }}>
+          Cavite State University
+        </div>
+        <div style={{ fontSize: 7, color: "#888", letterSpacing: 1, fontFamily: "'Inter',sans-serif" }}>
+          Gender and Development Resource Center (GADRC) · BLOOM e-Learning Platform
+        </div>
+        <div style={{ borderTop: `1.5px solid ${themeColor}`, margin: "6px 32px" }} />
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#1A2E1A", margin: "4px 0" }}>{title}</div>
+        <div style={{ fontSize: 7, color: "#888", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'Inter',sans-serif", margin: "4px 0" }}>
+          This is to certify that
+        </div>
+        <div style={{ margin: "6px 0" }}>
+          <span style={{
+            fontStyle: "italic", fontSize: 22, color: themeColor,
+            borderBottom: `2px solid ${themeColor}44`,
+            paddingBottom: 4, paddingLeft: 24, paddingRight: 24,
+          }}>
+            {recipientName || "[Participant Name]"}
+          </span>
+        </div>
+        <div style={{ fontSize: 7, color: "#444", maxWidth: 340, margin: "6px auto", lineHeight: 1.7, fontFamily: "'Inter',sans-serif", textAlign: "center" }}>
+          {bodyText.length > 220 ? bodyText.slice(0, 220) + "…" : bodyText}
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderTop: `1px solid ${themeColor}33`, paddingTop: 8 }}>
+        <div style={{ textAlign: "center", minWidth: 100 }}>
+          <div style={{ width: 28, height: 28, borderRadius: "50%", border: `2px solid ${themeColor}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 4px", fontSize: 12, color: themeColor }}>★</div>
+          <div style={{ borderTop: "1px solid #1A2E1A", paddingTop: 3, fontSize: 7, fontWeight: 700, color: "#1A2E1A", fontFamily: "'Inter',sans-serif", letterSpacing: 0.3 }}>{sig1Name}</div>
+          <div style={{ fontSize: 6, color: "#888", fontFamily: "'Inter',sans-serif" }}>{sig1Title}</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 6, color: "#888", letterSpacing: 1, textTransform: "uppercase", fontFamily: "'Inter',sans-serif" }}>Certificate Code</div>
+          <div style={{ fontSize: 9, fontWeight: 800, color: themeColor, letterSpacing: 2, fontFamily: "'Inter',sans-serif" }}>CERT-XXXXXX</div>
+          <div style={{ fontSize: 6, color: "#888", marginTop: 2, fontFamily: "'Inter',sans-serif" }}>Issued: {today}</div>
+        </div>
+        <div style={{ textAlign: "center", minWidth: 100 }}>
+          <div style={{ width: 28, height: 28, borderRadius: "50%", border: `2px solid ${themeColor}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 4px", fontSize: 12, color: themeColor }}>✦</div>
+          <div style={{ borderTop: "1px solid #1A2E1A", paddingTop: 3, fontSize: 7, fontWeight: 700, color: "#1A2E1A", fontFamily: "'Inter',sans-serif", letterSpacing: 0.3 }}>{sig2Name}</div>
+          <div style={{ fontSize: 6, color: "#888", fontFamily: "'Inter',sans-serif" }}>{sig2Title}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  FULL CERTIFICATE PREVIEW MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 function CertPreviewModal({ cert, onClose }) {
   const refType     = cert.reference_type || "achievement";
-  const certTitle   = refType === "manual"
-    ? "Certificate of Achievement"
-    : `Certificate of ${refType.charAt(0).toUpperCase() + refType.slice(1)}`;
+  const title       = certTitle(refType);
   const studentName = cert.profiles?.full_name || "Recipient";
   const issuedDate  = cert.issued_at
     ? new Date(cert.issued_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" })
@@ -92,7 +376,7 @@ function CertPreviewModal({ cert, onClose }) {
   const sig2Title  = cert.sig2_title  || "Cavite State University";
   const themeColor = cert.theme_color || "#2D6A2D";
 
-  const certHTML = () => `<!DOCTYPE html><html><head><title>${certTitle}</title>
+  const certHTML = () => `<!DOCTYPE html><html><head><title>${title}</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
       @page { size: A4 landscape; margin: 0; }
@@ -123,7 +407,7 @@ function CertPreviewModal({ cert, onClose }) {
         <div class="org-name">Cavite State University</div>
         <div class="org-sub">Gender and Development Resource Center (GADRC) · BLOOM e-Learning Platform</div>
         <hr class="divider"/>
-        <div class="title">${certTitle}</div>
+        <div class="title">${title}</div>
         <div class="presented">This is to certify that</div>
         <div class="name-wrap"><span class="name">${studentName}</span></div>
         <div class="desc">${bodyText}</div>
@@ -176,7 +460,7 @@ function CertPreviewModal({ cert, onClose }) {
               <div style={{ fontSize: 10, color: "#888", letterSpacing: 1 }}>Gender and Development Resource Center (GADRC)</div>
             </div>
             <div style={{ border: "none", borderTop: `2px solid ${themeColor}`, margin: "10px 60px" }} />
-            <div style={{ fontFamily: "Georgia,serif", fontSize: 28, color: "#1A2E1A", textAlign: "center", margin: "12px 0 6px", fontWeight: 700 }}>{certTitle}</div>
+            <div style={{ fontFamily: "Georgia,serif", fontSize: 28, color: "#1A2E1A", textAlign: "center", margin: "12px 0 6px", fontWeight: 700 }}>{title}</div>
             <div style={{ fontSize: 11, color: "#666", textAlign: "center", letterSpacing: 2, textTransform: "uppercase", margin: "6px 0" }}>This is to certify that</div>
             <div style={{ textAlign: "center", margin: "10px 0" }}>
               <span style={{ fontFamily: "Georgia,serif", fontStyle: "italic", fontSize: 32, color: themeColor, borderBottom: "2px solid #C8E6C9", paddingBottom: 6, paddingLeft: 32, paddingRight: 32 }}>{studentName}</span>
@@ -221,14 +505,12 @@ async function checkAttendance(userId, seminarId) {
   return { attended: !!data.checked_in_at, checkedInAt: data.checked_in_at };
 }
 
-function genCertCode() {
-  return `CERT-${Date.now().toString(36).toUpperCase()}`;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  CERTIFICATES TAB
 // ─────────────────────────────────────────────────────────────────────────────
 function CertificatesTab() {
+  const toast = useToast();
+
   const [certs,    setCerts]    = useState([]);
   const [students, setStudents] = useState([]);
   const [seminars, setSeminars] = useState([]);
@@ -236,33 +518,37 @@ function CertificatesTab() {
   const [search,   setSearch]   = useState("");
   const [filterType, setFilterType] = useState("all");
 
-  // Issue modal
+  // Signatory settings
+  const [sigs, setSigs] = useState({ ...DEFAULT_SIGS });
+
+  useEffect(() => {
+    loadSignatorySettings().then(setSigs);
+  }, []);
+
   const [showAdd,  setShowAdd]  = useState(false);
-  const [form,     setForm]     = useState({ reference_type: "manual" });
+  const [form,     setForm]     = useState({ reference_type: "seminar" });
+  const [template, setTemplate] = useState({});
+  const [showTemplateEdit, setShowTemplateEdit] = useState(false);
   const [saving,   setSaving]   = useState(false);
   const [error,    setError]    = useState("");
 
-  // Searchable checkbox recipient picker
   const [recipientSearch,    setRecipientSearch]    = useState("");
   const [selectedRecipients, setSelectedRecipients] = useState([]);
 
-  // Attendance check (seminar type only)
   const [attendanceCheck, setAttendanceCheck] = useState(null);
   const [alreadyHasCert,  setAlreadyHasCert]  = useState(false);
 
-  // Edit modal
   const [editCert,   setEditCert]   = useState(null);
   const [editForm,   setEditForm]   = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [editError,  setEditError]  = useState("");
 
-  // Preview
   const [previewCert, setPreviewCert] = useState(null);
 
-  const setF  = (k, v) => setForm(f  => ({ ...f, [k]: v }));
+  const setF  = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setT  = (k, v) => setTemplate(t => ({ ...t, [k]: v }));
   const setEF = (k, v) => setEditForm(f => ({ ...f, [k]: v }));
 
-  // ── Load ──────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
     const [{ data: c }, { data: profiles }, { data: sems }] = await Promise.all([
@@ -276,7 +562,7 @@ function CertificatesTab() {
         .order("full_name"),
       supabase
         .from("seminars")
-        .select("id, title, scheduled_start, status")
+        .select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status")
         .order("scheduled_start", { ascending: false }),
     ]);
     setCerts(c || []);
@@ -285,14 +571,20 @@ function CertificatesTab() {
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    (async () => { await load(); })();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  // ── Attendance gate effect (seminar type only, single recipient) ──────────
+  useEffect(() => {
+    const seminar   = seminars.find(s => s.id === form.seminar_id) || null;
+    const refType   = form.reference_type || "seminar";
+    const recipient = selectedRecipients.length === 1
+      ? (students.find(s => s.id === selectedRecipients[0])?.full_name || "")
+      : "";
+    const defaults = buildDefaultTemplate({ seminar, recipientName: recipient, refType, sigs });
+    setTemplate(defaults);
+  }, [form.seminar_id, form.reference_type, seminars, sigs]);
+
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       if (form.reference_type !== "seminar") {
         if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); }
@@ -320,15 +612,12 @@ function CertificatesTab() {
       setAttendanceCheck(attendance);
       setAlreadyHasCert(!!existingCert.data);
     })();
-
     return () => { cancelled = true; };
   }, [selectedRecipients, form.seminar_id, form.reference_type]);
 
-  // ── Issue certificate(s) ── UPDATED: notifies each recipient ─────────────
   const issueCert = async () => {
     setError("");
     if (selectedRecipients.length === 0) { setError("Please select at least one recipient."); return; }
-
     if (form.reference_type === "seminar") {
       if (!form.seminar_id) { setError("Please select a seminar."); return; }
       if (attendanceCheck === "checking") { setError("Checking attendance, please wait…"); return; }
@@ -341,48 +630,56 @@ function CertificatesTab() {
         return;
       }
     }
-
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
+    const seminar = seminars.find(s => s.id === form.seminar_id);
     let failed = 0;
-
     for (const uid of selectedRecipients) {
-      // ── Generate unique code per recipient ──────────────────────────
       const code = genCertCode();
       const { error: err } = await supabase.from("certificates").insert({
         user_id:          uid,
-        reference_type:   form.reference_type || "manual",
+        reference_type:   form.reference_type || "seminar",
         reference_id:     form.reference_type === "seminar" ? form.seminar_id : (form.reference_id || null),
         certificate_code: code,
         is_revoked:       false,
         issued_at:        new Date().toISOString(),
         issued_by:        user?.id,
+        body_text:        template.body_text   || null,
+        sig1_name:        template.sig1_name   || null,
+        sig1_title:       template.sig1_title  || null,
+        sig2_name:        template.sig2_name   || null,
+        sig2_title:       template.sig2_title  || null,
+        theme_color:      template.theme_color || "#2D6A2D",
       });
       if (err) { failed++; continue; }
-      // ── Notify recipient immediately ────────────────────────────────
-      await insertCertificateNotification(uid, code);
+      await insertCertificateNotification(uid, code, seminar?.title);
     }
-
     setSaving(false);
     if (failed > 0) { setError(`${failed} certificate(s) failed to issue.`); return; }
+    toast(
+      selectedRecipients.length > 1
+        ? `${selectedRecipients.length} certificates issued successfully.`
+        : "Certificate issued successfully.",
+      "success"
+    );
     setShowAdd(false);
-    setForm({ reference_type: "manual" });
+    setForm({ reference_type: "seminar" });
+    setTemplate({});
     setSelectedRecipients([]);
     setRecipientSearch("");
     setAttendanceCheck(null);
     setAlreadyHasCert(false);
+    setShowTemplateEdit(false);
     load();
   };
 
-  // ── Toggle revoke ─────────────────────────────────────────────────────────
   const toggleRevoke = async (cert) => {
     const newVal = !cert.is_revoked;
-    if (!confirm(`${newVal ? "Revoke" : "Restore"} this certificate?`)) return;
     await supabase.from("certificates").update({ is_revoked: newVal }).eq("id", cert.id);
     setCerts(cs => cs.map(c => c.id === cert.id ? { ...c, is_revoked: newVal } : c));
+    toast(newVal ? "Certificate revoked." : "Certificate restored.", "success");
   };
 
-  // ── Edit ──────────────────────────────────────────────────────────────────
   const openEdit = (cert) => {
     setEditCert(cert);
     setEditForm({
@@ -416,12 +713,12 @@ function CertificatesTab() {
     }).eq("id", editCert.id);
     setEditSaving(false);
     if (err) { setEditError(err.message); return; }
+    toast("Certificate updated.", "success");
     setEditCert(null);
     if (previewCert?.id === editCert.id) setPreviewCert(p => ({ ...p, ...editForm }));
     load();
   };
 
-  // ── Filter ────────────────────────────────────────────────────────────────
   const filtered = certs.filter(c => {
     const matchSearch =
       (c.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) ||
@@ -431,35 +728,27 @@ function CertificatesTab() {
     return matchSearch && matchType;
   });
 
-  // ── Attendance indicator ──────────────────────────────────────────────────
   const renderAttendanceGate = () => {
     if (form.reference_type !== "seminar") return null;
     const userId = selectedRecipients[0];
     if (!userId || !form.seminar_id) return null;
-    if (attendanceCheck === "checking") {
-      return (
-        <div style={s.infoBox("blue")}>
-          <span className="spinner-border spinner-border-sm me-2" />
-          Checking attendance record…
-        </div>
-      );
-    }
-    if (alreadyHasCert) {
-      return (
-        <div style={s.infoBox("yellow")}>
-          <i className="bi bi-exclamation-triangle-fill" />
-          <div><strong>Certificate already issued.</strong> A valid certificate for this seminar already exists for this participant.</div>
-        </div>
-      );
-    }
-    if (attendanceCheck?.attended) {
-      return (
-        <div style={s.infoBox("green")}>
-          <i className="bi bi-check-circle-fill" />
-          <div><strong>Attendance verified.</strong> Checked in on {formatDate(attendanceCheck.checkedInAt)}. Certificate can be issued.</div>
-        </div>
-      );
-    }
+    if (attendanceCheck === "checking") return (
+      <div style={s.infoBox("blue")}>
+        <span className="spinner-border spinner-border-sm me-2" />Checking attendance record…
+      </div>
+    );
+    if (alreadyHasCert) return (
+      <div style={s.infoBox("yellow")}>
+        <i className="bi bi-exclamation-triangle-fill" />
+        <div><strong>Certificate already issued.</strong> A valid certificate for this seminar already exists for this participant.</div>
+      </div>
+    );
+    if (attendanceCheck?.attended) return (
+      <div style={s.infoBox("green")}>
+        <i className="bi bi-check-circle-fill" />
+        <div><strong>Attendance verified.</strong> Checked in on {formatDate(attendanceCheck.checkedInAt)}. Certificate can be issued.</div>
+      </div>
+    );
     return (
       <div style={s.infoBox("red")}>
         <i className="bi bi-x-circle-fill" />
@@ -471,12 +760,7 @@ function CertificatesTab() {
   const canIssue = () => {
     if (selectedRecipients.length === 0) return false;
     if (form.reference_type === "seminar") {
-      return (
-        !!form.seminar_id &&
-        attendanceCheck !== "checking" &&
-        attendanceCheck?.attended === true &&
-        !alreadyHasCert
-      );
+      return !!form.seminar_id && attendanceCheck !== "checking" && attendanceCheck?.attended === true && !alreadyHasCert;
     }
     return true;
   };
@@ -495,14 +779,33 @@ function CertificatesTab() {
     );
   });
 
+  const previewRecipientName = selectedRecipients.length === 1
+    ? (students.find(s => s.id === selectedRecipients[0])?.full_name || "")
+    : selectedRecipients.length > 1
+      ? `${selectedRecipients.length} Recipients`
+      : "";
+
+  const selectedSeminar = seminars.find(s => s.id === form.seminar_id);
+
   return (
     <div>
+      {/* Signatory Settings Panel */}
+      <SignatorySettingsPanel sigs={sigs} onChange={setSigs} />
+
       {/* Toolbar */}
       <div style={s.toolbar}>
-        <input style={s.searchBar} placeholder="Search by name, ID, or code…"
-          value={search} onChange={e => setSearch(e.target.value)} />
-        <select style={{ ...s.searchBar, width: "auto" }}
-          value={filterType} onChange={e => setFilterType(e.target.value)}>
+        <input
+          style={s.searchBar}
+          placeholder="Search by name, ID, or code…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        {/* Fixed filter select — always visible, never requires hover */}
+        <select
+          style={s.filterSelect}
+          value={filterType}
+          onChange={e => setFilterType(e.target.value)}
+        >
           <option value="all">All Types</option>
           <option value="manual">Manual</option>
           <option value="seminar">Seminar</option>
@@ -511,12 +814,14 @@ function CertificatesTab() {
         </select>
         <div style={{ marginLeft: "auto" }}>
           <button style={s.addBtn} onClick={() => {
-            setForm({ reference_type: "manual" });
+            setForm({ reference_type: "seminar" });
+            setTemplate({});
             setError("");
             setSelectedRecipients([]);
             setRecipientSearch("");
             setAttendanceCheck(null);
             setAlreadyHasCert(false);
+            setShowTemplateEdit(false);
             setShowAdd(true);
           }}>
             <i className="bi bi-plus-lg" />Issue Certificate
@@ -595,132 +900,203 @@ function CertificatesTab() {
       {/* ── Issue Certificate Modal ──────────────────────────────────────── */}
       {showAdd && (
         <div style={s.overlay}>
-          <div style={s.modal(520)}>
+          <div style={{ ...s.modal(860), display: "flex", flexDirection: "column" }}>
             <div style={s.mHeader}>
-              <span style={s.mTitle}><i className="bi bi-plus-circle me-2" />Issue Certificate</span>
-              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}>×</button>
+              <span style={s.mTitle}><i className="bi bi-patch-check me-2" />Issue Certificate</span>
+              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}>
+                <i className="bi bi-x-lg" />
+              </button>
             </div>
-            <div style={s.mBody}>
-              {error && (
-                <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "flex-start", gap: 8 }}>
-                  <i className="bi bi-exclamation-triangle-fill" style={{ flexShrink: 0, marginTop: 1 }} />{error}
-                </div>
-              )}
 
-              {/* Certificate Type */}
-              <div style={s.fg}>
-                <label style={s.label}>Certificate Type *</label>
-                <select style={s.select} value={form.reference_type || "manual"}
-                  onChange={e => {
-                    setF("reference_type", e.target.value);
-                    setF("seminar_id", "");
-                    setSelectedRecipients([]);
-                    setRecipientSearch("");
-                    setAttendanceCheck(null);
-                    setAlreadyHasCert(false);
-                  }}>
-                  <option value="manual">Manual — Certificate of Achievement</option>
-                  <option value="module">Module Completion</option>
-                  <option value="seminar">Seminar Attendance (attendance required)</option>
-                  <option value="assessment">Assessment</option>
-                </select>
-              </div>
-
-              {/* Seminar selector */}
-              {form.reference_type === "seminar" && (
-                <div style={s.fg}>
-                  <label style={s.label}>Seminar *</label>
-                  <select style={s.select} value={form.seminar_id || ""}
-                    onChange={e => setF("seminar_id", e.target.value)}>
-                    <option value="">— Select seminar —</option>
-                    {seminars.map(sem => (
-                      <option key={sem.id} value={sem.id}>
-                        {sem.title} {sem.scheduled_start ? `(${formatDate(sem.scheduled_start)})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Recipient — searchable checkbox list */}
-              <div style={s.fg}>
-                <label style={s.label}>
-                  Recipient *{" "}
-                  {selectedRecipients.length > 0 && (
-                    <span style={{ color: G.base, fontWeight: 700 }}>
-                      ({selectedRecipients.length} selected)
-                    </span>
-                  )}
-                </label>
-                <input
-                  style={{ ...s.input, marginBottom: 8 }}
-                  placeholder="Search by name, student ID, or role…"
-                  value={recipientSearch}
-                  onChange={e => setRecipientSearch(e.target.value)}
-                />
-                <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff" }}>
-                  {filteredStudents.length === 0 ? (
-                    <div style={{ padding: "20px", textAlign: "center", color: "#aaa", fontSize: 13 }}>No results</div>
-                  ) : (
-                    filteredStudents.map(st => {
-                      const checked = selectedRecipients.includes(st.id);
-                      return (
-                        <label key={st.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", cursor: "pointer", borderBottom: `1px solid ${G.wash}`, background: checked ? G.wash : "transparent" }}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => {
-                              setSelectedRecipients(prev =>
-                                checked ? prev.filter(id => id !== st.id) : [...prev, st.id]
-                              );
-                            }}
-                            style={{ width: 15, height: 15, accentColor: G.base, flexShrink: 0 }}
-                          />
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: 13, color: G.dark }}>{st.full_name}</div>
-                            <div style={{ fontSize: 11, color: "#aaa" }}>
-                              {[st.student_id, st.role].filter(Boolean).join(" · ")}
-                            </div>
-                          </div>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-                {selectedRecipients.length > 0 && (
-                  <div style={{ marginTop: 6, fontSize: 12, color: "#888", display: "flex", justifyContent: "space-between" }}>
-                    <span>{selectedRecipients.length} recipient(s) selected</span>
-                    <span
-                      style={{ cursor: "pointer", color: G.base, textDecoration: "underline" }}
-                      onClick={() => { setSelectedRecipients([]); }}>
-                      Clear all
-                    </span>
+            <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
+              {/* Left: form */}
+              <div style={{ flex: "0 0 380px", borderRight: `1px solid ${G.wash}`, overflow: "auto", padding: "20px 24px" }}>
+                {error && (
+                  <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <i className="bi bi-exclamation-triangle-fill" style={{ flexShrink: 0, marginTop: 1 }} />{error}
                   </div>
                 )}
+                <div style={s.fg}>
+                  <label style={s.label}>Certificate Type *</label>
+                  <select style={s.select} value={form.reference_type || "seminar"}
+                    onChange={e => {
+                      setF("reference_type", e.target.value);
+                      setF("seminar_id", "");
+                      setSelectedRecipients([]);
+                      setRecipientSearch("");
+                      setAttendanceCheck(null);
+                      setAlreadyHasCert(false);
+                    }}>
+                    <option value="seminar">Certificate of Participation (Seminar)</option>
+                    <option value="module">Certificate of Completion (Module)</option>
+                    <option value="assessment">Certificate of Achievement (Assessment)</option>
+                    <option value="manual">Certificate of Recognition (Manual)</option>
+                  </select>
+                </div>
+                {form.reference_type === "seminar" && (
+                  <div style={s.fg}>
+                    <label style={s.label}>Seminar *</label>
+                    <select style={s.select} value={form.seminar_id || ""}
+                      onChange={e => setF("seminar_id", e.target.value)}>
+                      <option value="">— Select seminar —</option>
+                      {seminars.map(sem => (
+                        <option key={sem.id} value={sem.id}>
+                          {sem.title}{sem.scheduled_start ? ` (${formatDate(sem.scheduled_start)})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedSeminar && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "#888", background: G.wash, borderRadius: 6, padding: "6px 10px" }}>
+                        <i className="bi bi-info-circle me-1" />
+                        {[
+                          selectedSeminar.venue && `Venue: ${selectedSeminar.venue}`,
+                          selectedSeminar.scheduled_start && `Date: ${formatDateLong(selectedSeminar.scheduled_start)}`,
+                        ].filter(Boolean).join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div style={s.fg}>
+                  <label style={s.label}>
+                    Recipient *{" "}
+                    {selectedRecipients.length > 0 && (
+                      <span style={{ color: G.base, fontWeight: 700 }}>({selectedRecipients.length} selected)</span>
+                    )}
+                  </label>
+                  <input
+                    style={{ ...s.input, marginBottom: 8 }}
+                    placeholder="Search by name, ID, or role…"
+                    value={recipientSearch}
+                    onChange={e => setRecipientSearch(e.target.value)}
+                  />
+                  <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff" }}>
+                    {filteredStudents.length === 0 ? (
+                      <div style={{ padding: "20px", textAlign: "center", color: "#aaa", fontSize: 13 }}>No results</div>
+                    ) : (
+                      filteredStudents.map(st => {
+                        const checked = selectedRecipients.includes(st.id);
+                        return (
+                          <label key={st.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", cursor: "pointer", borderBottom: `1px solid ${G.wash}`, background: checked ? G.wash : "transparent" }}>
+                            <input type="checkbox" checked={checked}
+                              onChange={() => setSelectedRecipients(prev => checked ? prev.filter(id => id !== st.id) : [...prev, st.id])}
+                              style={{ width: 15, height: 15, accentColor: G.base, flexShrink: 0 }} />
+                            <div>
+                              <div style={{ fontWeight: 600, fontSize: 13, color: G.dark }}>{st.full_name}</div>
+                              <div style={{ fontSize: 11, color: "#aaa" }}>{[st.student_id, st.role].filter(Boolean).join(" · ")}</div>
+                            </div>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                  {selectedRecipients.length > 0 && (
+                    <div style={{ marginTop: 6, fontSize: 12, color: "#888", display: "flex", justifyContent: "space-between" }}>
+                      <span>{selectedRecipients.length} recipient(s) selected</span>
+                      <span style={{ cursor: "pointer", color: G.base, textDecoration: "underline" }} onClick={() => setSelectedRecipients([])}>Clear all</span>
+                    </div>
+                  )}
+                </div>
+                {renderAttendanceGate()}
+                {form.reference_type === "seminar" && !form.seminar_id && (
+                  <div style={s.infoBox("blue")}>
+                    <i className="bi bi-info-circle-fill" />
+                    Select a seminar to auto-populate the certificate template. Only participants with verified attendance can receive a certificate.
+                  </div>
+                )}
+                <div style={{ background: G.wash, borderRadius: 8, padding: "12px 14px", marginBottom: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showTemplateEdit ? 14 : 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: G.dark, display: "flex", alignItems: "center", gap: 6 }}>
+                      <i className="bi bi-magic" style={{ color: G.base }} />
+                      Auto-populated Template
+                      <span style={{ ...s.tag("green"), fontSize: 10 }}>Ready</span>
+                    </div>
+                    <button
+                      style={{ ...s.iconBtn(G.base), fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}
+                      onClick={() => setShowTemplateEdit(v => !v)}
+                    >
+                      <i className={`bi ${showTemplateEdit ? "bi-chevron-up" : "bi-pencil"}`} />
+                      {showTemplateEdit ? "Collapse" : "Edit"}
+                    </button>
+                  </div>
+                  {!showTemplateEdit && (
+                    <div style={{ fontSize: 11, color: "#666", lineHeight: 1.5 }}>
+                      <div><strong>Title:</strong> {certTitle(form.reference_type)}</div>
+                      <div style={{ marginTop: 3 }}><strong>Signatories:</strong> {template.sig1_name || "GAD Coordinator"} &amp; {template.sig2_name || "GADRC Director"}</div>
+                      <div style={{ marginTop: 3 }}><strong>Theme:</strong>
+                        <span style={{ display: "inline-block", width: 12, height: 12, borderRadius: "50%", background: template.theme_color || "#2D6A2D", marginLeft: 6, verticalAlign: "middle", border: "1px solid #ccc" }} />
+                        <span style={{ marginLeft: 4 }}>{template.theme_color || "#2D6A2D"}</span>
+                      </div>
+                    </div>
+                  )}
+                  {showTemplateEdit && (
+                    <>
+                      <div style={s.fg}>
+                        <label style={s.label}>Body Text</label>
+                        <textarea style={{ ...s.textarea, minHeight: 80, fontSize: 12 }}
+                          value={template.body_text || ""}
+                          onChange={e => setT("body_text", e.target.value)} />
+                        <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }}
+                          onClick={() => {
+                            const sem = seminars.find(s => s.id === form.seminar_id) || null;
+                            const d   = buildDefaultTemplate({ seminar: sem, refType: form.reference_type });
+                            setT("body_text", d.body_text);
+                          }}>
+                          ↺ Reset to default
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.label}>Left Signatory</label>
+                          <input style={{ ...s.input, marginBottom: 6 }} value={template.sig1_name || ""} onChange={e => setT("sig1_name", e.target.value)} placeholder="GAD Coordinator" />
+                          <input style={s.input} value={template.sig1_title || ""} onChange={e => setT("sig1_title", e.target.value)} placeholder="Title" />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={s.label}>Right Signatory</label>
+                          <input style={{ ...s.input, marginBottom: 6 }} value={template.sig2_name || ""} onChange={e => setT("sig2_name", e.target.value)} placeholder="GADRC Director" />
+                          <input style={s.input} value={template.sig2_title || ""} onChange={e => setT("sig2_title", e.target.value)} placeholder="Title" />
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <label style={s.label}>Theme Color</label>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <input type="color" value={template.theme_color || "#2D6A2D"}
+                            onChange={e => setT("theme_color", e.target.value)}
+                            style={{ width: 40, height: 32, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", padding: 2 }} />
+                          {[["#2D6A2D","Forest Green"],["#1A2E1A","Dark Green"],["#1d4ed8","Blue"],["#7c3aed","Purple"],["#c2410c","Orange"],["#0f766e","Teal"]].map(([c, label]) => (
+                            <span key={c} onClick={() => setT("theme_color", c)} title={label}
+                              style={{ display: "inline-block", width: 20, height: 20, borderRadius: "50%", background: c, cursor: "pointer", border: template.theme_color === c ? "3px solid #000" : "2px solid transparent" }} />
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
 
-              {/* Attendance gate indicator */}
-              {renderAttendanceGate()}
-
-              {form.reference_type === "seminar" && !form.seminar_id && (
-                <div style={s.infoBox("blue")}>
-                  <i className="bi bi-info-circle-fill" />
-                  Select a seminar first. Only participants with a verified check-in record can receive a seminar attendance certificate.
+              {/* Right: live preview */}
+              <div style={{ flex: 1, background: "#F5F7F5", padding: "20px 24px", display: "flex", flexDirection: "column", overflow: "auto" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.6, display: "flex", alignItems: "center", gap: 6 }}>
+                  <i className="bi bi-eye" />Live Preview
                 </div>
-              )}
-
-              {form.reference_type !== "seminar" && (
-                <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-                  <i className="bi bi-lightbulb me-1" />A unique certificate code will be auto-generated per recipient on issue. Each recipient will receive an in-app notification.
+                <MiniCertPreview
+                  recipientName={previewRecipientName}
+                  refType={form.reference_type}
+                  seminarTitle={selectedSeminar?.title}
+                  template={template}
+                />
+                <div style={{ marginTop: 10, fontSize: 11, color: "#aaa", textAlign: "center" }}>
+                  Preview updates as you make changes. The actual certificate code will be generated on issue.
                 </div>
-              )}
+              </div>
             </div>
+
             <div style={s.mFooter}>
               <button style={s.btnSecondary} onClick={() => setShowAdd(false)}>Cancel</button>
               <button
-                style={{ ...s.btnPrimary, opacity: (saving || !canIssue()) ? 0.5 : 1, cursor: canIssue() ? "pointer" : "not-allowed" }}
+                style={{ ...s.btnPrimary, opacity: (saving || !canIssue()) ? 0.5 : 1, cursor: canIssue() ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 6 }}
                 onClick={issueCert}
                 disabled={saving || !canIssue()}>
+                <i className="bi bi-send-check" />
                 {saving
                   ? "Issuing…"
                   : selectedRecipients.length > 1
@@ -738,7 +1114,7 @@ function CertificatesTab() {
           <div style={s.modal(480)}>
             <div style={s.mHeader}>
               <span style={s.mTitle}><i className="bi bi-pencil me-2" />Edit Certificate</span>
-              <button style={s.iconBtn()} onClick={() => setEditCert(null)}>×</button>
+              <button style={s.iconBtn()} onClick={() => setEditCert(null)}><i className="bi bi-x-lg" /></button>
             </div>
             <div style={s.mBody}>
               {editError && (
@@ -756,10 +1132,10 @@ function CertificatesTab() {
               <div style={s.fg}>
                 <label style={s.label}>Certificate Type *</label>
                 <select style={s.select} value={editForm.reference_type || "manual"} onChange={e => setEF("reference_type", e.target.value)}>
-                  <option value="manual">Certificate of Achievement (Manual)</option>
-                  <option value="module">Certificate of Module Completion</option>
-                  <option value="seminar">Certificate of Seminar Attendance</option>
-                  <option value="assessment">Certificate of Assessment</option>
+                  <option value="seminar">Certificate of Participation (Seminar)</option>
+                  <option value="module">Certificate of Completion (Module)</option>
+                  <option value="assessment">Certificate of Achievement (Assessment)</option>
+                  <option value="manual">Certificate of Recognition (Manual)</option>
                 </select>
               </div>
               <div style={s.fg}>
@@ -773,7 +1149,10 @@ function CertificatesTab() {
                 <textarea style={{ ...s.textarea, minHeight: 80 }} value={editForm.body_text || ""}
                   onChange={e => setEF("body_text", e.target.value)} />
                 <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }}
-                  onClick={() => setEF("body_text", "has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.")}>
+                  onClick={() => {
+                    const d = buildDefaultTemplate({ refType: editForm.reference_type });
+                    setEF("body_text", d.body_text);
+                  }}>
                   ↺ Reset to default
                 </div>
               </div>
@@ -832,9 +1211,11 @@ function CertificatesTab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  AUTO-ISSUE TAB — registered + evaluated gated
+//  AUTO-ISSUE TAB
 // ─────────────────────────────────────────────────────────────────────────────
 function AutoIssueTab() {
+  const toast = useToast();
+
   const [seminars,  setSeminars]  = useState([]);
   const [selected,  setSelected]  = useState(null);
   const [eligible,  setEligible]  = useState([]);
@@ -843,11 +1224,15 @@ function AutoIssueTab() {
   const [issuedIds, setIssuedIds] = useState(new Set());
   const [error,     setError]     = useState("");
 
+  // Signatory settings
+  const [sigs, setSigs] = useState({ ...DEFAULT_SIGS });
+  useEffect(() => { loadSignatorySettings().then(setSigs); }, []);
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase
         .from("seminars")
-        .select("id, title, scheduled_start, status")
+        .select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status")
         .order("scheduled_start", { ascending: false });
       setSeminars(data || []);
     })();
@@ -858,42 +1243,28 @@ function AutoIssueTab() {
     setEligible([]);
     setIssuedIds(new Set());
     setError("");
-
     const [
       { data: registered, error: regErr },
       { data: evaluated,  error: evalErr },
       { data: existing }
     ] = await Promise.all([
-      supabase
-        .from("seminar_registrations")
+      supabase.from("seminar_registrations")
         .select("user_id, full_name, email, role, department")
         .eq("seminar_id", seminarId),
-      supabase
-        .from("seminar_evaluations")
+      supabase.from("seminar_evaluations")
         .select("user_id, submitted_at")
         .eq("seminar_id", seminarId)
         .not("submitted_at", "is", null),
-      supabase
-        .from("certificates")
+      supabase.from("certificates")
         .select("user_id")
         .eq("reference_type", "seminar")
         .eq("reference_id", seminarId)
         .eq("is_revoked", false),
     ]);
-
-    if (regErr || evalErr) {
-      setError((regErr || evalErr).message);
-      setLoading(false);
-      return;
-    }
-
+    if (regErr || evalErr) { setError((regErr || evalErr).message); setLoading(false); return; }
     const evaluatedIds = new Set((evaluated || []).map(e => e.user_id));
     const certUserIds  = new Set((existing  || []).map(c => c.user_id));
-
-    const pending = (registered || []).filter(r =>
-      evaluatedIds.has(r.user_id) && !certUserIds.has(r.user_id)
-    );
-
+    const pending      = (registered || []).filter(r => evaluatedIds.has(r.user_id) && !certUserIds.has(r.user_id));
     setEligible(pending);
     setIssuedIds(certUserIds);
     setLoading(false);
@@ -905,10 +1276,12 @@ function AutoIssueTab() {
     if (seminarId) loadEligible(seminarId);
   };
 
-  // ── Issue one — UPDATED: notifies recipient ───────────────────────────────
+  const getTemplate = () => buildDefaultTemplate({ seminar: selected, refType: "seminar", sigs });
+
   const issueOne = async (userId, seminarId) => {
     const { data: { user } } = await supabase.auth.getUser();
-    const code = genCertCode();
+    const code     = genCertCode();
+    const tmpl     = getTemplate();
     const { error: err } = await supabase.from("certificates").insert({
       user_id:          userId,
       reference_type:   "seminar",
@@ -917,19 +1290,20 @@ function AutoIssueTab() {
       is_revoked:       false,
       issued_at:        new Date().toISOString(),
       issued_by:        user?.id,
+      body_text:        tmpl.body_text,
+      sig1_name:        tmpl.sig1_name,
+      sig1_title:       tmpl.sig1_title,
+      sig2_name:        tmpl.sig2_name,
+      sig2_title:       tmpl.sig2_title,
+      theme_color:      tmpl.theme_color,
     });
-    if (!err) {
-      // ── Notify recipient immediately ──────────────────────────────
-      await insertCertificateNotification(userId, code);
-    }
+    if (!err) await insertCertificateNotification(userId, code, selected?.title);
     return err;
   };
 
   const issueAll = async () => {
     if (!selected || eligible.length === 0) return;
-    if (!confirm(`Issue ${eligible.length} certificate(s) for "${selected.title}"? This cannot be undone.`)) return;
-    setIssuing(true);
-    setError("");
+    setIssuing(true); setError("");
     let failed = 0;
     const newIssued = new Set(issuedIds);
     for (const reg of eligible) {
@@ -939,7 +1313,8 @@ function AutoIssueTab() {
     setIssuedIds(newIssued);
     setEligible(prev => prev.filter(r => !newIssued.has(r.user_id)));
     setIssuing(false);
-    if (failed > 0) setError(`${failed} certificate(s) failed to issue.`);
+    if (failed > 0) { setError(`${failed} certificate(s) failed to issue.`); }
+    else { toast(`${eligible.length} certificate(s) issued for "${selected.title}".`, "success"); }
   };
 
   const issueSingle = async (reg) => {
@@ -947,17 +1322,26 @@ function AutoIssueTab() {
     const err = await issueOne(reg.user_id, selected.id);
     setIssuing(false);
     if (err) { setError(err.message); return; }
+    toast(`Certificate issued to ${reg.full_name}.`, "success");
     setIssuedIds(prev => new Set([...prev, reg.user_id]));
     setEligible(prev => prev.filter(r => r.user_id !== reg.user_id));
   };
 
+  const selectedSeminarInfo = selected && [
+    selected.scheduled_start && `Date: ${formatDateLong(selected.scheduled_start)}`,
+    selected.venue && `Venue: ${selected.venue}`,
+    selected.seminar_type && `Type: ${selected.seminar_type}`,
+  ].filter(Boolean).join(" · ");
+
   return (
     <div>
-      {/* Seminar selector */}
+      {/* Signatory Settings Panel */}
+      <SignatorySettingsPanel sigs={sigs} onChange={setSigs} />
+
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #DDE8DD", marginBottom: 20 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: G.dark, marginBottom: 10 }}>
           <i className="bi bi-lightning-charge me-2" style={{ color: G.base }} />
-          Select a seminar to see participants who have both <strong>registered</strong> and <strong>submitted an evaluation</strong> but have not yet received a certificate.
+          Select a seminar to see participants who have <strong>registered</strong> and <strong>submitted an evaluation</strong> but have not yet received a certificate.
         </div>
         <select style={{ ...s.select, maxWidth: 480 }}
           value={selected?.id || ""}
@@ -965,27 +1349,40 @@ function AutoIssueTab() {
           <option value="">— Choose seminar —</option>
           {seminars.map(sem => (
             <option key={sem.id} value={sem.id}>
-              {sem.title} {sem.scheduled_start ? `· ${formatDate(sem.scheduled_start)}` : ""}
+              {sem.title}{sem.scheduled_start ? ` · ${formatDate(sem.scheduled_start)}` : ""}
             </option>
           ))}
         </select>
+        {selected && selectedSeminarInfo && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "#888", background: G.wash, borderRadius: 6, padding: "6px 10px", maxWidth: 480 }}>
+            <i className="bi bi-info-circle me-1" />{selectedSeminarInfo}
+          </div>
+        )}
+        {selected && (
+          <div style={{ marginTop: 10, background: G.wash, borderRadius: 8, padding: "10px 14px", maxWidth: 480 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+              <i className="bi bi-magic" style={{ color: G.base }} />Certificate Template Preview
+            </div>
+            <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6 }}>
+              <div><strong>Title:</strong> {certTitle("seminar")}</div>
+              <div><strong>Body:</strong> {(getTemplate().body_text || "").slice(0, 120)}…</div>
+              <div><strong>Signatories:</strong> {getTemplate().sig1_name} &amp; {getTemplate().sig2_name}</div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Results */}
       {selected && (
         <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #DDE8DD", overflow: "hidden" }}>
           <div style={{ padding: "16px 24px", borderBottom: "1px solid #DDE8DD", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
             <div>
               <div style={{ fontWeight: 700, color: G.dark }}>{selected.title}</div>
               <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
-                {loading
-                  ? "Checking records…"
-                  : `${eligible.length} participant(s) registered + evaluated, no certificate yet`}
+                {loading ? "Checking records…" : `${eligible.length} participant(s) registered + evaluated, no certificate yet`}
               </div>
             </div>
             {eligible.length > 0 && !loading && (
-              <button style={{ ...s.btnSuccess, opacity: issuing ? 0.7 : 1 }}
-                onClick={issueAll} disabled={issuing}>
+              <button style={{ ...s.btnSuccess, opacity: issuing ? 0.7 : 1 }} onClick={issueAll} disabled={issuing}>
                 {issuing
                   ? <><span className="spinner-border spinner-border-sm" />Issuing…</>
                   : <><i className="bi bi-send-check" />Issue All ({eligible.length})</>
@@ -993,13 +1390,11 @@ function AutoIssueTab() {
               </button>
             )}
           </div>
-
           {error && (
             <div style={{ margin: "12px 24px 0", ...s.infoBox("red"), marginBottom: 0 }}>
               <i className="bi bi-exclamation-triangle-fill" />{error}
             </div>
           )}
-
           {loading
             ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Checking registration and evaluation records…</div>
             : eligible.length === 0
@@ -1007,10 +1402,7 @@ function AutoIssueTab() {
                 <div style={{ padding: "40px 20px", textAlign: "center" }}>
                   <i className="bi bi-check-circle" style={{ fontSize: 36, color: "#16a34a" }} />
                   <div style={{ fontWeight: 700, color: G.dark, marginTop: 12, marginBottom: 6 }}>All caught up!</div>
-                  <div style={{ fontSize: 13, color: "#888" }}>
-                    All participants who registered and evaluated this seminar have already received their certificates,
-                    or no eligible participants exist yet.
-                  </div>
+                  <div style={{ fontSize: 13, color: "#888" }}>All eligible participants have received their certificates.</div>
                 </div>
               )
               : (
@@ -1031,20 +1423,12 @@ function AutoIssueTab() {
                           <div style={{ fontSize: 11, color: "#aaa" }}>{reg.email}</div>
                         </td>
                         <td style={s.td}>
-                          {reg.role && (
-                            <span style={s.tag("blue")}>
-                              {reg.role.charAt(0).toUpperCase() + reg.role.slice(1)}
-                            </span>
-                          )}
+                          {reg.role && <span style={s.tag("blue")}>{reg.role.charAt(0).toUpperCase() + reg.role.slice(1)}</span>}
                         </td>
+                        <td style={s.td}><span style={s.tag("green")}>Registered + Evaluated</span></td>
                         <td style={s.td}>
-                          <span style={s.tag("green")}>Registered + Evaluated</span>
-                        </td>
-                        <td style={s.td}>
-                          <button
-                            style={{ ...s.btnSuccess, padding: "6px 14px", fontSize: 12, opacity: issuing ? 0.6 : 1 }}
-                            onClick={() => issueSingle(reg)}
-                            disabled={issuing}>
+                          <button style={{ ...s.btnSuccess, padding: "6px 14px", fontSize: 12, opacity: issuing ? 0.6 : 1 }}
+                            onClick={() => issueSingle(reg)} disabled={issuing}>
                             <i className="bi bi-send-check" />Issue
                           </button>
                         </td>
@@ -1062,8 +1446,7 @@ function AutoIssueTab() {
           <i className="bi bi-lightning-charge" style={{ fontSize: 36, color: G.pale }} />
           <div style={{ fontWeight: 700, color: G.dark, marginTop: 12, marginBottom: 6 }}>Select a seminar above</div>
           <div style={{ fontSize: 13, color: "#aaa" }}>
-            This tab shows participants who have both registered and submitted an evaluation for the seminar
-            but have not yet received a certificate. Issue individually or all at once.
+            Participants who registered and evaluated the seminar but have no certificate will appear here.
           </div>
         </div>
       )}
@@ -1124,7 +1507,7 @@ function BadgesTab() {
 
   const del = async (b) => {
     const count = b.student_badges?.[0]?.count || 0;
-    if (!confirm(`Delete "${b.name}"?${count > 0 ? ` This will remove it from ${count} student(s).` : ""}`)) return;
+    if (!window.confirm(`Delete "${b.name}"?${count > 0 ? ` This will remove it from ${count} student(s).` : ""}`)) return;
     await supabase.from("badges").delete().eq("id", b.id);
     reload();
   };
@@ -1135,11 +1518,8 @@ function BadgesTab() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ fontSize: 13, color: "#888" }}>{badges.length} badge{badges.length !== 1 ? "s" : ""} created</div>
-        <button style={s.addBtn} onClick={openAdd}>
-          <i className="bi bi-plus-lg" />Create Badge
-        </button>
+        <button style={s.addBtn} onClick={openAdd}><i className="bi bi-plus-lg" />Create Badge</button>
       </div>
-
       {loading
         ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>
         : badges.length === 0
@@ -1162,9 +1542,7 @@ function BadgesTab() {
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}>{b.name}</div>
-                      {b.description && (
-                        <div style={{ fontSize: 12, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.description}</div>
-                      )}
+                      {b.description && <div style={{ fontSize: 12, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.description}</div>}
                       <div style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center" }}>
                         <span style={s.tag("yellow")}>{b.badge_type}</span>
                         <span style={{ fontSize: 11, color: "#aaa" }}>Awarded: {awardCount}</span>
@@ -1180,18 +1558,15 @@ function BadgesTab() {
             </div>
           )
       }
-
       {showAdd && (
         <div style={s.overlay}>
           <div style={s.modal(460)}>
             <div style={s.mHeader}>
               <span style={s.mTitle}>{editB ? "Edit Badge" : "Create Badge"}</span>
-              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}>×</button>
+              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}><i className="bi bi-x-lg" /></button>
             </div>
             <div style={s.mBody}>
-              {error && (
-                <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>
-              )}
+              {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
               <div style={s.fg}>
                 <label style={s.label}>Badge Name *</label>
                 <input style={s.input} value={form.name || ""} onChange={e => setF("name", e.target.value)} placeholder="e.g. Gender Champion" autoFocus />
@@ -1237,7 +1612,6 @@ export default function CertificatesPage() {
           <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>Manage student achievements and recognitions</div>
         </div>
       </div>
-
       <div style={s.tabs}>
         <div style={s.tab(tab === "certificates")} onClick={() => setTab("certificates")}>
           <i className="bi bi-patch-check" />Certificates
@@ -1250,7 +1624,6 @@ export default function CertificatesPage() {
           <i className="bi bi-award" />Badges
         </div>
       </div>
-
       {tab === "certificates" && <CertificatesTab />}
       {tab === "auto-issue"   && <AutoIssueTab />}
       {tab === "badges"       && <BadgesTab />}

@@ -56,8 +56,6 @@ async function insertSeminarNotifications(seminarId, seminarTitle) {
   }
 }
 
-// Finds seminars that ended in the last 30 min and inserts
-// evaluation notifications for registered users (with duplicate guard).
 async function triggerEvaluationNotifications() {
   try {
     const now          = new Date();
@@ -82,7 +80,6 @@ async function triggerEvaluationNotifications() {
       if (!registrations?.length) continue;
 
       for (const reg of registrations) {
-        // Duplicate guard — skip if already sent
         const { data: existing } = await supabase
           .from("notifications")
           .select("id")
@@ -219,7 +216,6 @@ function DetailsTab({ seminar, onUpdate }) {
     setSaving(false);
     if (err) { setError(err.message); return; }
 
-    // Notify all users only when seminar becomes public for the first time
     if (!wasPublic && nowPublic) {
       await insertSeminarNotifications(seminar.id, payload.title);
     }
@@ -280,13 +276,21 @@ function DetailsTab({ seminar, onUpdate }) {
           <div style={{ ...s.fg, flex: 1 }}>
             <label style={s.label}>Start Date & Time</label>
             <input style={s.input} type="datetime-local"
-              value={form.scheduled_start ? (() => { try { const d = new Date(form.scheduled_start); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } catch { return form.scheduled_start.slice(0, 16); } })() : ""}
+              value={form.scheduled_start
+                ? (form.scheduled_start.includes("Z") || form.scheduled_start.includes("+")
+                    ? (() => { const d = new Date(form.scheduled_start); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()
+                    : form.scheduled_start.slice(0, 16))
+                : ""}
               onChange={e => setF("scheduled_start", e.target.value)} />
           </div>
           <div style={{ ...s.fg, flex: 1 }}>
             <label style={s.label}>End Date & Time</label>
             <input style={s.input} type="datetime-local"
-              value={form.scheduled_end ? (() => { try { const d = new Date(form.scheduled_end); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } catch { return form.scheduled_end.slice(0, 16); } })() : ""}
+              value={form.scheduled_end
+                ? (form.scheduled_end.includes("Z") || form.scheduled_end.includes("+")
+                    ? (() => { const d = new Date(form.scheduled_end); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()
+                    : form.scheduled_end.slice(0, 16))
+                : ""}
               onChange={e => setF("scheduled_end", e.target.value)} />
           </div>
         </div>
@@ -340,11 +344,13 @@ const SEMINAR_ROLES = [
 function roleColor(role) { return SEMINAR_ROLES.find(r => r.value === role)?.color || "blue"; }
 function roleLabel(role) { return SEMINAR_ROLES.find(r => r.value === role)?.label || role || "Student"; }
 
+
 function RegistrationsTab({ seminar }) {
-  const [regs, setRegs]             = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [search, setSearch]         = useState("");
-  const [roleFilter, setRoleFilter] = useState("all");
+  const [regs, setRegs]                 = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [search, setSearch]             = useState("");
+  const [roleFilter, setRoleFilter]     = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const load = async () => {
     setLoading(true);
@@ -360,18 +366,20 @@ function RegistrationsTab({ seminar }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [seminar.id]);
 
-  const updateRole = async (id, role) => {
-    await supabase.from("seminar_registrations").update({ role, status: "registered" }).eq("id", id);
-    setRegs(r => r.map(x => x.id === id ? { ...x, role, status: "registered" } : x));
-  };
-
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
 
-  const active   = regs.filter(r => r.status !== "cancelled");
+  const active    = regs.filter(r => r.status !== "cancelled");
+  const cancelled = regs.filter(r => r.status === "cancelled");
+
   const filtered = regs.filter(r => {
-    const matchSearch = !search || (r.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) || (r.profiles?.email || "").toLowerCase().includes(search.toLowerCase());
-    const matchRole   = roleFilter === "all" || (r.role || "student") === roleFilter;
-    return matchSearch && matchRole;
+    const matchSearch  = !search
+      || (r.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase())
+      || (r.profiles?.email || "").toLowerCase().includes(search.toLowerCase());
+    const matchRole    = roleFilter === "all" || (r.role || "student") === roleFilter;
+    const matchStatus  = statusFilter === "all"
+      || (statusFilter === "active"    && r.status !== "cancelled")
+      || (statusFilter === "cancelled" && r.status === "cancelled");
+    return matchSearch && matchRole && matchStatus;
   });
 
   const roleCounts = SEMINAR_ROLES.reduce((acc, r) => {
@@ -379,13 +387,21 @@ function RegistrationsTab({ seminar }) {
     return acc;
   }, {});
 
+  const filterBtn = (active) => ({
+    padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+    border: `1.5px solid ${active ? "#2D6A2D" : "#DDE8DD"}`,
+    background: active ? "#E8F5E9" : "#fff",
+    color: active ? "#2D6A2D" : "#555",
+  });
+
   return (
     <div>
+      {/* Stat cards */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
-          { label: "Total",     value: regs.length,                                             color: G.base    },
-          { label: "Active",    value: active.length,                                           color: "#16a34a" },
-          { label: "Cancelled", value: regs.filter(r => r.status === "cancelled").length,       color: "#dc2626" },
+          { label: "Total",     value: regs.length,      color: G.base    },
+          { label: "Active",    value: active.length,    color: "#16a34a" },
+          { label: "Cancelled", value: cancelled.length, color: "#dc2626" },
           { label: "Capacity",  value: seminar.max_participants ? `${active.length}/${seminar.max_participants}` : "Unlimited", color: "#2563eb" },
         ].map(stat => (
           <div key={stat.label} style={s.statCard(stat.color)}>
@@ -395,23 +411,47 @@ function RegistrationsTab({ seminar }) {
         ))}
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <button onClick={() => setRoleFilter("all")}
-          style={{ padding: "4px 12px", borderRadius: 20, border: `1.5px solid ${roleFilter==="all"?"#2D6A2D":"#DDE8DD"}`, background: roleFilter==="all"?"#E8F5E9":"#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: roleFilter==="all"?"#2D6A2D":"#555" }}>
-          All ({regs.length})
-        </button>
-        {SEMINAR_ROLES.map(r => (
-          <button key={r.value} onClick={() => setRoleFilter(r.value)}
-            style={{ padding: "4px 12px", borderRadius: 20, border: `1.5px solid ${roleFilter===r.value?"#2D6A2D":"#DDE8DD"}`, background: roleFilter===r.value?"#E8F5E9":"#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: roleFilter===r.value?"#2D6A2D":"#555" }}>
-            {r.label} ({roleCounts[r.value] || 0})
-          </button>
-        ))}
+      {/* Status filter */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>Registration Status</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {[
+            { value: "all",       label: `All (${regs.length})` },
+            { value: "active",    label: `✓ Active (${active.length})` },
+            { value: "cancelled", label: `✕ Cancelled (${cancelled.length})` },
+          ].map(opt => (
+            <button key={opt.value} onClick={() => setStatusFilter(opt.value)} style={filterBtn(statusFilter === opt.value)}>
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {/* Role filter */}
       <div style={{ marginBottom: 14 }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or email…"
-          style={{ ...s.input, maxWidth: 300 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>Role</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => setRoleFilter("all")} style={filterBtn(roleFilter === "all")}>All Roles</button>
+          {SEMINAR_ROLES.map(r => (
+            <button key={r.value} onClick={() => setRoleFilter(r.value)} style={filterBtn(roleFilter === r.value)}>
+              {r.label} ({roleCounts[r.value] || 0})
+            </button>
+          ))}
+        </div>
       </div>
+
+      {/* Search */}
+      <div style={{ marginBottom: 10 }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or email…"
+          style={{ ...s.input, maxWidth: 320 }} />
+      </div>
+
+      {/* Results count */}
+      {regs.length > 0 && (
+        <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
+          Showing <strong>{filtered.length}</strong> of <strong>{regs.length}</strong> registrations
+        </div>
+      )}
 
       {regs.length === 0 ? (
         <div style={s.emptyBox}>
@@ -430,14 +470,15 @@ function RegistrationsTab({ seminar }) {
                 <th style={s.th}>Department</th>
                 <th style={s.th}>Registered</th>
                 <th style={s.th}>Role</th>
-                <th style={s.th}>Change Role</th>
+                <th style={s.th}>Status</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map(r => {
                 const currentRole = r.role || "student";
+                const isCancelled = r.status === "cancelled";
                 return (
-                  <tr key={r.id}>
+                  <tr key={r.id} style={{ opacity: isCancelled ? 0.55 : 1 }}>
                     <td style={s.td}>
                       <div style={{ fontWeight: 600, color: G.dark }}>{r.profiles?.full_name || "—"}</div>
                       <div style={{ fontSize: 11, color: "#aaa" }}>{r.profiles?.student_id} · {r.profiles?.email}</div>
@@ -446,12 +487,7 @@ function RegistrationsTab({ seminar }) {
                     <td style={{ ...s.td, fontSize: 12 }}>{formatDate(r.registered_at)}</td>
                     <td style={s.td}><span style={s.tag(roleColor(currentRole))}>{roleLabel(currentRole)}</span></td>
                     <td style={s.td}>
-                      <select value={currentRole} onChange={e => updateRole(r.id, e.target.value)}
-                        style={{ padding: "6px 10px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12, outline: "none", cursor: "pointer", background: "#fff" }}>
-                        {SEMINAR_ROLES.map(role => (
-                          <option key={role.value} value={role.value}>{role.label}</option>
-                        ))}
-                      </select>
+                      <span style={s.tag(isCancelled ? "red" : "green")}>{isCancelled ? "Cancelled" : "Active"}</span>
                     </td>
                   </tr>
                 );
@@ -463,7 +499,6 @@ function RegistrationsTab({ seminar }) {
     </div>
   );
 }
-
 // ── Evaluation Fields ─────────────────────────────────────────────
 const EVAL_FIELDS = [
   { key: "q_content",      label: "Content Quality",       desc: "Relevance and accuracy of the seminar content" },
@@ -488,9 +523,10 @@ function StarRating({ value }) {
 }
 
 function EvaluationsTab({ seminar }) {
-  const [evals, setEvals]       = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [selected, setSelected] = useState(null);
+  const [evals, setEvals]           = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [selected, setSelected]     = useState(null);
+  const [starFilter, setStarFilter] = useState("all");
 
   const load = async () => {
     setLoading(true);
@@ -510,35 +546,70 @@ function EvaluationsTab({ seminar }) {
     const vals = evals.map(e => e[key]).filter(v => v != null);
     return vals.length ? (vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(1) : "—";
   };
+
   const overallAvg = evals.length > 0
     ? (EVAL_FIELDS.map(f => parseFloat(avg(f.key))||0).reduce((a,b)=>a+b,0)/EVAL_FIELDS.length).toFixed(1)
     : "—";
 
+  // Each eval's overall rating = rounded average of all q_ fields
+  const evalOverall = (e) => {
+    const vals = EVAL_FIELDS.map(f => e[f.key]).filter(v => v != null);
+    return vals.length ? Math.round(vals.reduce((a,b) => a+b, 0) / vals.length) : 0;
+  };
+
+  const starCounts = [5,4,3,2,1].reduce((acc, star) => {
+    acc[star] = evals.filter(e => evalOverall(e) === star).length;
+    return acc;
+  }, {});
+
+  const filteredEvals = starFilter === "all"
+    ? evals
+    : evals.filter(e => evalOverall(e) === parseInt(starFilter));
+
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
+
+  const filterBtn = (active) => ({
+    padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+    border: `1.5px solid ${active ? "#2D6A2D" : "#DDE8DD"}`,
+    background: active ? "#E8F5E9" : "#fff",
+    color: active ? "#2D6A2D" : "#555",
+    display: "flex", alignItems: "center", gap: 4,
+  });
 
   return (
     <div>
+      {/* Stat cards */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <div style={s.statCard(G.base)}>
           <div style={{ ...s.statNum, color: G.base }}>{evals.length}</div>
           <div style={s.statLabel}>Responses</div>
         </div>
         <div style={s.statCard("#f59e0b")}>
-          <div style={{ ...s.statNum, color: "#f59e0b", fontSize:22 }}>
-            <i className="bi bi-star-fill me-1" style={{ fontSize:18 }}/>{overallAvg}
+          <div style={{ ...s.statNum, color: "#f59e0b", fontSize: 22 }}>
+            <i className="bi bi-star-fill me-1" style={{ fontSize: 18 }}/>{overallAvg}
           </div>
           <div style={s.statLabel}>Overall Average</div>
         </div>
+        {[5,4,3,2,1].map(star => (
+          <div key={star} style={s.statCard("#f59e0b")}>
+            <div style={{ ...s.statNum, color: "#f59e0b", fontSize: 22 }}>{starCounts[star] || 0}</div>
+            <div style={s.statLabel}>
+              {[...Array(star)].map((_,i) => <i key={i} className="bi bi-star-fill" style={{ color: "#f59e0b", fontSize: 10 }}/>)}
+              {[...Array(5-star)].map((_,i) => <i key={i} className="bi bi-star" style={{ color: "#e5e7eb", fontSize: 10 }}/>)}
+            </div>
+          </div>
+        ))}
       </div>
 
       {evals.length === 0 ? (
         <div style={s.emptyBox}>
-          <i className="bi bi-clipboard-data d-block mb-2" style={{ fontSize:40, color:G.pale }}/>
+          <i className="bi bi-clipboard-data d-block mb-2" style={{ fontSize: 40, color: G.pale }}/>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No evaluations submitted yet</div>
           <div style={{ fontSize: 13, color: "#aaa" }}>Evaluation forms submitted by participants will appear here.</div>
         </div>
       ) : (
         <>
+          {/* Evaluation Summary */}
           <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #DDE8DD", padding: "20px 24px", marginBottom: 20 }}>
             <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 14 }}>
               <i className="bi bi-bar-chart-line me-2" style={{ color: G.base }}/>Evaluation Summary
@@ -563,50 +634,83 @@ function EvaluationsTab({ seminar }) {
             </div>
           </div>
 
+          {/* Star rating filter */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
+              Filter by Rating
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => setStarFilter("all")} style={filterBtn(starFilter === "all")}>
+                All ({evals.length})
+              </button>
+              {[5,4,3,2,1].map(star => (
+                <button key={star} onClick={() => setStarFilter(String(star))} style={filterBtn(starFilter === String(star))}>
+                  {[...Array(star)].map((_,i) => (
+                    <i key={i} className="bi bi-star-fill" style={{ color: "#f59e0b", fontSize: 11 }}/>
+                  ))}
+                  {[...Array(5-star)].map((_,i) => (
+                    <i key={i} className="bi bi-star" style={{ color: "#d1d5db", fontSize: 11 }}/>
+                  ))}
+                  <span style={{ marginLeft: 4 }}>({starCounts[star] || 0})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Results count */}
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
+            Showing <strong>{filteredEvals.length}</strong> of <strong>{evals.length}</strong> responses
+          </div>
+
+          {/* Individual Responses */}
           <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 12 }}>
             <i className="bi bi-person-lines-fill me-2" style={{ color: G.base }}/>Individual Responses
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {evals.map(e => (
-              <div key={e.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #DDE8DD", overflow: "hidden" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#F9FBF9", borderBottom: "1px solid #DDE8DD", cursor: "pointer" }}
-                  onClick={() => setSelected(selected?.id === e.id ? null : e)}>
-                  <div>
-                    <div style={{ fontWeight: 600, color: G.dark }}>{e.profiles?.full_name || "Anonymous"}</div>
-                    <div style={{ fontSize: 11, color: "#aaa" }}>{e.profiles?.student_id} · {formatDate(e.submitted_at)}</div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <StarRating value={parseFloat(avg("q_overall")) || e.q_overall || 0}/>
-                    <i className={`bi bi-chevron-${selected?.id===e.id?"up":"down"}`} style={{ color: "#aaa" }}/>
-                  </div>
-                </div>
-                {selected?.id === e.id && (
-                  <div style={{ padding: "16px" }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 12, marginBottom: 12 }}>
-                      {EVAL_FIELDS.map(f => (
-                        <div key={f.key} style={{ background: "#F5F7F5", borderRadius: 8, padding: "10px 12px" }}>
-                          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>{f.label}</div>
-                          <StarRating value={e[f.key]}/>
-                        </div>
-                      ))}
+
+          {filteredEvals.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "40px 0", color: "#aaa" }}>No responses match the selected rating.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {filteredEvals.map(e => (
+                <div key={e.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #DDE8DD", overflow: "hidden" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#F9FBF9", borderBottom: "1px solid #DDE8DD", cursor: "pointer" }}
+                    onClick={() => setSelected(selected?.id === e.id ? null : e)}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: G.dark }}>{e.profiles?.full_name || "Anonymous"}</div>
+                      <div style={{ fontSize: 11, color: "#aaa" }}>{e.profiles?.student_id} · {formatDate(e.submitted_at)}</div>
                     </div>
-                    {e.comments && (
-                      <div style={{ background: G.wash, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: G.dark, lineHeight: 1.6 }}>
-                        <i className="bi bi-chat-quote me-2" style={{ color: G.base }}/>
-                        {e.comments}
-                      </div>
-                    )}
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <StarRating value={e.q_overall || 0}/>
+                      <i className={`bi bi-chevron-${selected?.id===e.id?"up":"down"}`} style={{ color: "#aaa" }}/>
+                    </div>
                   </div>
-                )}
-              </div>
-            ))}
-          </div>
+                  {selected?.id === e.id && (
+                    <div style={{ padding: "16px" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 12, marginBottom: 12 }}>
+                        {EVAL_FIELDS.map(f => (
+                          <div key={f.key} style={{ background: "#F5F7F5", borderRadius: 8, padding: "10px 12px" }}>
+                            <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>{f.label}</div>
+                            <StarRating value={e[f.key]}/>
+                          </div>
+                        ))}
+                      </div>
+                      {e.comments && (
+                        <div style={{ background: G.wash, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: G.dark, lineHeight: 1.6 }}>
+                          <i className="bi bi-chat-quote me-2" style={{ color: G.base }}/>
+                          {e.comments}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
-
 // ── Main Page ─────────────────────────────────────────────────────
 export default function SeminarsPage() {
   const [seminars, setSeminars]   = useState([]);
@@ -631,7 +735,6 @@ export default function SeminarsPage() {
       if (active) { setSeminars(data || []); if (data?.length) setSelected(data[0]); setLoading(false); }
     })();
 
-    // Fire-and-forget: check for seminars that just ended and need eval notifications
     triggerEvaluationNotifications();
 
     return () => { active = false; };

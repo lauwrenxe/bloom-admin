@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
+import { useToast } from "./App.jsx";
 
 const G = {
   dark:  "#2d4a18", mid:   "#3a5a20", base:  "#5a7a3a",
@@ -22,7 +23,7 @@ const s = {
   cardBody:    { fontSize: 13, color: "#555", lineHeight: 1.5, marginBottom: 8 },
   cardMeta:    { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 12 },
   cardActions: { display: "flex", gap: 6, flexShrink: 0, marginTop: 2 },
-  tag:        (c) => ({ display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "yellow" ? "#fef9c3" : c === "red" ? "#fee2e2" : c === "blue" ? "#dbeafe" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "yellow" ? "#92400e" : c === "red" ? "#dc2626" : c === "blue" ? "#1d4ed8" : "#555" }),
+  tag:        (c) => ({ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 9px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: c === "green" ? "#dcfce7" : c === "yellow" ? "#fef9c3" : c === "red" ? "#fee2e2" : c === "blue" ? "#dbeafe" : "#f3f4f6", color: c === "green" ? "#16a34a" : c === "yellow" ? "#92400e" : c === "red" ? "#dc2626" : c === "blue" ? "#1d4ed8" : "#555" }),
   iconBtn:    (c) => ({ background: "none", border: "none", cursor: "pointer", color: c || "#999", fontSize: 15, padding: "5px 7px", borderRadius: 6 }),
   overlay:     { position: "fixed", inset: 0, background: "rgba(0,0,0,0.42)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
   modal:       { background: "#fff", borderRadius: 16, width: "100%", maxWidth: 540, maxHeight: "92vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" },
@@ -64,31 +65,52 @@ function formatDate(iso) {
   });
 }
 
+// ── Confirm Dialog (replaces browser confirm()) ───────────────────────────────
+function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm, onCancel, icon }) {
+  return (
+    <div style={{ ...s.overlay, zIndex: 1100 }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 400, boxShadow: "0 20px 60px rgba(0,0,0,0.25)", overflow: "hidden" }}>
+        <div style={{ padding: "22px 24px 18px", borderBottom: `1px solid ${G.wash}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            {icon && (
+              <div style={{ width: 38, height: 38, borderRadius: 10, background: danger ? "#fee2e2" : G.wash, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <i className={`bi ${icon}`} style={{ fontSize: 18, color: danger ? "#dc2626" : G.base }} />
+              </div>
+            )}
+            <span style={{ fontSize: 16, fontWeight: 800, color: G.dark }}>{title}</span>
+          </div>
+          <p style={{ fontSize: 13, color: "#555", lineHeight: 1.6, margin: 0, paddingLeft: icon ? 50 : 0 }}>{message}</p>
+        </div>
+        <div style={{ padding: "14px 24px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button style={s.btnSecondary} onClick={onCancel}>Cancel</button>
+          <button
+            style={{ ...s.btnPrimary, background: danger ? "#dc2626" : G.dark }}
+            onClick={onConfirm}
+          >
+            {confirmLabel || "Confirm"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────
 //  NOTIFICATION HELPERS
 // ─────────────────────────────────────────────────────────────────
-
-/**
- * Insert a notification row for every active user who matches
- * the announcement's target_audience.
- * Called only when an announcement is published for the first time.
- */
 async function insertAnnouncementNotifications(announcement) {
   try {
-    // Fetch target user IDs based on target_audience
     let query = supabase.from("profiles").select("id, role").eq("is_active", true);
     if (announcement.target_audience === "students") {
       query = query.eq("role", "student");
     } else if (announcement.target_audience === "admins") {
-      // Admins are not mobile users — skip notification insert
       return;
     }
-    // "all" → no additional filter
 
     const { data: users, error } = await query;
     if (error || !users?.length) return;
 
-    const now = new Date().toISOString();
+    const now  = new Date().toISOString();
     const rows = users.map(u => ({
       user_id:        u.id,
       type:           "announcement",
@@ -100,7 +122,6 @@ async function insertAnnouncementNotifications(announcement) {
       created_at:     now,
     }));
 
-    // Batch insert — Supabase accepts arrays
     await supabase.from("notifications").insert(rows);
   } catch (e) {
     console.error("insertAnnouncementNotifications error:", e);
@@ -109,6 +130,8 @@ async function insertAnnouncementNotifications(announcement) {
 
 // ─────────────────────────────────────────────────────────────────
 export default function AnnouncementsPage() {
+  const toast = useToast();
+
   const [announcements, setAnnouncements] = useState([]);
   const [loading,       setLoading]       = useState(true);
   const [search,        setSearch]        = useState("");
@@ -124,6 +147,10 @@ export default function AnnouncementsPage() {
   const [notifySending, setNotifySending] = useState(false);
   const [notifyResult,  setNotifyResult]  = useState(null);
   const [departments,   setDepartments]   = useState([]);
+
+  // ── Confirmation dialog state ──────────────────────────────────
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  // confirmDialog = { title, message, confirmLabel, danger, icon, onConfirm }
 
   // ── Fetch ──────────────────────────────────────────────────────
   const fetchData = async () => {
@@ -206,7 +233,7 @@ export default function AnnouncementsPage() {
       published_at:    publishedAt,
     };
 
-    let err  = null;
+    let err     = null;
     let savedId = null;
 
     if (modal === "add") {
@@ -219,7 +246,6 @@ export default function AnnouncementsPage() {
       savedId = result.data?.id;
       if (err) console.error("Insert error:", err);
     } else {
-      // Check if this edit is publishing for the first time
       const wasPublished = !!modal.published_at;
       const result = await supabase
         .from("announcements")
@@ -228,25 +254,18 @@ export default function AnnouncementsPage() {
       err     = result.error;
       savedId = modal.id;
 
-      // Insert notifications only if newly published (was draft, now published)
       if (!err && isPublishing && !wasPublished) {
-        await insertAnnouncementNotifications({
-          ...payload,
-          id: savedId,
-        });
+        await insertAnnouncementNotifications({ ...payload, id: savedId });
       }
     }
 
-    // Insert notifications for new announcements that are published immediately
     if (!err && modal === "add" && isPublishing && savedId) {
-      await insertAnnouncementNotifications({
-        ...payload,
-        id: savedId,
-      });
+      await insertAnnouncementNotifications({ ...payload, id: savedId });
     }
 
     setSaving(false);
     if (err) { setError(err.message); return; }
+    toast(modal === "add" ? "Announcement created." : "Announcement updated.", "success");
     setModal(null);
     setForm({});
     fetchData();
@@ -263,7 +282,6 @@ export default function AnnouncementsPage() {
       .eq("id", a.id);
 
     if (!err) {
-      // Insert notifications when publishing for the first time
       if (!wasPublished && newVal) {
         await insertAnnouncementNotifications({
           id:              a.id,
@@ -274,24 +292,63 @@ export default function AnnouncementsPage() {
         });
       }
       fetchData();
+    } else {
+      toast("Failed to update announcement.", "error");
     }
   };
 
-  // ── Toggle pin ─────────────────────────────────────────────────
-  const togglePin = async (a) => {
-    const { error: err } = await supabase
-      .from("announcements")
-      .update({ is_pinned: !a.is_pinned })
-      .eq("id", a.id);
-    setAnnouncements(prev => prev.map(x => x.id === a.id ? { ...x, is_pinned: !a.is_pinned } : x));
-    if (!err) fetchData();
+  // ── Toggle pin — with confirmation dialog ──────────────────────
+  const togglePin = (a) => {
+    const willPin = !a.is_pinned;
+    setConfirmDialog({
+      title:        willPin ? "Pin Announcement" : "Unpin Announcement",
+      message:      willPin
+        ? `Pin "${a.title}" to the top of the announcements list? It will appear above all other announcements.`
+        : `Unpin "${a.title}"? It will return to its regular position in the list.`,
+      confirmLabel: willPin ? "Pin" : "Unpin",
+      danger:       false,
+      icon:         willPin ? "bi-pin-fill" : "bi-pin-angle",
+      onConfirm:    async () => {
+        setConfirmDialog(null);
+        const { error: err } = await supabase
+          .from("announcements")
+          .update({ is_pinned: willPin })
+          .eq("id", a.id);
+        if (!err) {
+          setAnnouncements(prev =>
+            prev.map(x => x.id === a.id ? { ...x, is_pinned: willPin } : x)
+          );
+          toast(willPin ? "Announcement pinned." : "Announcement unpinned.", "success");
+          fetchData();
+        } else {
+          toast("Failed to update pin status.", "error");
+        }
+      },
+    });
   };
 
-  // ── Delete ─────────────────────────────────────────────────────
-  const deleteAnn = async (a) => {
-    if (!confirm(`Delete "${a.title}"?`)) return;
-    const { error: err } = await supabase.from("announcements").delete().eq("id", a.id);
-    if (!err) fetchData();
+  // ── Delete — with confirmation dialog ─────────────────────────
+  const deleteAnn = (a) => {
+    setConfirmDialog({
+      title:        "Delete Announcement",
+      message:      `Are you sure you want to delete "${a.title}"? This action cannot be undone.`,
+      confirmLabel: "Delete",
+      danger:       true,
+      icon:         "bi-trash3",
+      onConfirm:    async () => {
+        setConfirmDialog(null);
+        const { error: err } = await supabase
+          .from("announcements")
+          .delete()
+          .eq("id", a.id);
+        if (!err) {
+          toast("Announcement deleted.", "success");
+          fetchData();
+        } else {
+          toast("Failed to delete announcement.", "error");
+        }
+      },
+    });
   };
 
   // ── Filtered list ──────────────────────────────────────────────
@@ -306,7 +363,6 @@ export default function AnnouncementsPage() {
       return new Date(b.created_at) - new Date(a.created_at);
     });
 
-  // ── Form field helper ──────────────────────────────────────────
   const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   // ── Notify modal ───────────────────────────────────────────────
@@ -338,7 +394,7 @@ export default function AnnouncementsPage() {
     const { data: { session } } = await supabase.auth.getSession();
 
     const announcement = notifyTarget;
-    const subject = `📢 New Announcement: ${announcement.title}`;
+    const subject  = `New Announcement: ${announcement.title}`;
     const htmlBody = `
       <!DOCTYPE html>
       <html>
@@ -349,11 +405,11 @@ export default function AnnouncementsPage() {
             <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
               <tr><td style="background:linear-gradient(135deg,#1A2E1A,#2D6A2D);padding:32px 40px;text-align:center;">
                 <div style="color:#fff;font-size:13px;letter-spacing:3px;text-transform:uppercase;opacity:0.8;margin-bottom:8px;">BLOOM GAD — CvSU GADRC</div>
-                <div style="color:#fff;font-size:24px;font-weight:800;">📢 New Announcement</div>
+                <div style="color:#fff;font-size:24px;font-weight:800;">New Announcement</div>
               </td></tr>
               <tr><td style="padding:40px;">
                 <h2 style="color:#1A2E1A;font-size:20px;margin:0 0 16px 0;">${announcement.title}</h2>
-                ${announcement.is_pinned ? '<div style="display:inline-block;background:#dcfce7;color:#16a34a;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;margin-bottom:16px;">📌 Pinned Announcement</div>' : ''}
+                ${announcement.is_pinned ? '<div style="display:inline-block;background:#dcfce7;color:#16a34a;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;margin-bottom:16px;">Pinned Announcement</div>' : ''}
                 <div style="color:#444;font-size:15px;line-height:1.8;border-left:4px solid #2D6A2D;padding-left:16px;margin-bottom:24px;">
                   ${(announcement.body || announcement.content || '').split('\n').join('<br>')}
                 </div>
@@ -391,13 +447,22 @@ export default function AnnouncementsPage() {
   // ══════════════════════════════════════════════════════════════
   return (
     <div style={s.page}>
+
       {/* Header */}
       <div style={s.header}>
         <div>
-          <div style={s.title}>📢 Announcements</div>
-          <div style={s.subtitle}>{announcements.length} total · {announcements.filter(a => a.published_at).length} published</div>
+          <div style={{ ...s.title, display: "flex", alignItems: "center", gap: 10 }}>
+            <i className="bi bi-megaphone-fill" style={{ fontSize: 20, color: G.base }} />
+            Announcements
+          </div>
+          <div style={s.subtitle}>
+            {announcements.length} total · {announcements.filter(a => a.published_at).length} published
+          </div>
         </div>
-        <button style={s.addBtn} onClick={openAdd}>＋ New Announcement</button>
+        <button style={s.addBtn} onClick={openAdd}>
+          <i className="bi bi-plus-lg" />
+          New Announcement
+        </button>
       </div>
 
       {/* Toolbar */}
@@ -415,12 +480,16 @@ export default function AnnouncementsPage() {
         <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>
       ) : filtered.length === 0 ? (
         <div style={{ padding: 60, textAlign: "center", color: "#aaa" }}>
-          <div style={{ fontSize: 44, marginBottom: 12 }}>📢</div>
+          <i className="bi bi-megaphone" style={{ fontSize: 44, color: G.pale, display: "block", marginBottom: 12 }} />
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>
             {search ? "No announcements match your search" : "No announcements yet"}
           </div>
           <div style={{ fontSize: 13 }}>
-            {!search && <button style={{ ...s.addBtn, display: "inline-flex", marginTop: 12 }} onClick={openAdd}>＋ Create First Announcement</button>}
+            {!search && (
+              <button style={{ ...s.addBtn, display: "inline-flex", marginTop: 12 }} onClick={openAdd}>
+                <i className="bi bi-plus-lg" /> Create First Announcement
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -432,13 +501,18 @@ export default function AnnouncementsPage() {
               <div key={a.id} style={{ ...s.card, borderLeft: a.is_pinned ? `4px solid ${G.light}` : `4px solid transparent` }}>
                 <div style={s.cardLeft}>
                   <div style={s.cardTitle}>
-                    {a.is_pinned && <span style={{ ...s.pinBadge, marginRight: 8 }}>📌 Pinned</span>}
+                    {a.is_pinned && (
+                      <span style={{ ...s.pinBadge, marginRight: 8 }}>
+                        <i className="bi bi-pin-fill" style={{ fontSize: 10 }} /> Pinned
+                      </span>
+                    )}
                     {a.title}
                   </div>
                   <div style={s.cardBody}>{body.length > 160 ? body.slice(0, 160) + "…" : body}</div>
                   <div style={s.cardMeta}>
                     <span style={s.tag(published ? "green" : "yellow")}>
-                      {published ? "✅ Published" : "📝 Draft"}
+                      <i className={`bi ${published ? "bi-check-circle-fill" : "bi-file-earmark-text"}`} style={{ fontSize: 10 }} />
+                      {published ? "Published" : "Draft"}
                     </span>
                     <span style={s.tag(priorityColor(a.priority))}>
                       {(a.priority || "normal").toUpperCase()}
@@ -446,34 +520,94 @@ export default function AnnouncementsPage() {
                     {a.type && <span style={s.tag("blue")}>{a.type}</span>}
                     <span style={s.tag()}>{a.target_audience || "all"}</span>
                     {a.expires_at && (
-                      <span style={{ fontSize: 11, color: "#aaa" }}>Expires {formatDate(a.expires_at)}</span>
+                      <span style={{ fontSize: 11, color: "#aaa" }}>
+                        <i className="bi bi-calendar-x" style={{ marginRight: 3 }} />
+                        Expires {formatDate(a.expires_at)}
+                      </span>
                     )}
                     <span style={{ fontSize: 11, color: "#ccc" }}>{formatDate(a.created_at)}</span>
                   </div>
                 </div>
+
                 <div style={s.cardActions}>
+                  {/* Publish / Unpublish */}
                   <button
-                    style={{ ...s.iconBtn(published ? "#f59e0b" : G.base), fontSize: 13, fontWeight: 700, background: published ? "#fef9c3" : G.wash, padding: "5px 10px", borderRadius: 6 }}
+                    style={{
+                      ...s.iconBtn(published ? "#f59e0b" : G.base),
+                      fontSize: 12, fontWeight: 700,
+                      background: published ? "#fef9c3" : G.wash,
+                      padding: "5px 10px", borderRadius: 6,
+                      display: "flex", alignItems: "center", gap: 5,
+                    }}
                     onClick={() => togglePublish(a)}
                     title={published ? "Unpublish" : "Publish"}
                   >
+                    <i className={`bi ${published ? "bi-eye-slash" : "bi-send-check"}`} />
                     {published ? "Unpublish" : "Publish"}
                   </button>
-                  <button style={s.iconBtn(a.is_pinned ? G.base : "#aaa")} onClick={() => togglePin(a)} title={a.is_pinned ? "Unpin" : "Pin"}>📌</button>
+
+                  {/* Pin / Unpin */}
                   <button
-                    style={{ ...s.iconBtn("#1d4ed8"), fontSize: 12, padding: "5px 10px", borderRadius: 6, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", cursor: "pointer", fontWeight: 600 }}
+                    style={{
+                      ...s.iconBtn(a.is_pinned ? G.base : "#aaa"),
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}
+                    onClick={() => togglePin(a)}
+                    title={a.is_pinned ? "Unpin" : "Pin"}
+                  >
+                    <i className={`bi ${a.is_pinned ? "bi-pin-fill" : "bi-pin-angle"}`} style={{ fontSize: 16 }} />
+                  </button>
+
+                  {/* Notify */}
+                  <button
+                    style={{
+                      ...s.iconBtn("#1d4ed8"),
+                      fontSize: 12, padding: "5px 10px", borderRadius: 6,
+                      background: "#eff6ff", border: "1px solid #bfdbfe",
+                      color: "#1d4ed8", cursor: "pointer", fontWeight: 600,
+                      display: "flex", alignItems: "center", gap: 5,
+                    }}
                     onClick={() => openNotify(a)}
                     title="Send Email Notification"
                   >
-                    <i className="bi bi-envelope me-1" />Notify
+                    <i className="bi bi-envelope" /> Notify
                   </button>
-                  <button style={s.iconBtn(G.base)} onClick={() => openEdit(a)} title="Edit">✏️</button>
-                  <button style={s.iconBtn("#dc2626")} onClick={() => deleteAnn(a)} title="Delete">🗑️</button>
+
+                  {/* Edit */}
+                  <button
+                    style={{ ...s.iconBtn(G.base), display: "flex", alignItems: "center", justifyContent: "center" }}
+                    onClick={() => openEdit(a)}
+                    title="Edit"
+                  >
+                    <i className="bi bi-pencil" style={{ fontSize: 15 }} />
+                  </button>
+
+                  {/* Delete */}
+                  <button
+                    style={{ ...s.iconBtn("#dc2626"), display: "flex", alignItems: "center", justifyContent: "center" }}
+                    onClick={() => deleteAnn(a)}
+                    title="Delete"
+                  >
+                    <i className="bi bi-trash3" style={{ fontSize: 15 }} />
+                  </button>
                 </div>
               </div>
             );
           })}
         </div>
+      )}
+
+      {/* ── Confirm Dialog ── */}
+      {confirmDialog && (
+        <ConfirmDialog
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel}
+          danger={confirmDialog.danger}
+          icon={confirmDialog.icon}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
       )}
 
       {/* ── Email Notification Modal ── */}
@@ -493,7 +627,9 @@ export default function AnnouncementsPage() {
               <button
                 style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, color: "#fff", cursor: "pointer", fontSize: 16, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center" }}
                 onClick={() => { setShowNotify(false); setNotifyResult(null); }}
-              >×</button>
+              >
+                <i className="bi bi-x" />
+              </button>
             </div>
 
             <div style={{ ...s.mBody, background: G.wash }}>
@@ -510,14 +646,15 @@ export default function AnnouncementsPage() {
                 <label style={s.label}>Send To</label>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {[
-                    ["all",        "📧 All Active Students"],
-                    ["department", "🏛️ By Department"],
-                  ].map(([val, lbl]) => (
+                    ["all",        "bi-people-fill",    "All Active Students"],
+                    ["department", "bi-building",       "By Department"],
+                  ].map(([val, icon, lbl]) => (
                     <label
                       key={val}
                       style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: notifyGroup === val ? "#fff" : "#f9fafb", border: `1.5px solid ${notifyGroup === val ? G.base : G.pale}`, borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: notifyGroup === val ? 700 : 400, color: G.dark }}
                     >
                       <input type="radio" name="notifyGroup" value={val} checked={notifyGroup === val} onChange={() => setNotifyGroup(val)} style={{ accentColor: G.base }} />
+                      <i className={`bi ${icon}`} style={{ color: notifyGroup === val ? G.base : "#999" }} />
                       {lbl}
                     </label>
                   ))}
@@ -536,16 +673,21 @@ export default function AnnouncementsPage() {
 
               {notifyResult && (
                 <div style={{ background: notifyResult.error ? "#fee2e2" : "#f0fdf4", border: `1px solid ${notifyResult.error ? "#fca5a5" : "#86efac"}`, borderRadius: 8, padding: "12px 16px", fontSize: 13 }}>
-                  {notifyResult.error
-                    ? <><i className="bi bi-exclamation-circle me-2" style={{ color: "#dc2626" }} />Error: {notifyResult.error}</>
-                    : <>
-                        <i className="bi bi-check-circle me-2" style={{ color: "#16a34a" }} />
-                        <strong style={{ color: "#16a34a" }}>Emails sent successfully!</strong>
-                        <div style={{ marginTop: 6, color: "#444", fontSize: 12 }}>
-                          ✅ Sent: {notifyResult.sent} &nbsp;|&nbsp; ❌ Failed: {notifyResult.failed}
-                        </div>
-                      </>
-                  }
+                  {notifyResult.error ? (
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#dc2626" }}>
+                      <i className="bi bi-exclamation-circle-fill" /> Error: {notifyResult.error}
+                    </span>
+                  ) : (
+                    <>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#16a34a", fontWeight: 700 }}>
+                        <i className="bi bi-check-circle-fill" /> Emails sent successfully!
+                      </span>
+                      <div style={{ marginTop: 6, color: "#444", fontSize: 12, display: "flex", gap: 16 }}>
+                        <span><i className="bi bi-check-circle me-1" style={{ color: "#16a34a" }} />Sent: {notifyResult.sent}</span>
+                        <span><i className="bi bi-x-circle me-1" style={{ color: "#dc2626" }} />Failed: {notifyResult.failed}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -554,14 +696,15 @@ export default function AnnouncementsPage() {
               <button style={s.btnSecondary} onClick={() => { setShowNotify(false); setNotifyResult(null); }}>Close</button>
               {!notifyResult && (
                 <button
-                  style={{ ...s.btnPrimary, background: "linear-gradient(135deg,#1d4ed8,#2563eb)", opacity: notifySending ? 0.7 : 1 }}
+                  style={{ ...s.btnPrimary, background: "linear-gradient(135deg,#1d4ed8,#2563eb)", opacity: notifySending ? 0.7 : 1, display: "flex", alignItems: "center", gap: 8 }}
                   onClick={sendEmailNotification}
                   disabled={notifySending || (notifyGroup === "department" && !notifyDept)}
                 >
-                  {notifySending
-                    ? <><span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite", marginRight: 8 }} />Sending…</>
-                    : <><i className="bi bi-send me-2" />Send Email Notification</>
-                  }
+                  {notifySending ? (
+                    <><span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite" }} /> Sending…</>
+                  ) : (
+                    <><i className="bi bi-send" /> Send Email Notification</>
+                  )}
                 </button>
               )}
             </div>
@@ -574,11 +717,21 @@ export default function AnnouncementsPage() {
         <div style={s.overlay}>
           <div style={s.modal}>
             <div style={s.mHeader}>
-              <span style={s.mTitle}>{modal === "add" ? "New Announcement" : "Edit Announcement"}</span>
-              <button style={s.iconBtn()} onClick={() => setModal(null)}>✕</button>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <i className={`bi ${modal === "add" ? "bi-megaphone" : "bi-pencil-square"}`} style={{ fontSize: 18, color: G.base }} />
+                <span style={s.mTitle}>{modal === "add" ? "New Announcement" : "Edit Announcement"}</span>
+              </div>
+              <button style={{ ...s.iconBtn(), display: "flex", alignItems: "center" }} onClick={() => setModal(null)}>
+                <i className="bi bi-x-lg" style={{ fontSize: 16 }} />
+              </button>
             </div>
             <div style={s.mBody}>
-              {error && <div style={s.error}>{error}</div>}
+              {error && (
+                <div style={s.error}>
+                  <i className="bi bi-exclamation-circle me-2" />
+                  {error}
+                </div>
+              )}
 
               <div style={s.fg}>
                 <label style={s.label}>Title *</label>
@@ -619,10 +772,12 @@ export default function AnnouncementsPage() {
               <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, color: G.dark, fontWeight: 600 }}>
                   <input type="checkbox" checked={!!form.is_published} onChange={e => setF("is_published", e.target.checked)} style={{ width: 16, height: 16, accentColor: G.base }} />
+                  <i className="bi bi-send-check" style={{ color: G.base }} />
                   Publish immediately
                 </label>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, color: G.dark, fontWeight: 600 }}>
                   <input type="checkbox" checked={!!form.is_pinned} onChange={e => setF("is_pinned", e.target.checked)} style={{ width: 16, height: 16, accentColor: G.base }} />
+                  <i className="bi bi-pin-fill" style={{ color: G.base }} />
                   Pin to top
                 </label>
               </div>
@@ -630,8 +785,16 @@ export default function AnnouncementsPage() {
 
             <div style={s.mFooter}>
               <button style={s.btnSecondary} onClick={() => setModal(null)}>Cancel</button>
-              <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>
-                {saving ? "Saving…" : modal === "add" ? "Create Announcement" : "Save Changes"}
+              <button
+                style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1, display: "flex", alignItems: "center", gap: 8 }}
+                onClick={save}
+                disabled={saving}
+              >
+                {saving ? (
+                  "Saving…"
+                ) : (
+                  <><i className={`bi ${modal === "add" ? "bi-plus-circle" : "bi-floppy"}`} />{modal === "add" ? "Create Announcement" : "Save Changes"}</>
+                )}
               </button>
             </div>
           </div>
