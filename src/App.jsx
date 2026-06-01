@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext, useCallback } from "react";
+import { useState, useEffect, useRef, createContext, useContext, useCallback } from "react";
 import { supabase } from "./lib/supabase.js";
 import { createClient } from "@supabase/supabase-js";
 import ModulesPage       from "./ModulesPage.jsx";
@@ -185,6 +185,12 @@ const GLOBAL_CSS = `
   .table-bloom th { background: #F9FBF9; padding: 10px 14px; }
   .table-bloom td { padding: 11px 14px; vertical-align: middle; }
   .table-bloom tbody tr:hover { background: #F5F7F5; }
+
+  /* ── Deactivation modal animation ── */
+  @keyframes fadeInScale {
+    from { opacity: 0; transform: scale(.94); }
+    to   { opacity: 1; transform: scale(1); }
+  }
 `;
 
 /* ─── NAV CONFIG ─────────────────────────────────────────────── */
@@ -271,7 +277,76 @@ export function ConfirmModal({ title, message, confirmLabel="Confirm", danger=fa
   );
 }
 
-/* ─── LOGIN ──────────────────────────────────────────────────── */
+/* ─── Deactivation Alert Modal ───────────────────────────────── */
+function DeactivationModal({ onOk }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0,
+      background: "rgba(0,0,0,.65)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 99999, padding: 16,
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: 16, width: "100%", maxWidth: 420,
+        boxShadow: "0 24px 64px rgba(0,0,0,.28)",
+        overflow: "hidden", animation: "fadeInScale .2s ease",
+      }}>
+        {/* Red header strip */}
+        <div style={{
+          background: "linear-gradient(135deg,#dc2626,#b91c1c)",
+          padding: "24px 28px 20px",
+          display: "flex", alignItems: "center", gap: 14,
+        }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 12,
+            background: "rgba(255,255,255,.15)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            flexShrink: 0,
+          }}>
+            <i className="bi bi-shield-x" style={{ color: "#fff", fontSize: 22 }}/>
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, color: "#fff", fontSize: 17, lineHeight: 1.2 }}>
+              Account Deactivated
+            </div>
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,.7)", marginTop: 3 }}>
+              Your session has been terminated
+            </div>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: "24px 28px" }}>
+          <p style={{ fontSize: 14, color: "#374151", lineHeight: 1.7, margin: "0 0 20px" }}>
+            Your account has been <strong>deactivated by an administrator</strong>.
+            You will be logged out and redirected to the login page.
+          </p>
+          <p style={{ fontSize: 13, color: "#6B7280", lineHeight: 1.6, margin: "0 0 24px" }}>
+            If you believe this is a mistake, please contact your system administrator for assistance.
+          </p>
+          <button
+            onClick={onOk}
+            style={{
+              width: "100%", padding: "12px",
+              background: "linear-gradient(135deg,#dc2626,#b91c1c)",
+              color: "#fff", border: "none", borderRadius: 10,
+              fontWeight: 700, fontSize: 14, cursor: "pointer",
+              fontFamily: "inherit",
+              boxShadow: "0 4px 12px rgba(220,38,38,.35)",
+              transition: "opacity .15s",
+            }}
+            onMouseEnter={e => e.currentTarget.style.opacity = "0.9"}
+            onMouseLeave={e => e.currentTarget.style.opacity = "1"}
+          >
+            OK — Log Me Out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── LOGIN (embedded in App.jsx for admin-only portal) ──────── */
 function LoginPage({ onLogin }) {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
@@ -292,6 +367,8 @@ function LoginPage({ onLogin }) {
     try {
       const { data, error: e } = await supabase.auth.signInWithPassword({ email, password });
       if (e) { setError("Invalid credentials. Please try again."); setLoading(false); return; }
+
+      // 1. Check role
       const { data: rows } = await supabase.from("user_roles").select("roles(name)").eq("user_id", data.user.id);
       const roleNames = (rows || []).map(r => r.roles?.name).filter(Boolean);
       if (!roleNames.includes("admin") && !roleNames.includes("super_admin")) {
@@ -299,6 +376,16 @@ function LoginPage({ onLogin }) {
         setError("Access denied. Admin accounts only.");
         setLoading(false); return;
       }
+
+      // 2. Check is_active BEFORE granting access
+      const { data: profile } = await supabase
+        .from("profiles").select("is_active").eq("id", data.user.id).maybeSingle();
+      if (profile?.is_active === false) {
+        await supabase.auth.signOut();
+        setError("Your account has been deactivated. Please contact an administrator for assistance.");
+        setLoading(false); return;
+      }
+
       const role = roleNames.includes("super_admin") ? "super_admin" : "admin";
       setLoading(false);
       onLogin(data.user, role);
@@ -381,6 +468,16 @@ function SuperAdminLoginPage({ onLogin }) {
         setError("Access denied. Super Admin credentials only.");
         setLoading(false); return;
       }
+
+      // Check is_active for super admin too
+      const { data: profile } = await supabaseSA
+        .from("profiles").select("is_active").eq("id", data.user.id).maybeSingle();
+      if (profile?.is_active === false) {
+        await supabaseSA.auth.signOut();
+        setError("Your account has been deactivated. Please contact an administrator for assistance.");
+        setLoading(false); return;
+      }
+
       setLoading(false);
       onLogin(data.user, "super_admin");
     } catch(err) {
@@ -463,7 +560,7 @@ function PageSkeleton() {
 }
 
 /* ─── ADMIN SHELL ────────────────────────────────────────────── */
-function AdminShell({ onLogout, user }) {
+function AdminShell({ onLogout, user, onDeactivated }) {
   const [active,      setActive]      = useState("dashboard");
   const [showProfile, setShowProfile] = useState(false);
   const [pageLoading, setPageLoading] = useState(false);
@@ -474,6 +571,50 @@ function AdminShell({ onLogout, user }) {
     loadCSS(INTER_CSS); loadCSS(BI_CSS);
     loadJS(BOOTSTRAP_JS);
   }, []);
+
+  // ── Real-time deactivation watcher ──────────────────────────────────────
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // Poll every 30 seconds as a reliable fallback
+    const pollInterval = setInterval(async () => {
+      try {
+        const { data } = await supabase
+          .from("profiles")
+          .select("is_active")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (data?.is_active === false) {
+          clearInterval(pollInterval);
+          onDeactivated();
+        }
+      } catch { /* network hiccup — ignore */ }
+    }, 30_000);
+
+    // Supabase Realtime for instant detection
+    const channel = supabase
+      .channel(`profile-active-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event:  "UPDATE",
+          schema: "public",
+          table:  "profiles",
+          filter: `id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (payload.new?.is_active === false) {
+            onDeactivated();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(pollInterval);
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, onDeactivated]);
 
   const navigate = (id) => {
     if (id === active) return;
@@ -643,11 +784,20 @@ async function checkRole(userId) {
   } catch { return null; }
 }
 
+async function checkIsActive(userId) {
+  try {
+    const { data } = await supabase
+      .from("profiles").select("is_active").eq("id", userId).maybeSingle();
+    return data?.is_active !== false; // true if active or null (unknown)
+  } catch { return true; }
+}
+
 export default function App() {
   const [loggedIn,          setLoggedIn]          = useState(false);
   const [user,              setUser]              = useState(null);
   const [checking,          setChecking]          = useState(true);
   const [userRole,          setUserRole]          = useState(null);
+  const [showDeactivated,   setShowDeactivated]   = useState(false);
   const [isSuperAdminRoute, setIsSuperAdminRoute] = useState(
     window.location.pathname === "/super-admin" || window.location.hash === "#super-admin"
   );
@@ -678,6 +828,13 @@ export default function App() {
             setChecking(false);
             return;
           }
+          // Guard: reject deactivated accounts even on session restore
+          const active = await checkIsActive(session.user.id);
+          if (!active) {
+            await supabase.auth.signOut();
+            setChecking(false);
+            return;
+          }
           setUser(session.user);
           setUserRole(role);
           setLoggedIn(true);
@@ -696,6 +853,19 @@ export default function App() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // Called by AdminShell when Realtime detects is_active → false
+  const handleDeactivated = useCallback(() => {
+    setShowDeactivated(true);
+  }, []);
+
+  // Called when user clicks OK on the deactivation modal
+  const handleDeactivationOk = useCallback(async () => {
+    setShowDeactivated(false);
+    if (userRole === "super_admin") await supabaseSA.auth.signOut();
+    else await supabase.auth.signOut();
+    setLoggedIn(false); setUser(null); setUserRole(null);
+  }, [userRole]);
 
   if (checking) return (
     <>
@@ -722,6 +892,10 @@ export default function App() {
   return (
     <ToastProvider>
       <style>{GLOBAL_CSS}</style>
+
+      {/* Deactivation modal — shown on top of everything */}
+      {showDeactivated && <DeactivationModal onOk={handleDeactivationOk}/>}
+
       {loggedIn && userRole === "super_admin"
         ? <SuperAdminPage superUser={user} onLogout={handleLogout} db={supabaseSA}/>
         : isSuperAdminRoute && userRole !== "admin"
@@ -729,7 +903,7 @@ export default function App() {
         : isSuperAdminRoute && userRole === "admin"
         ? <SuperAdminLoginPage onLogin={(u, role) => { setUser(u); setUserRole(role); setLoggedIn(true); }}/>
         : loggedIn && userRole === "admin"
-        ? <AdminShell onLogout={handleLogout} user={user}/>
+        ? <AdminShell onLogout={handleLogout} user={user} onDeactivated={handleDeactivated}/>
         : <LoginPage onLogin={(u, role) => { setUser(u); setUserRole(role); setLoggedIn(true); }}/>
       }
     </ToastProvider>
