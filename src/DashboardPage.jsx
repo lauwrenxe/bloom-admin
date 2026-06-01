@@ -1,6 +1,39 @@
-
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./lib/supabase.js";
+
+/* ─── Safe navigation helper ─────────────────────────────────
+ * useNavigate() throws if called outside a <Router> context.
+ * This hook wraps it so DashboardPage never crashes — it falls
+ * back to window.history.pushState (same SPA behaviour, no reload)
+ * or window.location.href as a last resort.
+ */
+function useSafeNavigate() {
+  // We call useNavigate conditionally via a dynamic require so React's
+  // rules-of-hooks aren't violated at module level.  The try/catch
+  // swallows the "must be inside Router" invariant error.
+  let routerNavigate = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { useNavigate } = require("react-router-dom");
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    routerNavigate = useNavigate();
+  } catch (_) {
+    // Not inside a Router context — fall through to the polyfill below
+  }
+
+  return useCallback((path) => {
+    if (routerNavigate) {
+      routerNavigate(path);
+    } else if (window.history?.pushState) {
+      window.history.pushState({}, "", path);
+      window.dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+    } else {
+      window.location.href = path;
+    }
+  // routerNavigate identity is stable per render; this is intentional
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routerNavigate]);
+}
 
 /* ─── date helpers ────────────────────────────────────────── */
 const getToday    = () => new Date().toISOString().split("T")[0];
@@ -31,11 +64,9 @@ function fmtDate(iso) {
 }
 
 function toDateStr(iso) {
-  // Returns "YYYY-MM-DD" in local time, safe for both date strings and timestamps
   if (!iso) return "";
   const d = new Date(iso);
   if (isNaN(d)) return iso.slice(0,10);
-  // Use Manila offset (+08:00) to get the correct local date
   const manila = new Date(d.toLocaleString("en-US", { timeZone:"Asia/Manila" }));
   return `${manila.getFullYear()}-${String(manila.getMonth()+1).padStart(2,"0")}-${String(manila.getDate()).padStart(2,"0")}`;
 }
@@ -126,23 +157,32 @@ const CSS = `
   .progress-bloom .progress-bar { border-radius: 4px; }
   .stat-trend-up   { color: #107C10; font-size: 11px; font-weight: 700; }
   .stat-trend-down { color: #C50F1F; font-size: 11px; font-weight: 700; }
-  /* scroll containers */
   .dash-scroll-body {
     overflow-y: auto; overflow-x: hidden;
     scrollbar-width: thin; scrollbar-color: #ccc transparent;
   }
   .dash-scroll-body::-webkit-scrollbar { width: 4px; }
   .dash-scroll-body::-webkit-scrollbar-thumb { background: #ccc; border-radius: 4px; }
-  /* fixed-height cards */
   .dash-fixed-card   .card-body { height: 320px; display: flex; flex-direction: column; }
   .dash-fixed-card-lg .card-body { height: 400px; display: flex; flex-direction: column; }
-  /* calendar cell hover */
   .cal-cell { transition: background .12s; cursor: pointer; }
   .cal-cell:hover { background: #E8F5E9 !important; }
-  /* event item hover */
   .ev-item { transition: background .12s, box-shadow .12s; cursor: pointer; }
   .ev-item:hover { background: #f0fdf4 !important; box-shadow: 0 2px 10px rgba(0,0,0,.07) !important; }
-  /* modal overlay */
+  /* view-all nav button */
+  .dash-viewall-btn {
+    font-size: 11px;
+    background: #E8F5E9;
+    color: var(--bloom-dark);
+    font-weight: 600;
+    text-decoration: none;
+    border: none;
+    border-radius: 6px;
+    padding: 2px 10px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .dash-viewall-btn:hover { background: #C8E6C9; color: var(--bloom-dark); }
   .bloom-overlay {
     position: fixed; inset: 0;
     background: rgba(0,0,0,.45);
@@ -159,16 +199,13 @@ const CSS = `
   }
   @keyframes fadeIn  { from{opacity:0} to{opacity:1} }
   @keyframes slideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
-  /* animations */
   @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
   .dash-animate { animation: fadeUp .25s ease forwards; }
   .dash-animate:nth-child(2){animation-delay:.05s}
   .dash-animate:nth-child(3){animation-delay:.10s}
   .dash-animate:nth-child(4){animation-delay:.15s}
-  /* refreshing */
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   .refreshing-pulse { animation: pulse 1.2s ease-in-out infinite; }
-  /* skeleton */
   .skeleton {
     background: linear-gradient(90deg,#e8ede8 25%,#f0f4f0 50%,#e8ede8 75%);
     background-size: 200% 100%;
@@ -176,110 +213,158 @@ const CSS = `
     border-radius: 6px;
   }
   @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
-  /* source type badges */
   .ev-badge-event        { background:#E8F5E9; color:#1A2E1A; }
   .ev-badge-seminar      { background:#DBEAFE; color:#1D4ED8; }
   .ev-badge-announcement { background:#FEF3C7; color:#92400E; }
 `;
 
-/* ─── Merge calendar events (mirrors CalendarPage.mergeAllEvents) ── */
+/* ─── Calendar data fetchers ──────────────────────────────── */
 /**
- * Fetches events, seminars, announcements and merges them into a
- * single unified array — same shape as CalendarPage uses.
- * Scoped to monthFrom..monthTo window for the mini calendar dots.
+ * Fetches events, seminars, and announcements merged for a calendar month
+ * window.  monthFrom / monthTo are plain "YYYY-MM-DD" strings.
+ *
+ * FIXES:
+ * 1. Upper-bound uses "YYYY-MM-DDT23:59:59" — works for both `date` and
+ *    `timestamptz` Postgres columns (a bare date string can sort BEFORE a
+ *    timestamp on the same day, silently excluding same-day records).
+ * 2. `events` rows are tagged with _source:"event" so the calendar dot,
+ *    badge renderer, and "This Month" counters can distinguish them.
+ * 3. Each source is fetched via Promise.allSettled so a single table
+ *    error never silences data from the other tables.
+ * 4. `start_date` / `end_date` on events are normalised through toDateStr
+ *    so timestamptz values are converted to plain local date strings before
+ *    the calendar dayMap lookup.
  */
 async function fetchMergedCalendarEvents(monthFrom, monthTo) {
-  const [evRes, semRes, annRes] = await Promise.all([
-    supabase.from("events")
+  const toEnd = (d) => `${d}T23:59:59`;
+
+  const [evRes, semRes, annRes] = await Promise.allSettled([
+    supabase
+      .from("events")
       .select("id,title,start_date,end_date,description,location,color_hex,event_type")
-      .gte("start_date", monthFrom).lte("start_date", monthTo),
-    supabase.from("seminars")
+      .gte("start_date", monthFrom)
+      .lte("start_date", toEnd(monthTo)),
+
+    supabase
+      .from("seminars")
       .select("id,title,scheduled_start,scheduled_end,status,venue,description")
-      .gte("scheduled_start", monthFrom).lte("scheduled_start", monthTo),
-    supabase.from("announcements")
+      .gte("scheduled_start", monthFrom)
+      .lte("scheduled_start", toEnd(monthTo)),
+
+    supabase
+      .from("announcements")
       .select("id,title,body,content,published_at,is_pinned")
-      .not("published_at","is",null)
-      .gte("published_at", monthFrom).lte("published_at", monthTo),
+      .not("published_at", "is", null)
+      .gte("published_at", monthFrom)
+      .lte("published_at", toEnd(monthTo)),
   ]);
 
-  const semEvents = (semRes.data || []).map(s => ({
-    id: `sem_${s.id}`,
-    _rawId: s.id,
-    title: s.title,
-    start_date: toDateStr(s.scheduled_start),
-    end_date:   toDateStr(s.scheduled_end || s.scheduled_start),
+  const evData  = evRes.status  === "fulfilled" ? (evRes.value.data  || []) : (console.error("[Cal] events:",  evRes.reason),  []);
+  const semData = semRes.status === "fulfilled" ? (semRes.value.data || []) : (console.error("[Cal] seminars:", semRes.reason), []);
+  const annData = annRes.status === "fulfilled" ? (annRes.value.data || []) : (console.error("[Cal] announce:", annRes.reason), []);
+
+  // Normalise events: toDateStr handles both plain-date and timestamptz values;
+  // _source:"event" distinguishes them from seminars in dot/badge/counter logic.
+  const evNorm = evData.map(e => ({
+    ...e,
+    start_date: toDateStr(e.start_date),
+    end_date:   toDateStr(e.end_date || e.start_date),
+    _source:    "event",
+  }));
+
+  const semNorm = semData.map(s => ({
+    id:              `sem_${s.id}`,
+    _rawId:          s.id,
+    title:           s.title,
+    start_date:      toDateStr(s.scheduled_start),
+    end_date:        toDateStr(s.scheduled_end || s.scheduled_start),
     scheduled_start: s.scheduled_start,
     scheduled_end:   s.scheduled_end,
-    description: s.description || "",
-    location: s.venue || "",
-    color_hex: "#2D6A2D",
-    event_type: "seminar",
-    _source: "seminar",
-    _status: s.status,
+    description:     s.description || "",
+    location:        s.venue || "",
+    color_hex:       "#2D6A2D",
+    event_type:      "seminar",
+    _source:         "seminar",
+    _status:         s.status,
   }));
 
-  const annEvents = (annRes.data || []).map(a => ({
-    id: `ann_${a.id}`,
-    _rawId: a.id,
-    title: a.title,
-    start_date: toDateStr(a.published_at),
-    end_date:   toDateStr(a.published_at),
+  const annNorm = annData.map(a => ({
+    id:          `ann_${a.id}`,
+    _rawId:      a.id,
+    title:       a.title,
+    start_date:  toDateStr(a.published_at),
+    end_date:    toDateStr(a.published_at),
     description: a.body || a.content || "",
-    color_hex: "#f59e0b",
-    event_type: "announcement",
-    _source: "announcement",
-    is_pinned: a.is_pinned,
+    color_hex:   "#f59e0b",
+    event_type:  "announcement",
+    _source:     "announcement",
+    is_pinned:   a.is_pinned,
   }));
 
-  return [
-    ...(evRes.data || []),
-    ...semEvents,
-    ...annEvents,
-  ].sort((a, b) => (a.start_date || "").localeCompare(b.start_date || ""));
+  return [...evNorm, ...semNorm, ...annNorm]
+    .sort((a, b) => (a.start_date || "").localeCompare(b.start_date || ""));
 }
+
 
 /**
- * Fetches upcoming merged events (future only, no date window cap).
- * Used for the Upcoming Events list — mirrors CalendarPage sidebar.
+ * Fetches upcoming events, seminars, and announcements for the
+ * "Upcoming Events & Seminars" widget.
+ *
+ * FIXES:
+ * 1. `events` rows are tagged _source:"event" (were missing _source entirely).
+ * 2. `events` dates run through toDateStr so timestamptz values compare
+ *    correctly against the plain-date todayStr filter.
+ * 3. Uses Promise.allSettled so one failing table never silences the others.
  */
 async function fetchUpcomingMerged() {
-  const now     = new Date().toISOString();
-  const nowDate = getToday();
+  const todayStr = getToday(); // "YYYY-MM-DD"
 
-  const [evRes, semRes] = await Promise.all([
-    supabase.from("events")
+  const [evRes, semRes] = await Promise.allSettled([
+    supabase
+      .from("events")
       .select("id,title,start_date,end_date,description,location,color_hex,event_type")
-      .gte("end_date", nowDate)
+      .gte("end_date", todayStr)
       .order("start_date", { ascending: true })
-      .limit(30),
-    supabase.from("seminars")
+      .limit(50),
+
+    supabase
+      .from("seminars")
       .select("id,title,scheduled_start,scheduled_end,status,venue,description")
-      .gte("scheduled_start", now)
+      .gte("scheduled_start", todayStr)
       .order("scheduled_start", { ascending: true })
-      .limit(30),
+      .limit(50),
   ]);
 
-  const semMapped = (semRes.data || []).map(s => ({
-    id: `sem_${s.id}`,
-    _rawId: s.id,
-    title: s.title,
-    start_date: toDateStr(s.scheduled_start),
-    end_date:   toDateStr(s.scheduled_end || s.scheduled_start),
-    scheduled_start: s.scheduled_start,
-    scheduled_end:   s.scheduled_end,
-    description: s.description || "",
-    location: s.venue || "",
-    color_hex: "#2D6A2D",
-    event_type: "seminar",
-    _source: "seminar",
-    _status: s.status,
+  const evData  = evRes.status  === "fulfilled" ? (evRes.value.data  || []) : (console.error("[Upcoming] events:",   evRes.reason),  []);
+  const semData = semRes.status === "fulfilled" ? (semRes.value.data || []) : (console.error("[Upcoming] seminars:", semRes.reason), []);
+
+  const evNorm = evData.map(e => ({
+    ...e,
+    start_date: toDateStr(e.start_date),
+    end_date:   toDateStr(e.end_date || e.start_date),
+    _source:    "event",
   }));
 
-  return [
-    ...(evRes.data || []),
-    ...semMapped,
-  ].sort((a, b) => (a.start_date || "").localeCompare(b.start_date || ""));
+  const semNorm = semData.map(s => ({
+    id:              `sem_${s.id}`,
+    _rawId:          s.id,
+    title:           s.title,
+    start_date:      toDateStr(s.scheduled_start),
+    end_date:        toDateStr(s.scheduled_end || s.scheduled_start),
+    scheduled_start: s.scheduled_start,
+    scheduled_end:   s.scheduled_end,
+    description:     s.description || "",
+    location:        s.venue || "",
+    color_hex:       "#2D6A2D",
+    event_type:      "seminar",
+    _source:         "seminar",
+    _status:         s.status,
+  }));
+
+  return [...evNorm, ...semNorm]
+    .sort((a, b) => (a.start_date || "").localeCompare(b.start_date || ""));
 }
+
 
 /* ─── Sub-components ──────────────────────────────────────── */
 function StatCard({icon, label, value, sub, color}) {
@@ -308,7 +393,12 @@ function StatCard({icon, label, value, sub, color}) {
   );
 }
 
-function SH({title, icon, linkTo, badge, action, onAction}) {
+/**
+ * Section header.
+ * FIX (Issue 2): replaced <a href> with a button that calls useNavigate,
+ * enabling proper SPA routing without full page reloads.
+ */
+function SH({title, icon, badge, action, onAction, linkTo, onLinkClick}) {
   return (
     <div className="section-header-line">
       <h6>
@@ -328,11 +418,14 @@ function SH({title, icon, linkTo, badge, action, onAction}) {
             {action}
           </button>
         )}
-        {linkTo && (
-          <a href={linkTo} className="btn btn-sm py-0 px-2"
-            style={{fontSize:11,background:"#E8F5E9",color:"var(--bloom-dark)",fontWeight:600,textDecoration:"none"}}>
+        {/* FIX: use button + onLinkClick (navigate) instead of <a href> */}
+        {linkTo && onLinkClick && (
+          <button
+            className="dash-viewall-btn"
+            onClick={onLinkClick}
+          >
             View all →
-          </a>
+          </button>
         )}
       </div>
     </div>
@@ -384,15 +477,15 @@ function ErrorState({msg, onRetry}) {
   );
 }
 
-/* ─── Event source badge ──────────────────────────────────── */
 function SourceBadge({ev}) {
   if (ev._source === "seminar")      return <span className="badge ev-badge-seminar"      style={{fontSize:9,fontWeight:700}}>Seminar</span>;
   if (ev._source === "announcement") return <span className="badge ev-badge-announcement" style={{fontSize:9,fontWeight:700}}>Announcement</span>;
+  // _source === "event" or any other value
   const label = ev.event_type ? ev.event_type.charAt(0).toUpperCase()+ev.event_type.slice(1) : "Event";
   return <span className="badge ev-badge-event" style={{fontSize:9,fontWeight:700}}>{label}</span>;
 }
 
-/* ─── Day Events Modal (clicked from mini calendar) ───────── */
+/* ─── Day Events Modal ────────────────────────────────────── */
 function DayEventsModal({date, events, onClose}) {
   const label = new Date(date + "T00:00:00").toLocaleDateString("en-PH", {
     weekday:"long", month:"long", day:"numeric", year:"numeric",
@@ -400,7 +493,6 @@ function DayEventsModal({date, events, onClose}) {
   return (
     <div className="bloom-overlay" onClick={onClose}>
       <div className="bloom-modal" onClick={e => e.stopPropagation()}>
-        {/* Header */}
         <div className="d-flex align-items-start justify-content-between p-4 pb-3"
           style={{borderBottom:"1px solid #E8F5E9",position:"sticky",top:0,background:"#fff",zIndex:1}}>
           <div>
@@ -411,7 +503,6 @@ function DayEventsModal({date, events, onClose}) {
           </div>
           <button className="btn btn-sm btn-outline-secondary py-0 px-2" onClick={onClose}>✕</button>
         </div>
-        {/* Body */}
         <div className="p-4">
           {events.length === 0 ? (
             <Empty icon="bi-calendar-x" msg="No events on this date"/>
@@ -474,7 +565,7 @@ function DayEventsModal({date, events, onClose}) {
   );
 }
 
-/* ─── Event Detail Modal (clicked from upcoming list) ─────── */
+/* ─── Event Detail Modal ──────────────────────────────────── */
 function EventDetailModal({ev, onClose}) {
   if (!ev) return null;
   const startLabel = ev.scheduled_start ? fmt(ev.scheduled_start) : fmtDate(ev.start_date);
@@ -483,9 +574,7 @@ function EventDetailModal({ev, onClose}) {
   return (
     <div className="bloom-overlay" onClick={onClose}>
       <div className="bloom-modal" style={{maxWidth:460}} onClick={e => e.stopPropagation()}>
-        {/* Colored top strip */}
         <div style={{height:6,borderRadius:"16px 16px 0 0",background:borderColor}}/>
-        {/* Header */}
         <div className="d-flex align-items-start justify-content-between px-4 pt-4 pb-3"
           style={{borderBottom:"1px solid #E8F5E9"}}>
           <div style={{flex:1,minWidth:0}}>
@@ -508,9 +597,7 @@ function EventDetailModal({ev, onClose}) {
           <button className="btn btn-sm btn-outline-secondary py-0 px-2 ms-3 flex-shrink-0"
             onClick={onClose}>✕</button>
         </div>
-        {/* Body */}
         <div className="px-4 py-3" style={{display:"flex",flexDirection:"column",gap:10}}>
-          {/* Date/time */}
           <div className="d-flex align-items-start gap-3 p-3 rounded-3"
             style={{background:"#F5F7F5"}}>
             <i className="bi bi-calendar-event" style={{color:"var(--bloom-mid)",fontSize:16,marginTop:2}}/>
@@ -525,7 +612,6 @@ function EventDetailModal({ev, onClose}) {
               )}
             </div>
           </div>
-          {/* Location */}
           {ev.location && (
             <div className="d-flex align-items-start gap-3 p-3 rounded-3"
               style={{background:"#F5F7F5"}}>
@@ -533,7 +619,6 @@ function EventDetailModal({ev, onClose}) {
               <div style={{fontSize:13,color:"var(--bloom-dark)"}}>{ev.location}</div>
             </div>
           )}
-          {/* Description */}
           {ev.description && (
             <div className="p-3 rounded-3" style={{background:"#F5F7F5"}}>
               <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>
@@ -567,14 +652,12 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
   const daysInMo  = new Date(year, month+1, 0).getDate();
   const today     = new Date();
 
-  // Build date→events map for fast lookup
   const dayMap = useMemo(() => {
     const map = {};
     (calEvents||[]).forEach(ev => {
       const start = (ev.start_date||"").slice(0,10);
       const end   = (ev.end_date||ev.start_date||"").slice(0,10);
       if (!start) return;
-      // Mark every day in the event's range that falls in this month
       const s = new Date(start+"T00:00:00");
       const e = new Date((end||start)+"T00:00:00");
       for (let d = new Date(s); d <= e; d.setDate(d.getDate()+1)) {
@@ -596,7 +679,6 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
 
   return (
     <div style={{userSelect:"none"}}>
-      {/* Month nav */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
         <button onClick={()=>setDate(new Date(year,month-1,1))}
           style={{background:"none",border:"none",cursor:"pointer",color:"var(--bloom-dark)",fontSize:18,padding:"2px 8px",borderRadius:6,lineHeight:1}}>
@@ -611,7 +693,6 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
         </button>
       </div>
 
-      {/* Day headers */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
         {DAY_HEADERS.map(d => (
           <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:"#aaa",padding:"2px 0"}}>
@@ -620,15 +701,14 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
         ))}
       </div>
 
-      {/* Day cells */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
         {cells.map((d,i) => {
           if (!d) return <div key={`e${i}`}/>;
           const isToday   = d===today.getDate() && month===today.getMonth() && year===today.getFullYear();
           const dayEvents = dayMap[d] || [];
+          const hasEvent   = dayEvents.some(ev => ev._source==="event");
           const hasSeminar = dayEvents.some(ev => ev._source==="seminar");
           const hasAnn     = dayEvents.some(ev => ev._source==="announcement");
-          const hasCustom  = dayEvents.some(ev => !ev._source);
           const hasAny     = dayEvents.length > 0;
 
           const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
@@ -650,7 +730,7 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
               {d}
               {!isToday && hasAny && (
                 <div style={{display:"flex",justifyContent:"center",gap:2,marginTop:2,flexWrap:"wrap"}}>
-                  {hasCustom  && <div style={{width:4,height:4,borderRadius:"50%",background:"var(--bloom-mid)"}}/>}
+                  {hasEvent   && <div style={{width:4,height:4,borderRadius:"50%",background:"var(--bloom-mid)"}}/>}
                   {hasSeminar && <div style={{width:4,height:4,borderRadius:"50%",background:"#2563EB"}}/>}
                   {hasAnn     && <div style={{width:4,height:4,borderRadius:"50%",background:"#f59e0b"}}/>}
                 </div>
@@ -660,7 +740,6 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
         })}
       </div>
 
-      {/* Legend */}
       <div style={{display:"flex",gap:10,marginTop:10,fontSize:10,color:"#888",flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:3}}>
           <div style={{width:10,height:10,borderRadius:2,background:"var(--bloom-mid)"}}/> Today
@@ -778,6 +857,8 @@ function DashboardSkeleton() {
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════ */
 export default function DashboardPage() {
+  const navigate = useSafeNavigate(); // FIX: safe — works inside or outside a <Router>
+
   /* ── state ── */
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -797,50 +878,61 @@ export default function DashboardPage() {
   const [recentMods,  setRecentMods]  = useState([]);
   const [weeklyAct,   setWeeklyAct]   = useState([]);
 
-  // [C] calendar events — merged from all 3 sources, scoped to visible month
-  const [calDate,     setCalDate]     = useState(new Date());
-  const [calEvents,   setCalEvents]   = useState([]);   // for MiniCalendar dots
-
-  // [D] upcoming merged events — for the Upcoming Events list
+  // calendar
+  const [calDate,        setCalDate]        = useState(new Date());
+  const [calEvents,      setCalEvents]      = useState([]);
   const [upcomingEvents, setUpcomingEvents] = useState([]);
 
-  // [E][F] modal state
-  const [dayModal,    setDayModal]    = useState(null);  // { date, events }
-  const [detailModal, setDetailModal] = useState(null);  // ev object
+  // modals
+  const [dayModal,    setDayModal]    = useState(null);
+  const [detailModal, setDetailModal] = useState(null);
 
   // chart version counters
   const [chartBarVer,   setChartBarVer]   = useState(0);
   const [chartDonutVer, setChartDonutVer] = useState(0);
 
-  // Realtime channels ref
+  // Realtime channel refs
   const channelsRef = useRef([]);
 
   /* ── calendar month window helper ── */
   const getCalWindow = useCallback((d) => {
     const y = d.getFullYear(), m = d.getMonth();
+    // Extend one month either side so dots appear for adjacent month days
     return {
-      from: new Date(y, m-1, 1).toISOString().split("T")[0],
-      to:   new Date(y, m+2, 0).toISOString().split("T")[0],
+      from: `${y}-${String(m).padStart(2,"0") || "12"}-01`.replace(
+        /(\d{4})-00-/,
+        `${y-1}-12-`
+      ),
+      to: new Date(y, m+2, 0).toISOString().split("T")[0],
     };
   }, []);
 
-  /* ── [C] fetch calendar events for mini calendar ── */
+  /* ── FIX: simpler, correct month window ── */
+  const getMonthWindow = useCallback((d) => {
+    const y = d.getFullYear(), m = d.getMonth();
+    const prev = new Date(y, m-1, 1);
+    const next = new Date(y, m+2, 0); // last day of next month
+    const pad = n => String(n).padStart(2,"0");
+    const from = `${prev.getFullYear()}-${pad(prev.getMonth()+1)}-01`;
+    const to   = `${next.getFullYear()}-${pad(next.getMonth()+1)}-${pad(next.getDate())}`;
+    return { from, to };
+  }, []);
+
+  /* ── [C] fetch calendar events ── */
+  // FIX: accepts date as param instead of closing over calDate state,
+  // so it always uses the freshest value passed to it.
   const refreshCalEvents = useCallback(async (forDate) => {
-    const d = forDate || calDate;
-    const { from, to } = getCalWindow(d);
+    const { from, to } = getMonthWindow(forDate);
     try {
-      const merged = await fetchMergedCalendarEvents(
-        from + "T00:00:00.000+08:00",
-        to   + "T23:59:59.999+08:00"
-      );
+      const merged = await fetchMergedCalendarEvents(from, to);
       setCalEvents(merged);
     } catch(e) {
       console.error("[Dashboard] calEvents:", e);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [calDate, getCalWindow]);
+  }, [getMonthWindow]);
 
-  /* ── [D] fetch upcoming merged events ── */
+  /* ── [D] fetch upcoming events ── */
+  // FIX: standalone function with no stale closure risk
   const refreshUpcoming = useCallback(async () => {
     try {
       const merged = await fetchUpcomingMerged();
@@ -974,6 +1066,8 @@ export default function DashboardPage() {
   const fetchAll = useCallback(async (from, to, isRefresh=false) => {
     isRefresh ? setRefreshing(true) : setLoading(true);
     setErrors({});
+    // Capture calDate at call time so we don't rely on stale closure
+    const currentCalDate = calDateRef.current;
     const run = async (key, fn) => {
       try { await fn(); }
       catch(err) {
@@ -990,8 +1084,8 @@ export default function DashboardPage() {
       run("assessStats", ()=>fetchAssessStats(from,to)),
       run("recentMods",  ()=>fetchRecentMods(from,to)),
       run("weeklyAct",   ()=>fetchWeeklyAct(to)),
-      // [C][D] calendar + upcoming use their own fetchers
-      run("calEvents",   ()=>refreshCalEvents(calDate)),
+      // FIX: pass currentCalDate explicitly so we never use stale state
+      run("calEvents",   ()=>refreshCalEvents(currentCalDate)),
       run("upcoming",    ()=>refreshUpcoming()),
     ]);
     isRefresh ? setRefreshing(false) : setLoading(false);
@@ -1002,6 +1096,10 @@ export default function DashboardPage() {
     refreshCalEvents, refreshUpcoming,
   ]);
 
+  /* ── Ref to always hold the latest calDate (avoids stale closures) ── */
+  const calDateRef = useRef(calDate);
+  useEffect(() => { calDateRef.current = calDate; }, [calDate]);
+
   /* ── Initial load ── */
   useEffect(() => {
     const today    = getToday();
@@ -1010,38 +1108,62 @@ export default function DashboardPage() {
     fetchAll(monthAgo, today);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ── [G] Realtime subscriptions on all 3 calendar tables ── */
+  /* ── FIX (Issue 1): Realtime subscriptions with stable refresh callbacks ──
+   * The previous implementation captured stale `calDate` in the realtime
+   * handlers because the effect only ran once. Now we use calDateRef so the
+   * handlers always see the current calendar month.
+   */
   useEffect(() => {
+    // Clean up any existing channels
     channelsRef.current.forEach(ch => supabase.removeChannel(ch));
     channelsRef.current = [];
 
-    // When any calendar source changes → refresh both calendar dots AND upcoming list
-    const refreshBoth = () => {
-      refreshCalEvents(calDate);
+    // These handlers use refs so they're always fresh, never stale
+    const handleCalChange = () => {
+      refreshCalEvents(calDateRef.current);
+    };
+    const handleUpcomingChange = () => {
+      refreshUpcoming();
+    };
+    const handleBothChange = () => {
+      refreshCalEvents(calDateRef.current);
       refreshUpcoming();
     };
 
-    const evCh = supabase.channel("dash-events-v3")
-      .on("postgres_changes", {event:"*",schema:"public",table:"events"}, refreshBoth)
-      .subscribe();
+    const evCh = supabase
+      .channel("dash-events-v4")
+      .on("postgres_changes", {event:"*", schema:"public", table:"events"},      handleBothChange)
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") console.warn("[Dashboard] events channel error");
+      });
 
-    const semCh = supabase.channel("dash-seminars-v3")
-      .on("postgres_changes", {event:"*",schema:"public",table:"seminars"}, refreshBoth)
-      .subscribe();
+    const semCh = supabase
+      .channel("dash-seminars-v4")
+      .on("postgres_changes", {event:"*", schema:"public", table:"seminars"},    handleBothChange)
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") console.warn("[Dashboard] seminars channel error");
+      });
 
-    const annCh = supabase.channel("dash-announcements-v3")
-      .on("postgres_changes", {event:"*",schema:"public",table:"announcements"}, refreshBoth)
-      .subscribe();
+    const annCh = supabase
+      .channel("dash-announcements-v4")
+      .on("postgres_changes", {event:"*", schema:"public", table:"announcements"}, handleCalChange)
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") console.warn("[Dashboard] announcements channel error");
+      });
 
     channelsRef.current = [evCh, semCh, annCh];
+
     return () => {
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // FIX: refreshCalEvents/refreshUpcoming are stable (useCallback with no
+  // changing deps), so this effect runs once and the handlers stay live.
+  }, [refreshCalEvents, refreshUpcoming]);
 
-  /* ── Re-fetch calendar events when month changes ── */
+  /* ── FIX: Re-fetch calendar dots when the month navigation changes ──
+   * Uses the freshest calDate value from state, not from a stale closure.
+   */
   useEffect(() => {
     refreshCalEvents(calDate);
   }, [calDate, refreshCalEvents]);
@@ -1061,7 +1183,7 @@ export default function DashboardPage() {
     fetchAll(from, today, true);
   }, [fetchAll]);
 
-  /* ── [E] Day click handler ── */
+  /* ── Day click handler ── */
   const handleDayClick = useCallback((dateStr, dayEvents) => {
     setDayModal({ date: dateStr, events: dayEvents });
   }, []);
@@ -1131,19 +1253,18 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Row 1: 8 stat cards — [A] full width, equal cols ── */}
+        {/* ── Row 1: 8 stat cards ── */}
         <div className="row g-3 mb-4">
           {[
-            {icon:"bi-mortarboard",     label:"Students",      value:stats.students??0,                                                      color:"#1A2E1A"},
+            {icon:"bi-mortarboard",     label:"Students",      value:stats.students??0,                                                         color:"#1A2E1A"},
             {icon:"bi-book",            label:"Modules",       value:stats.totalMods??0,    sub:`${stats.pubMods??0} pub · ${draftCount} draft`, color:"#2D6A2D"},
-            {icon:"bi-clipboard-check", label:"Assessments",   value:stats.totalAssess??0,                                                     color:"#2563EB"},
+            {icon:"bi-clipboard-check", label:"Assessments",   value:stats.totalAssess??0,                                                      color:"#2563EB"},
             {icon:"bi-people",          label:"Seminars",      value:stats.totalSems??0,    sub:`${stats.upcomingSems??0} upcoming`,              color:"#7C3AED"},
             {icon:"bi-award",           label:"Badges",        value:stats.totalBadges??0,                                                      color:"#D97706"},
             {icon:"bi-patch-check",     label:"Certificates",  value:stats.totalCerts??0,                                                       color:"#059669"},
             {icon:"bi-pencil-square",   label:"Quiz Attempts", value:stats.totalAttempts??0,                                                    color:"#0891B2"},
             {icon:"bi-graph-up-arrow",  label:"Pass Rate",     value:assessStats.passRate!=null?`${assessStats.passRate}%`:"—",                  color:"#DC2626"},
           ].map((c,i)=>(
-            /* [A] col-xl-3 col-md-4 col-6 → always fills row evenly */
             <div key={i} className="col-xl-3 col-md-4 col-6 dash-animate"
               style={{animationDelay:`${i*0.04}s`}}>
               <StatCard {...c}/>
@@ -1151,7 +1272,7 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        {/* ── Row 2: Welcome card + Activity chart — [A] equal halves ── */}
+        {/* ── Row 2: Welcome card + Activity chart ── */}
         <div className="row g-3 mb-3">
           <div className="col-lg-4">
             <div className="card dash-welcome-card p-4">
@@ -1201,10 +1322,10 @@ export default function DashboardPage() {
                   <SH title="System Activity This Week" icon="bi-bar-chart-line"/>
                   <div className="d-flex gap-3">
                     {[
-                      {label:"Attempts",  value:assessStats.total??0,                            color:"#2563EB"},
-                      {label:"Passed",    value:assessStats.passed??0,                           color:"#059669"},
-                      {label:"Failed",    value:assessStats.failed??0,                           color:"#DC2626"},
-                      {label:"Avg Score", value:assessStats.avg!=null?`${assessStats.avg}%`:"—", color:"#2D6A2D"},
+                      {label:"Attempts",  value:assessStats.total??0,                             color:"#2563EB"},
+                      {label:"Passed",    value:assessStats.passed??0,                            color:"#059669"},
+                      {label:"Failed",    value:assessStats.failed??0,                            color:"#DC2626"},
+                      {label:"Avg Score", value:assessStats.avg!=null?`${assessStats.avg}%`:"—",  color:"#2D6A2D"},
                     ].map(s=>(
                       <div key={s.label} className="text-center">
                         <div className="fw-bold" style={{fontSize:15,color:s.color}}>{s.value}</div>
@@ -1224,7 +1345,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Row 3: Module bars + Certs donut + Leaderboard — [A] equal thirds ── */}
+        {/* ── Row 3: Module bars + Certs donut + Leaderboard ── */}
         <div className="row g-3 mb-3">
           <div className="col-lg-4">
             <div className="card dash-chart-card dash-fixed-card">
@@ -1313,9 +1434,8 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Row 4: [C][D][E][F] Calendar + Upcoming Events — full width ── */}
+        {/* ── Row 4: Calendar + Upcoming Events ── */}
         <div className="row g-3 mb-3">
-          {/* Mini Calendar — [C] dots from all 3 sources, [E] clickable days */}
           <div className="col-lg-4">
             <div className="card dash-chart-card h-100">
               <div className="card-body p-3">
@@ -1333,8 +1453,8 @@ export default function DashboardPage() {
                   </div>
                   <div className="d-flex gap-2 flex-wrap">
                     {[
-                      {label:"Events",        count:calEvents.filter(e=>!e._source).length,             color:"var(--bloom-mid)"},
-                      {label:"Seminars",      count:calEvents.filter(e=>e._source==="seminar").length,  color:"#2563EB"},
+                      {label:"Events",        count:calEvents.filter(e=>e._source==="event").length,                 color:"var(--bloom-mid)"},
+                      {label:"Seminars",      count:calEvents.filter(e=>e._source==="seminar").length,      color:"#2563EB"},
                       {label:"Announcements", count:calEvents.filter(e=>e._source==="announcement").length, color:"#f59e0b"},
                     ].map(s=>(
                       <div key={s.label} className="text-center px-2 py-1 rounded-2"
@@ -1349,7 +1469,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* [D][F] Upcoming Events — merged events+seminars, clickable items */}
+          {/* Upcoming Events — FIX (Issue 2): "View all →" uses navigate("/calendar") */}
           <div className="col-lg-8">
             <div className="card dash-chart-card dash-fixed-card-lg">
               <div className="card-body p-3">
@@ -1358,6 +1478,7 @@ export default function DashboardPage() {
                   icon="bi-calendar-event"
                   badge={upcomingEvents.length||undefined}
                   linkTo="/calendar"
+                  onLinkClick={() => navigate("/calendar")}
                 />
                 {errors.upcoming
                   ? <ErrorState msg={errors.upcoming} onRetry={refreshUpcoming}/>
@@ -1380,7 +1501,6 @@ export default function DashboardPage() {
                             : "";
                           const borderColor = ev.color_hex || "#2D6A2D";
                           return (
-                            /* [F] Clickable event item → opens EventDetailModal */
                             <div key={ev.id}
                               className="ev-item"
                               onClick={()=>setDetailModal(ev)}
@@ -1392,7 +1512,6 @@ export default function DashboardPage() {
                                 border:`1px solid ${isToday?"#86efac":"#e5e7eb"}`,
                                 borderLeft:`4px solid ${borderColor}`,
                               }}>
-                              {/* Date badge */}
                               <div style={{
                                 minWidth:48,textAlign:"center",
                                 background:isToday?"var(--bloom-mid)":"#f3f4f6",
@@ -1405,7 +1524,6 @@ export default function DashboardPage() {
                                   {dt?dt.getDate():"—"}
                                 </div>
                               </div>
-                              {/* Info */}
                               <div style={{flex:1,minWidth:0}}>
                                 <div style={{fontSize:13,fontWeight:700,color:"var(--bloom-dark)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                                   {ev.title}
@@ -1419,7 +1537,6 @@ export default function DashboardPage() {
                                   <SourceBadge ev={ev}/>
                                 </div>
                               </div>
-                              {/* Status / chevron */}
                               <div className="d-flex align-items-center gap-2 flex-shrink-0">
                                 {ev._status && (
                                   <span style={{
@@ -1443,8 +1560,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Row 5: Seminar attendance + Recent modules — [A][B] equal halves ── */}
-        {/* Recent Activity removed per [B] */}
+        {/* ── Row 5: Seminar attendance + Recent modules ── */}
         <div className="row g-3">
           <div className="col-lg-6">
             <div className="card dash-chart-card dash-fixed-card">
@@ -1469,10 +1585,16 @@ export default function DashboardPage() {
             </div>
           </div>
 
+          {/* FIX (Issue 2): "View all →" navigates to /modules via React Router */}
           <div className="col-lg-6">
             <div className="card dash-chart-card dash-fixed-card">
               <div className="card-body p-3">
-                <SH title="Recent Modules" icon="bi-clock-history" linkTo="/modules"/>
+                <SH
+                  title="Recent Modules"
+                  icon="bi-clock-history"
+                  linkTo="/modules"
+                  onLinkClick={() => navigate("/modules")}
+                />
                 {errors.recentMods
                   ? <ErrorState msg={errors.recentMods} onRetry={()=>fetchRecentMods(fromDate,toDate)}/>
                   : recentMods.length===0
@@ -1505,7 +1627,7 @@ export default function DashboardPage() {
 
       </div>
 
-      {/* ── [E] Day Events Modal ── */}
+      {/* ── Day Events Modal ── */}
       {dayModal && (
         <DayEventsModal
           date={dayModal.date}
@@ -1514,7 +1636,7 @@ export default function DashboardPage() {
         />
       )}
 
-      {/* ── [F] Event Detail Modal ── */}
+      {/* ── Event Detail Modal ── */}
       {detailModal && (
         <EventDetailModal
           ev={detailModal}
