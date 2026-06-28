@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { V, FieldError } from "./lib/Validate.jsx";
 import { supabase } from "./lib/supabase.js";
+import { logActivity } from "./lib/activityLog.js";
 import { useToast } from "./App.jsx";
 import { ConfirmModal } from "./App.jsx";
 
@@ -64,7 +65,6 @@ const s = {
   mFooter:      { padding:"16px 24px", borderTop:`1px solid ${G.wash}`, display:"flex", gap:8, justifyContent:"flex-end", position:"sticky", bottom:0, background:"#fff" },
   label:        { fontSize:11, fontWeight:700, color:"#666", marginBottom:5, display:"block", textTransform:"uppercase", letterSpacing:.6 },
   input:        { width:"100%", padding:"9px 12px", border:"1px solid #DDE8DD", borderRadius:6, fontSize:14, outline:"none", background:"#fff", boxSizing:"border-box", color:G.dark },
-  inputErr:     { width:"100%", padding:"9px 12px", border:"1px solid #dc2626", borderRadius:6, fontSize:14, outline:"none", background:"#fff", boxSizing:"border-box", color:G.dark },
   select:       { width:"100%", padding:"9px 12px", border:"1px solid #DDE8DD", borderRadius:6, fontSize:14, outline:"none", background:"#fff", boxSizing:"border-box", color:G.dark },
   textarea:     { width:"100%", padding:"9px 12px", border:"1px solid #DDE8DD", borderRadius:6, fontSize:14, outline:"none", background:"#fff", boxSizing:"border-box", color:G.dark, resize:"vertical", minHeight:80 },
   fg:           { marginBottom:16 },
@@ -74,7 +74,6 @@ const s = {
   btnDanger:    { padding:"9px 20px", background:"#fee2e2", color:"#dc2626", border:"none", borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:13, display:"inline-flex", alignItems:"center", gap:6 },
   btnGreen:     { padding:"9px 18px", background:G.base, color:"#fff", border:"none", borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:13, display:"inline-flex", alignItems:"center", gap:6 },
   btnSm:       (bg,col) => ({ padding:"6px 14px", background:bg||G.wash, color:col||G.dark, border:"none", borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:12, display:"inline-flex", alignItems:"center", gap:5 }),
-  btnOptional:  { padding:"6px 12px", background:"transparent", color:G.mid, border:`1px dashed ${G.pale}`, borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:12, display:"inline-flex", alignItems:"center", gap:5 },
   iconBtn:     (c) => ({ background:"none", border:"none", cursor:"pointer", color:c||"#999", fontSize:15, padding:"5px 7px", borderRadius:6, display:"inline-flex", alignItems:"center" }),
   tag:         (c) => ({ display:"inline-flex", alignItems:"center", padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:700,
     background:c==="green"?"#dcfce7":c==="yellow"?"#fef9c3":c==="red"?"#fee2e2":c==="blue"?"#dbeafe":"#f3f4f6",
@@ -84,7 +83,6 @@ const s = {
   statCard:    (c) => ({ flex:1, minWidth:90, background:"#fff", borderRadius:10, padding:"16px 18px", border:"1px solid #DDE8DD", borderTop:`3px solid ${c||G.base}` }),
   th:           { padding:"10px 14px", textAlign:"left", fontSize:11, fontWeight:700, color:"#888", textTransform:"uppercase", letterSpacing:.5, borderBottom:`2px solid ${G.wash}`, background:"#F5F7F5" },
   td:           { padding:"11px 14px", borderBottom:`1px solid ${G.wash}`, color:G.dark, verticalAlign:"middle" },
-  optionalFieldWrap: { background:G.wash, borderRadius:8, padding:"12px 14px", marginBottom:16, position:"relative" },
 };
 
 const QTYPE = { multiple_choice:"Multiple Choice", true_false:"True/False", short_answer:"Short Answer" };
@@ -109,7 +107,6 @@ function QuestionModal({ onSave, onClose, initial, num }) {
     }
     return "true";
   });
-  const [err, setErr] = useState({});
 
   const setCorrectOpt = (i) => { setCorrect(i); setOpts(o=>o.map((x,j)=>({...x,is_correct:j===i}))); };
   const updateOptText = (i,v) => setOpts(o=>o.map((x,j)=>j===i?{...x,option_text:v}:x));
@@ -117,17 +114,14 @@ function QuestionModal({ onSave, onClose, initial, num }) {
   const removeOpt     = (i) => { if(opts.length>2){setOpts(o=>o.filter((_,j)=>j!==i));if(correct>=i)setCorrect(Math.max(0,correct-1));} };
 
   const save = () => {
-    const errors = {};
-    if (!qText.trim()) errors.qText = "Question text is required.";
-    if (qType==="multiple_choice") {
-      const emptyOpts = opts.some(o=>!o.option_text.trim());
-      if (emptyOpts) errors.opts = "All answer options must be filled in.";
-      if (!opts.some(o=>o.is_correct)) errors.correct = "Please mark the correct answer.";
-    }
-    if (Object.keys(errors).length) { setErr(errors); return; }
+    if (!qText.trim()) { toast("Please enter the question text.", "error"); return; }
     let finalOpts=[];
     if (qType==="true_false") { finalOpts=[{option_text:"True",is_correct:tfAns==="true"},{option_text:"False",is_correct:tfAns==="false"}]; }
-    else if (qType==="multiple_choice") { finalOpts=opts; }
+    else if (qType==="multiple_choice") {
+      if (opts.some(o=>!o.option_text.trim())) { toast("Please fill in all answer options.", "error"); return; }
+      if (!opts.some(o=>o.is_correct)) { toast("Please mark the correct answer.", "error"); return; }
+      finalOpts=opts;
+    }
     onSave({question_text:qText,question_type:qType,options:finalOpts});
   };
 
@@ -149,7 +143,7 @@ function QuestionModal({ onSave, onClose, initial, num }) {
             <label style={s.label}>Question Type</label>
             <div style={{display:"flex",gap:8}}>
               {TYPE_BTNS.map(t=>(
-                <button key={t.v} onClick={()=>{setQType(t.v);setErr({});}} style={{
+                <button key={t.v} onClick={()=>setQType(t.v)} style={{
                   flex:1,padding:"10px 6px",borderRadius:6,cursor:"pointer",fontWeight:600,fontSize:12,
                   border:`2px solid ${qType===t.v?G.base:G.pale}`,
                   background:qType===t.v?G.wash:"#fff",color:qType===t.v?G.dark:"#888",
@@ -162,12 +156,11 @@ function QuestionModal({ onSave, onClose, initial, num }) {
           </div>
           <div style={s.fg}>
             <label style={s.label}>Question *</label>
-            <textarea style={err.qText?{...s.textarea,border:"1px solid #dc2626"}:s.textarea} value={qText} onChange={e=>{setQText(e.target.value);setErr(er=>({...er,qText:null}));}} placeholder="Type your question here…"/>
-            <FieldError msg={err.qText}/>
+            <textarea style={s.textarea} value={qText} onChange={e=>setQText(e.target.value)} placeholder="Type your question here…"/>
           </div>
           {qType==="multiple_choice"&&(
             <div style={s.fg}>
-              <label style={s.label}>Answer Options — click the circle to mark correct answer</label>
+              <label style={s.label}>Answer Options — click the circle to mark the correct answer</label>
               {opts.map((opt,i)=>(
                 <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                   <button onClick={()=>setCorrectOpt(i)} style={{
@@ -177,15 +170,12 @@ function QuestionModal({ onSave, onClose, initial, num }) {
                   }}>
                     {correct===i&&<i className="bi bi-check-lg" style={{color:"#fff",fontSize:11}}/>}
                   </button>
-                  <input style={{...(err.opts?s.inputErr:s.input),flex:1}} value={opt.option_text}
-                    onChange={e=>{updateOptText(i,e.target.value);setErr(er=>({...er,opts:null,correct:null}));}}
-                    placeholder={`Option ${i+1}`}/>
+                  <input style={{...s.input,flex:1}} value={opt.option_text} onChange={e=>updateOptText(i,e.target.value)} placeholder={`Option ${i+1}`}/>
                   <button style={s.iconBtn(opts.length>2?"#dc2626":"#ccc")} onClick={()=>removeOpt(i)} disabled={opts.length<=2}>
                     <i className="bi bi-x-lg"/>
                   </button>
                 </div>
               ))}
-              <FieldError msg={err.opts||err.correct}/>
               {opts.length<6&&<button style={{...s.btnSecondary,fontSize:12,padding:"6px 14px",marginTop:4}} onClick={addOpt}><i className="bi bi-plus-lg me-1"/>Add Option</button>}
             </div>
           )}
@@ -234,6 +224,7 @@ function ResultsPanel({ assessment }) {
     const { data } = await supabase.from("assessment_attempts")
       .select("*, profiles(full_name,student_id,email)")
       .eq("assessment_id",assessment.id).order("submitted_at",{ascending:false});
+    // Flag attempts that have ungraded short answer questions
     const attemptsWithFlags = await Promise.all((data||[]).map(async (attempt) => {
       const { count } = await supabase.from("assessment_answers")
         .select("id", { count: "exact", head: true })
@@ -244,7 +235,8 @@ function ResultsPanel({ assessment }) {
     }));
     setAttempts(attemptsWithFlags); setLoading(false);
   };
-  useEffect(()=>{ load(); },[assessment.id]); // eslint-disable-line
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>{ load(); },[assessment.id]);
 
   const loadDetail = async (attempt) => {
     const { data:answers } = await supabase.from("assessment_answers")
@@ -255,9 +247,23 @@ function ResultsPanel({ assessment }) {
 
   const gradeAnswer = async (answerId, isCorrect, attempt) => {
     const manualScore = isCorrect ? 1 : 0;
-    await supabase.from("assessment_answers").update({ manual_score: manualScore, is_graded: true }).eq("id", answerId);
-    setSelected(prev => ({ ...prev, answers: prev.answers.map(a => a.id === answerId ? { ...a, manual_score: manualScore, is_graded: true } : a) }));
-    const updatedAnswers = selected.answers.map(a => a.id === answerId ? { ...a, manual_score: manualScore, is_graded: true } : a);
+    await supabase.from("assessment_answers")
+      .update({ manual_score: manualScore, is_graded: true })
+      .eq("id", answerId);
+
+    // Update local state immediately
+    setSelected(prev => ({
+      ...prev,
+      answers: prev.answers.map(a => a.id === answerId
+        ? { ...a, manual_score: manualScore, is_graded: true }
+        : a
+      )
+    }));
+
+    // Recalculate total score for this attempt
+    const updatedAnswers = selected.answers.map(a =>
+      a.id === answerId ? { ...a, manual_score: manualScore, is_graded: true } : a
+    );
     const totalQ = updatedAnswers.length;
     const correctCount = updatedAnswers.filter(a => {
       if (a.questions?.question_type === "short_answer") return a.id === answerId ? isCorrect : a.manual_score === 1;
@@ -265,12 +271,19 @@ function ResultsPanel({ assessment }) {
     }).length;
     const newScore = totalQ > 0 ? Math.round((correctCount / totalQ) * 100) : 0;
     const passed = newScore >= (assessment.passing_score || 75);
-    await supabase.from("assessment_attempts").update({ score: newScore, passed }).eq("id", attempt.id);
+
+    await supabase.from("assessment_attempts")
+      .update({ score: newScore, passed })
+      .eq("id", attempt.id);
+
+    // Update attempts list
     setAttempts(prev => prev.map(a => a.id === attempt.id ? { ...a, score: newScore, passed } : a));
+    logActivity("assessment_answer_graded", { attempt_id: attempt.id, answer_id: answerId, marked: isCorrect ? "correct" : "incorrect" });
   };
 
   const total=attempts.length, passed=attempts.filter(a=>a.passed).length;
-  const failed=total-passed, avgScore=total>0?Math.round(attempts.reduce((s,a)=>s+(a.score||0),0)/total):0;
+  const failed=total-passed;
+  const avgScore=total>0?Math.round(attempts.reduce((s,a)=>s+(a.score||0),0)/total):0;
   const passRate=total>0?Math.round((passed/total)*100):0;
 
   if (loading) return <div style={{padding:40,textAlign:"center",color:"#aaa"}}>Loading results…</div>;
@@ -291,6 +304,7 @@ function ResultsPanel({ assessment }) {
           </div>
         ))}
       </div>
+
       {attempts.length===0?(
         <div style={{background:"#fff",borderRadius:10,border:`2px dashed ${G.pale}`,padding:"50px 20px",textAlign:"center"}}>
           <i className="bi bi-bar-chart d-block mb-3" style={{fontSize:44,color:G.pale}}/>
@@ -302,33 +316,51 @@ function ResultsPanel({ assessment }) {
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
             <thead>
               <tr>
-                <th style={s.th}>Student</th><th style={s.th}>Student ID</th>
-                <th style={s.th}>Score</th><th style={s.th}>Result</th>
-                <th style={s.th}>Submitted</th><th style={s.th}>Actions</th>
+                <th style={s.th}>Student</th>
+                <th style={s.th}>Student ID</th>
+                <th style={s.th}>Score</th>
+                <th style={s.th}>Result</th>
+                <th style={s.th}>Submitted</th>
+                <th style={s.th}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {attempts.map(a=>(
                 <tr key={a.id}>
-                  <td style={s.td}><div style={{fontWeight:600}}>{a.profiles?.full_name||"—"}</div><div style={{fontSize:11,color:"#aaa"}}>{a.profiles?.email||""}</div></td>
+                  <td style={s.td}>
+                    <div style={{fontWeight:600}}>{a.profiles?.full_name||"—"}</div>
+                    <div style={{fontSize:11,color:"#aaa"}}>{a.profiles?.email||""}</div>
+                  </td>
                   <td style={s.td}>{a.profiles?.student_id||"—"}</td>
-                  <td style={s.td}><span style={{fontSize:17,fontWeight:900,color:a.passed?"#16a34a":"#dc2626"}}>{a.score??0}%</span><span style={{fontSize:11,color:"#aaa",marginLeft:4}}>/ {assessment.passing_score||75}% to pass</span></td>
-                  <td style={s.td}><span style={s.tag(a.passed?"green":"red")}>{a.passed?"Passed":"Failed"}</span>{a.has_ungraded&&<span style={{...s.tag("yellow"),marginLeft:4}}><i className="bi bi-hourglass-split me-1"/>Needs Grading</span>}</td>
+                  <td style={s.td}>
+                    <span style={{fontSize:17,fontWeight:900,color:a.passed?"#16a34a":"#dc2626"}}>{a.score??0}%</span>
+                    <span style={{fontSize:11,color:"#aaa",marginLeft:4}}>/ {assessment.passing_score||75}% to pass</span>
+                  </td>
+                  <td style={s.td}><span style={s.tag(a.passed?"green":"red")}>{a.passed?"Passed":"Failed"}</span>{a.has_ungraded&&<span style={{...s.tag("orange"),marginLeft:4}}><i className="bi bi-hourglass-split me-1"/>Needs Grading</span>}</td>
                   <td style={s.td}>{formatDate(a.submitted_at)}</td>
-                  <td style={s.td}><button style={s.btnSm(G.wash,G.dark)} onClick={()=>loadDetail(a)}><i className="bi bi-eye"/>View Answers</button></td>
+                  <td style={s.td}>
+                    <button style={s.btnSm(G.wash,G.dark)} onClick={()=>loadDetail(a)}>
+                      <i className="bi bi-eye"/>View Answers
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+
       {selected&&(
         <div style={s.overlay}>
           <div style={s.modal(660)}>
             <div style={s.mHeader}>
               <div>
                 <div style={s.mTitle}><i className="bi bi-file-earmark-text me-2"/>{selected.profiles?.full_name||"Student"}'s Answers</div>
-                <div style={{fontSize:12,color:"#888",marginTop:2}}>Score: <strong style={{color:selected.passed?"#16a34a":"#dc2626"}}>{selected.score}%</strong>&nbsp;·&nbsp;<span style={s.tag(selected.passed?"green":"red")}>{selected.passed?"Passed":"Failed"}</span>&nbsp;·&nbsp;{formatDate(selected.submitted_at)}</div>
+                <div style={{fontSize:12,color:"#888",marginTop:2}}>
+                  Score: <strong style={{color:selected.passed?"#16a34a":"#dc2626"}}>{selected.score}%</strong>
+                  &nbsp;·&nbsp;<span style={s.tag(selected.passed?"green":"red")}>{selected.passed?"Passed":"Failed"}</span>
+                  &nbsp;·&nbsp;{formatDate(selected.submitted_at)}
+                </div>
               </div>
               <button style={s.iconBtn()} onClick={()=>setSelected(null)}>×</button>
             </div>
@@ -344,26 +376,44 @@ function ResultsPanel({ assessment }) {
                         <div style={{fontSize:14,fontWeight:600,color:G.dark,marginBottom:8}}>{ans.questions?.question_text}</div>
                         {isShort?(
                           <div>
+                            {/* Student's text response */}
                             <div style={{background:"#fff",border:`1px solid ${G.pale}`,borderRadius:6,padding:"10px 14px",fontSize:13,color:G.dark,marginBottom:10,lineHeight:1.6}}>
                               <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}><i className="bi bi-chat-left-text me-1"/>Student Response:</div>
-                              <div style={{fontStyle:ans.text_answer?"normal":"italic",color:ans.text_answer?G.dark:"#aaa"}}>{ans.text_answer||"No response provided"}</div>
-                            </div>
-                            {ans.is_graded?(
-                              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                                <span style={s.tag(ans.manual_score===1?"green":"red")}><i className={`bi bi-${ans.manual_score===1?"check-circle":"x-circle"} me-1`}/>{ans.manual_score===1?"Marked Correct":"Marked Incorrect"}</span>
-                                <button style={{...s.btnSm(G.wash,G.dark),fontSize:11}} onClick={()=>gradeAnswer(ans.id,ans.manual_score!==1,selected)}><i className="bi bi-arrow-counterclockwise"/>Change</button>
+                              <div style={{fontStyle: ans.text_answer ? "normal" : "italic", color: ans.text_answer ? G.dark : "#aaa"}}>
+                                {ans.text_answer || "No response provided"}
                               </div>
-                            ):(
+                            </div>
+                            {/* Grading buttons */}
+                            {ans.is_graded ? (
+                              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                                <span style={s.tag(ans.manual_score===1?"green":"red")}>
+                                  <i className={`bi bi-${ans.manual_score===1?"check-circle":"x-circle"} me-1`}/>
+                                  {ans.manual_score===1?"Marked Correct":"Marked Incorrect"}
+                                </span>
+                                <button style={{...s.btnSm(G.wash,G.dark),fontSize:11}} onClick={()=>gradeAnswer(ans.id, ans.manual_score!==1, selected)}>
+                                  <i className="bi bi-arrow-counterclockwise"/>Change
+                                </button>
+                              </div>
+                            ) : (
                               <div style={{display:"flex",gap:8,alignItems:"center"}}>
                                 <div style={{fontSize:11,color:"#888",marginRight:4}}><i className="bi bi-pencil-square me-1"/>Grade this response:</div>
-                                <button style={{padding:"5px 14px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:6,color:"#16a34a",cursor:"pointer",fontWeight:700,fontSize:12}} onClick={()=>gradeAnswer(ans.id,true,selected)}><i className="bi bi-check-circle me-1"/>Correct</button>
-                                <button style={{padding:"5px 14px",background:"#fff5f5",border:"1px solid #fca5a5",borderRadius:6,color:"#dc2626",cursor:"pointer",fontWeight:700,fontSize:12}} onClick={()=>gradeAnswer(ans.id,false,selected)}><i className="bi bi-x-circle me-1"/>Incorrect</button>
+                                <button style={{padding:"5px 14px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:6,color:"#16a34a",cursor:"pointer",fontWeight:700,fontSize:12}}
+                                  onClick={()=>gradeAnswer(ans.id, true, selected)}>
+                                  <i className="bi bi-check-circle me-1"/>Correct
+                                </button>
+                                <button style={{padding:"5px 14px",background:"#fff5f5",border:"1px solid #fca5a5",borderRadius:6,color:"#dc2626",cursor:"pointer",fontWeight:700,fontSize:12}}
+                                  onClick={()=>gradeAnswer(ans.id, false, selected)}>
+                                  <i className="bi bi-x-circle me-1"/>Incorrect
+                                </button>
                               </div>
                             )}
                           </div>
                         ):(
                           <div style={{display:"flex",alignItems:"center",gap:8}}>
-                            <span style={s.tag(isCorrect?"green":"red")}><i className={`bi bi-${isCorrect?"check-circle":"x-circle"} me-1`}/>{isCorrect?"Correct":"Incorrect"}</span>
+                            <span style={s.tag(isCorrect?"green":"red")}>
+                              <i className={`bi bi-${isCorrect?"check-circle":"x-circle"} me-1`}/>
+                              {isCorrect?"Correct":"Incorrect"}
+                            </span>
                             <span style={{fontSize:13}}>Answered: <strong>{ans.selected_option?.option_text||"—"}</strong></span>
                           </div>
                         )}
@@ -381,7 +431,7 @@ function ResultsPanel({ assessment }) {
   );
 }
 
-// ── Assessment Panel ──────────────────────────────────────────────
+// ── Assessment Panel (full-featured, embedded) ────────────────────
 function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   const toast = useToast();
   const [assessment, setAssessment] = useState(null);
@@ -395,8 +445,7 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   const [editQ,      setEditQ]      = useState(null);
   const [editQIdx,   setEditQIdx]   = useState(null);
   const [form, setForm] = useState({title:"",passingScore:75,timeLimit:30,badgeId:"",isPublished:false});
-  const [formErr, setFormErr] = useState({});
-  const setF = (k,v) => { setForm(f=>({...f,[k]:v})); setFormErr(e=>({...e,[k]:null})); };
+  const setF = (k,v) => setForm(f=>({...f,[k]:v}));
   const [showAI, setShowAI]         = useState(false);
   const [aiPrompt, setAiPrompt]     = useState("");
   const [aiCount, setAiCount]       = useState(5);
@@ -427,7 +476,7 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
       if (active) setLoading(false);
     })();
     return()=>{ active=false; };
-  },[module.id]); // eslint-disable-line
+  },[module.id]);// eslint-disable-line
 
   const loadQs = async (aId) => {
     const {data}=await supabase.from("questions").select("*,question_options(*)").eq("assessment_id",aId||assessment?.id).order("sort_order");
@@ -435,10 +484,6 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   };
 
   const createAssessment = async () => {
-    const titleErr = V.title(form.title, "Assessment Title");
-    const scoreErr = V.percent(form.passingScore, "Passing Score");
-    const timeErr  = V.positiveInt(form.timeLimit, "Time Limit", 1, 300);
-    if (titleErr||scoreErr||timeErr) { setFormErr({title:titleErr,passingScore:scoreErr,timeLimit:timeErr}); return; }
     setCreating(true);
     const {data:{user}}=await supabase.auth.getUser();
     const {data:newA,error}=await supabase.from("assessments").insert({
@@ -451,7 +496,7 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
     setAssessment(newA);
     setForm(f=>({...f,isPublished:false}));
     onAssessmentChange?.();
-    toast("Assessment created.", "success");
+    logActivity("assessment_created", { assessment_id: newA.id, module_title: module.title });
   };
 
   const saveSettings = () => {
@@ -459,7 +504,7 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
     const titleErr = V.title(form.title, "Assessment Title");
     const scoreErr = V.percent(form.passingScore, "Passing Score");
     const timeErr  = V.positiveInt(form.timeLimit, "Time Limit", 1, 300);
-    if (titleErr||scoreErr||timeErr) { setFormErr({title:titleErr,passingScore:scoreErr,timeLimit:timeErr}); return; }
+    if (titleErr || scoreErr || timeErr) { toast(titleErr || scoreErr || timeErr, "error"); return; }
     onConfirm?.({ title:"Save Assessment Settings", message:"Save changes to assessment title, passing score, time limit, and badge?", confirmLabel:"Save Settings", danger:false,
       onConfirm: async()=>{
         setSaving(true);
@@ -469,8 +514,8 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
         if (error){ toast("Save error: "+error.message, "error"); onConfirm?.(null); return; }
         setAssessment(a=>({...a,...payload}));
         onAssessmentChange?.();
-        toast("Assessment settings saved.", "success");
         onConfirm?.(null);
+        logActivity("assessment_updated", { assessment_id: assessment.id, title: form.title });
       }
     });
   };
@@ -478,17 +523,20 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
   const togglePublish = () => {
     if (!assessment) return;
     const newVal=!form.isPublished;
-    onConfirm?.({
-      title: newVal?"Publish Assessment":"Unpublish Assessment",
-      message: newVal?"Publish this assessment? Students will be able to see and take it immediately.":"Unpublish this assessment? Students will no longer see it.",
-      confirmLabel: newVal?"Publish":"Unpublish", danger:!newVal,
+    onConfirm?.({ 
+      title: newVal ? "Publish Assessment" : "Unpublish Assessment",
+      message: newVal
+        ? "Publish this assessment? Students will be able to see and take it immediately."
+        : "Unpublish this assessment? Students will no longer see it.",
+      confirmLabel: newVal ? "Publish" : "Unpublish",
+      danger: !newVal,
       onConfirm: async()=>{
         setF("isPublished",newVal);
         await supabase.from("assessments").update({is_published:newVal}).eq("id",assessment.id);
         setAssessment(a=>({...a,is_published:newVal}));
         onAssessmentChange?.();
-        toast(newVal?"Assessment published.":"Assessment unpublished.", "success");
         onConfirm?.(null);
+        logActivity(newVal ? "assessment_published" : "assessment_unpublished", { assessment_id: assessment.id, title: form.title });
       }
     });
   };
@@ -497,10 +545,10 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
     onConfirm?.({ title:"Delete Assessment", message:"Delete this assessment? All questions and student results will be permanently removed.", confirmLabel:"Delete", danger:true,
       onConfirm: async()=>{
         await supabase.from("assessments").delete().eq("id",assessment.id);
+        logActivity("assessment_deleted", { assessment_id: assessment.id, module_title: module.title });
         setAssessment(null);setQuestions([]);
         setForm({title:`${module.title} — Assessment`,passingScore:75,timeLimit:30,badgeId:"",isPublished:false});
         onAssessmentChange?.();
-        toast("Assessment deleted.", "success");
         onConfirm?.(null);
       }
     });
@@ -518,7 +566,6 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
           loadQs();
         }
         setQuestions(qs=>qs.filter((_,j)=>j!==i));
-        toast("Question deleted.", "success");
         onConfirm?.(null);
       }
     });
@@ -527,35 +574,40 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
 
   const saveQuestions = () => {
     if (!assessment) return;
-    if (questions.length===0) { toast("Add at least one question before saving.", "warning"); return; }
     onConfirm?.({ title:"Save Questions", message:`Save all ${questions.length} question(s) to this assessment?`, confirmLabel:"Save Questions", danger:false,
       onConfirm: async()=>{
-        setSaving(true);
-        const savedIds=[];
-        for (let i=0;i<questions.length;i++) {
-          const q=questions[i]; let qId=q.id;
-          if (q._new) {
-            const {data:nq}=await supabase.from("questions").insert({assessment_id:assessment.id,question_text:q.question_text,question_type:q.question_type,sort_order:i}).select().single();
-            qId=nq?.id;
-          } else {
-            await supabase.from("questions").update({question_text:q.question_text,question_type:q.question_type,sort_order:i}).eq("id",qId);
-            await supabase.from("question_options").delete().eq("question_id",qId);
-          }
-          if (qId) savedIds.push(qId);
-          const opts=q.options||q.question_options||[];
-          for (let j=0;j<opts.length;j++)
-            await supabase.from("question_options").insert({question_id:qId,option_text:opts[j].option_text,is_correct:opts[j].is_correct,sort_order:j});
-        }
-        const {data:dbQs}=await supabase.from("questions").select("id").eq("assessment_id",assessment.id);
-        for (const dq of (dbQs||[])) {
-          if (!savedIds.includes(dq.id)) {
-            await supabase.from("question_options").delete().eq("question_id",dq.id);
-            await supabase.from("questions").delete().eq("id",dq.id);
-          }
-        }
-        await loadQs(); setSaving(false);
-        toast("Questions saved successfully.", "success");
-        onConfirm?.(null);
+    setSaving(true);
+
+    // Track all real DB IDs that belong to this save (existing + newly inserted)
+    const savedIds = [];
+
+    for (let i=0;i<questions.length;i++) {
+      const q=questions[i]; let qId=q.id;
+      if (q._new) {
+        const {data:nq}=await supabase.from("questions").insert({assessment_id:assessment.id,question_text:q.question_text,question_type:q.question_type,sort_order:i}).select().single();
+        qId=nq?.id;
+      } else {
+        await supabase.from("questions").update({question_text:q.question_text,question_type:q.question_type,sort_order:i}).eq("id",qId);
+        await supabase.from("question_options").delete().eq("question_id",qId);
+      }
+      if (qId) savedIds.push(qId);
+      const opts=q.options||q.question_options||[];
+      for (let j=0;j<opts.length;j++) {
+        await supabase.from("question_options").insert({question_id:qId,option_text:opts[j].option_text,is_correct:opts[j].is_correct,sort_order:j});
+      }
+    }
+
+    // Only delete DB questions that are NOT in savedIds (truly removed by user)
+    const {data:dbQs}=await supabase.from("questions").select("id").eq("assessment_id",assessment.id);
+    for (const dq of (dbQs||[])) {
+      if (!savedIds.includes(dq.id)) {
+        await supabase.from("question_options").delete().eq("question_id",dq.id);
+        await supabase.from("questions").delete().eq("id",dq.id);
+      }
+    }
+    await loadQs(); setSaving(false);
+    onConfirm?.(null);
+    logActivity("assessment_questions_saved", { assessment_id: assessment.id, question_count: questions.length });
       }
     });
   };
@@ -567,52 +619,65 @@ function AssessmentPanel({ module, onAssessmentChange, onConfirm }) {
       const systemPrompt = `GAD e-learning assessment generator for BLOOM (CvSU). Return ONLY a JSON array of EXACTLY ${aiCount} ${aiType} questions. No markdown, no explanation, no extra text.
 Format: [{"question_text":"...","question_type":"${aiType}","options":[{"option_text":"...","is_correct":true/false}]}]
 Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correct; short_answer=empty options [].`;
+
       const apiKey = import.meta.env.VITE_GROQ_API_KEY;
       if (!apiKey) { setAiError("Groq API key not found. Add VITE_GROQ_API_KEY to your .env file and restart the dev server."); setAiLoading(false); return; }
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method:"POST",
-        headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
-        body:JSON.stringify({
-          model:"llama-3.1-8b-instant",temperature:0.4,max_tokens:3000,
-          messages:[
-            {role:"system",content:systemPrompt},
-            {role:"user",content:`Module: "${module.title}"\n\nTopic/Content: ${aiPrompt.trim()}\n\nGenerate ${aiCount} ${aiType} questions.`},
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          temperature: 0.4,
+          max_tokens: 3000,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `Module: "${module.title}"\n\nTopic/Content: ${aiPrompt.trim()}\n\nGenerate ${aiCount} ${aiType} questions.` },
           ],
         }),
       });
-      const data=await response.json();
-      if (data.error) { setAiError("Groq API Error: "+data.error.message); setAiLoading(false); return; }
-      const text=data.choices?.[0]?.message?.content||"";
-      let clean=text.replace(/```json|```/g,"").trim();
-      const start=clean.indexOf("["), end=clean.lastIndexOf("]");
-      if (start===-1||end===-1) throw new Error("No JSON array found in response");
-      clean=clean.slice(start,end+1);
-      const parsed=JSON.parse(clean);
+      const data = await response.json();
+      if (data.error) { setAiError("Groq API Error: " + data.error.message); setAiLoading(false); return; }
+      const text = data.choices?.[0]?.message?.content || "";
+      // Robustly extract JSON array from response
+      // Strip markdown fences, then find the first [ ... ] block
+      let clean = text.replace(/```json|```/g, "").trim();
+      // Extract just the JSON array — find first [ and last ]
+      const start = clean.indexOf("[");
+      const end   = clean.lastIndexOf("]");
+      if (start === -1 || end === -1) throw new Error("No JSON array found in response");
+      clean = clean.slice(start, end + 1);
+      const parsed = JSON.parse(clean);
       if (!Array.isArray(parsed)) throw new Error("Response is not an array");
-      const normalised=parsed.slice(0,aiCount).map((q,i)=>({
-        id:`ai_${Date.now()}_${i}`,
-        question_text:q.question_text||"",
-        question_type:q.question_type||aiType,
-        options:(q.options||[]).map(o=>({option_text:o.option_text||"",is_correct:!!o.is_correct})),
-        _new:true,
+      // Normalise and validate
+      // Trim to exact requested count if AI returned more
+      const trimmed = parsed.slice(0, aiCount);
+      const normalised = trimmed.map((q, i) => ({
+        id: `ai_${Date.now()}_${i}`,
+        question_text: q.question_text || "",
+        question_type: q.question_type || aiType,
+        options: (q.options || []).map(o => ({ option_text: o.option_text || "", is_correct: !!o.is_correct })),
+        _new: true,
       }));
       setAiGenerated(normalised);
-      setAiSelected(normalised.map(q=>q.id));
-    } catch(e) { setAiError("Failed to parse AI response. Please try again. ("+e.message+")"); }
+      setAiSelected(normalised.map(q => q.id)); // select all by default
+    } catch (e) {
+      setAiError("Failed to parse AI response. Please try again. (" + e.message + ")");
+    }
     setAiLoading(false);
   };
 
   const addAIQuestions = () => {
-    if (aiSelected.length===0) { setAiError("Please select at least one question to add."); return; }
-    const toAdd=aiGenerated.filter(q=>aiSelected.includes(q.id)).map(q=>({...q,question_options:q.options}));
-    setQuestions(qs=>[...qs,...toAdd]);
+    const toAdd = aiGenerated
+      .filter(q => aiSelected.includes(q.id))
+      .map(q => ({ ...q, question_options: q.options }));
+    setQuestions(qs => [...qs, ...toAdd]);
     setShowAI(false);
     setAiGenerated([]); setAiSelected([]); setAiPrompt(""); setAiError("");
-    toast(`${toAdd.length} AI question${toAdd.length!==1?"s":""} added.`, "success");
   };
 
   if (loading) return <div style={{padding:40,textAlign:"center",color:"#aaa"}}>Loading assessment…</div>;
 
+  // Empty state
   if (!assessment) return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"60px 20px",textAlign:"center"}}>
       <div style={{width:72,height:72,borderRadius:16,background:G.wash,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:16}}>
@@ -622,20 +687,17 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
       <div style={{fontSize:13,color:"#888",marginBottom:28,maxWidth:360}}>Create an assessment so students can test their knowledge after completing this module.</div>
       <div style={{width:"100%",maxWidth:380}}>
         <div style={s.fg}>
-          <label style={s.label}>Assessment Title *</label>
-          <input style={formErr.title?s.inputErr:s.input} value={form.title} onChange={e=>setF("title",e.target.value)} placeholder={`${module.title} — Assessment`}/>
-          <FieldError msg={formErr.title}/>
+          <label style={s.label}>Assessment Title</label>
+          <input style={s.input} value={form.title} onChange={e=>setF("title",e.target.value)} placeholder={`${module.title} — Assessment`}/>
         </div>
         <div style={{...s.row,marginBottom:16}}>
           <div style={{flex:1}}>
             <label style={s.label}>Passing Score (%)</label>
-            <input style={formErr.passingScore?s.inputErr:s.input} type="number" min={0} max={100} value={form.passingScore} onChange={e=>setF("passingScore",+e.target.value)}/>
-            <FieldError msg={formErr.passingScore}/>
+            <input style={s.input} type="number" min={0} max={100} value={form.passingScore} onChange={e=>setF("passingScore",+e.target.value)}/>
           </div>
           <div style={{flex:1}}>
             <label style={s.label}>Time Limit (min)</label>
-            <input style={formErr.timeLimit?s.inputErr:s.input} type="number" min={1} value={form.timeLimit} onChange={e=>setF("timeLimit",+e.target.value)}/>
-            <FieldError msg={formErr.timeLimit}/>
+            <input style={s.input} type="number" min={1} value={form.timeLimit} onChange={e=>setF("timeLimit",+e.target.value)}/>
           </div>
         </div>
         <button style={{...s.btnGreen,width:"100%",justifyContent:"center",padding:"11px 20px",fontSize:14,opacity:creating?0.7:1}} onClick={createAssessment} disabled={creating}>
@@ -650,42 +712,47 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
   return(
     <div>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      {/* Settings card */}
       <div style={s.card}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <i className="bi bi-gear" style={{color:G.base,fontSize:16}}/>
             <span style={{fontWeight:700,color:G.dark,fontSize:14}}>Assessment Settings</span>
             <span style={s.tag(form.isPublished?"green":"yellow")}>
-              <i className={`bi bi-${form.isPublished?"broadcast":"slash-circle"} me-1`}/>{form.isPublished?"Published":"Draft"}
+              <i className={`bi bi-${form.isPublished?"broadcast":"slash-circle"} me-1`}/>
+              {form.isPublished?"Published":"Draft"}
             </span>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             <button style={s.btnSm(form.isPublished?"#fee2e2":"#dcfce7",form.isPublished?"#dc2626":"#16a34a")} onClick={togglePublish}>
-              <i className={`bi bi-${form.isPublished?"eye-slash":"broadcast"}`}/>{form.isPublished?"Unpublish":"Publish"}
+              <i className={`bi bi-${form.isPublished?"eye-slash":"broadcast"}`}/>
+              {form.isPublished?"Unpublish":"Publish"}
             </button>
-            <button style={s.btnSm("#fee2e2","#dc2626")} onClick={deleteAssessment}><i className="bi bi-trash"/>Delete Assessment</button>
+            <button style={s.btnSm("#fee2e2","#dc2626")} onClick={deleteAssessment}>
+              <i className="bi bi-trash"/>Delete Assessment
+            </button>
           </div>
         </div>
+
         {warnNoQs&&(
           <div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:6,padding:"10px 14px",fontSize:12,color:"#9a3412",marginBottom:14,display:"flex",gap:8,alignItems:"center"}}>
-            <i className="bi bi-exclamation-triangle-fill" style={{flexShrink:0}}/>This assessment is published but has no questions. Add questions before publishing.
+            <i className="bi bi-exclamation-triangle-fill" style={{flexShrink:0}}/>
+            This assessment is published but has no questions. Add questions before publishing.
           </div>
         )}
+
         <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
           <div style={{flex:3,minWidth:200,...s.fg}}>
-            <label style={s.label}>Title *</label>
-            <input style={formErr.title?s.inputErr:s.input} value={form.title} onChange={e=>setF("title",e.target.value)}/>
-            <FieldError msg={formErr.title}/>
+            <label style={s.label}>Title</label>
+            <input style={s.input} value={form.title} onChange={e=>setF("title",e.target.value)}/>
           </div>
           <div style={{flex:1,minWidth:100,...s.fg}}>
             <label style={s.label}>Passing Score (%)</label>
-            <input style={formErr.passingScore?s.inputErr:s.input} type="number" min={0} max={100} value={form.passingScore} onChange={e=>setF("passingScore",+e.target.value)}/>
-            <FieldError msg={formErr.passingScore}/>
+            <input style={s.input} type="number" min={0} max={100} value={form.passingScore} onChange={e=>setF("passingScore",+e.target.value)}/>
           </div>
           <div style={{flex:1,minWidth:100,...s.fg}}>
             <label style={s.label}>Time Limit (min)</label>
-            <input style={formErr.timeLimit?s.inputErr:s.input} type="number" min={1} value={form.timeLimit} onChange={e=>setF("timeLimit",+e.target.value)}/>
-            <FieldError msg={formErr.timeLimit}/>
+            <input style={s.input} type="number" min={1} value={form.timeLimit} onChange={e=>setF("timeLimit",+e.target.value)}/>
           </div>
         </div>
         <div style={s.fg}>
@@ -703,9 +770,15 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
         </div>
       </div>
 
+      {/* Sub-tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${G.wash}`,marginBottom:20}}>
-        <div style={s.subTab(subTab==="questions")} onClick={()=>setSubTab("questions")}><i className="bi bi-file-earmark-text"/>Questions<span style={{...s.badge,marginLeft:4}}>{questions.length}</span></div>
-        <div style={s.subTab(subTab==="results")} onClick={()=>setSubTab("results")}><i className="bi bi-bar-chart"/>Results</div>
+        <div style={s.subTab(subTab==="questions")} onClick={()=>setSubTab("questions")}>
+          <i className="bi bi-file-earmark-text"/>Questions
+          <span style={{...s.badge,marginLeft:4}}>{questions.length}</span>
+        </div>
+        <div style={s.subTab(subTab==="results")} onClick={()=>setSubTab("results")}>
+          <i className="bi bi-bar-chart"/>Results
+        </div>
       </div>
 
       {subTab==="questions"&&(
@@ -724,7 +797,9 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
               <button style={{...s.btnSm(G.wash,G.base),border:`1px solid ${G.pale}`,fontWeight:700}} onClick={()=>{setAiPrompt(module.description||"");setAiError("");setAiGenerated([]);setAiSelected([]);setShowAI(true);}}>
                 <i className="bi bi-stars"/>Generate with AI
               </button>
-              <button style={s.btnGreen} onClick={()=>setShowAdd(true)}><i className="bi bi-plus-circle"/>Add Question</button>
+              <button style={s.btnGreen} onClick={()=>setShowAdd(true)}>
+                <i className="bi bi-plus-circle"/>Add Question
+              </button>
             </div>
           </div>
 
@@ -761,7 +836,9 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                       <div style={{padding:"14px 16px"}}>
                         <div style={{fontSize:14,fontWeight:600,color:G.dark,marginBottom:10,lineHeight:1.5}}>{q.question_text}</div>
                         {q.question_type==="short_answer"?(
-                          <div style={{background:G.wash,borderRadius:6,padding:"9px 14px",fontSize:12,color:"#888",fontStyle:"italic"}}><i className="bi bi-pencil me-1"/>Students will type a written response</div>
+                          <div style={{background:G.wash,borderRadius:6,padding:"9px 14px",fontSize:12,color:"#888",fontStyle:"italic"}}>
+                            <i className="bi bi-pencil me-1"/>Students will type a written response
+                          </div>
                         ):(
                           <div style={{display:"flex",flexDirection:"column",gap:5}}>
                             {opts.map((o,j)=>(
@@ -793,10 +870,10 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
       {showAdd&&<QuestionModal num={questions.length+1} onSave={addQ} onClose={()=>setShowAdd(false)}/>}
       {editQ&&<QuestionModal initial={editQ} num={editQIdx+1} onSave={updateQ} onClose={()=>{setEditQ(null);setEditQIdx(null);}}/>}
 
-      {/* AI Generate Modal */}
+      {/* ── AI Generate Modal ── */}
       {showAI&&(
         <div style={s.overlay}>
-          <div style={{...s.modal(640),background:G.wash}}>
+          <div style={{...s.modal,maxWidth:640,maxHeight:"92vh",overflow:"auto",background:G.wash}}>
             <div style={{padding:"16px 24px",background:`linear-gradient(135deg,${G.dark},${G.base})`,borderRadius:"10px 10px 0 0",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:1}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <div style={{width:36,height:36,borderRadius:10,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.25)"}}>
@@ -811,9 +888,13 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
             </div>
             <div style={{...s.mBody,background:G.wash}}>
               {aiError&&<div style={{background:"#fee2e2",color:"#dc2626",borderRadius:6,padding:"10px 14px",fontSize:13,marginBottom:14}}>{aiError}</div>}
+
+              {/* Module context */}
               <div style={{background:"#fff",border:`1px solid ${G.pale}`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:G.dark}}>
                 <i className="bi bi-book me-1"/><strong>Module:</strong> {module.title}
               </div>
+
+              {/* Settings row */}
               <div style={{display:"flex",gap:12,marginBottom:16}}>
                 <div style={{flex:1}}>
                   <label style={s.label}>Question Type</label>
@@ -830,23 +911,38 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                   </select>
                 </div>
               </div>
+
+              {/* Topic / content input */}
               <div style={s.fg}>
                 <label style={s.label}>Topic or Content *</label>
-                <textarea style={{...s.textarea,minHeight:100,border:aiError&&!aiPrompt.trim()?"1px solid #dc2626":undefined}} value={aiPrompt}
-                  onChange={e=>{setAiPrompt(e.target.value);setAiError("");}}
-                  placeholder="Describe the topic, paste module content, or write key concepts…"/>
-                <div style={{fontSize:11,color:"#888",marginTop:4}}><i className="bi bi-lightbulb me-1"/>Tip: Paste the module description or key learning outcomes here.</div>
+                <textarea style={{...s.textarea,minHeight:100}} value={aiPrompt}
+                  onChange={e=>setAiPrompt(e.target.value)}
+                  placeholder="Describe the topic, paste module content, or write key concepts the questions should cover. The more detail you provide, the better the questions."/>
+                <div style={{fontSize:11,color:"#888",marginTop:4}}>
+                  <i className="bi bi-lightbulb me-1"/>Tip: You can paste the module description or key learning outcomes here.
+                </div>
               </div>
+
+              {/* Generate button */}
               {aiGenerated.length===0&&(
-                <button style={{width:"100%",padding:"11px 20px",background:aiLoading?G.pale:`linear-gradient(135deg,${G.dark},${G.base})`,color:"#fff",border:"none",borderRadius:8,cursor:aiLoading?"not-allowed":"pointer",fontWeight:700,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+                <button
+                  style={{width:"100%",padding:"11px 20px",background:aiLoading?G.pale:`linear-gradient(135deg,${G.dark},${G.base})`,color:"#fff",border:"none",borderRadius:8,cursor:aiLoading?"not-allowed":"pointer",fontWeight:700,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
                   onClick={generateWithAI} disabled={aiLoading}>
-                  {aiLoading?<><span style={{width:16,height:16,border:"2px solid rgba(255,255,255,.4)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>Generating questions…</>:<><i className="bi bi-stars"/>Generate {aiCount} Questions</>}
+                  {aiLoading
+                    ? <><span style={{width:16,height:16,border:"2px solid rgba(255,255,255,.4)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/> Generating questions…</>
+                    : <><i className="bi bi-stars"/>Generate {aiCount} Questions</>
+                  }
                 </button>
               )}
+
+              {/* Generated questions review */}
               {aiGenerated.length>0&&(
                 <div>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-                    <div style={{fontWeight:700,color:G.dark,fontSize:13}}><i className="bi bi-check2-all me-1" style={{color:"#16a34a"}}/>{aiGenerated.length} questions generated — review and select</div>
+                    <div style={{fontWeight:700,color:G.dark,fontSize:13}}>
+                      <i className="bi bi-check2-all me-1" style={{color:"#16a34a"}}/>
+                      {aiGenerated.length} questions generated — review and select
+                    </div>
                     <div style={{display:"flex",gap:8}}>
                       <button style={{...s.btnSm(G.wash,G.base),fontSize:11}} onClick={()=>setAiSelected(aiGenerated.map(q=>q.id))}>Select All</button>
                       <button style={{...s.btnSm(G.wash,G.dark),fontSize:11}} onClick={()=>setAiSelected([])}>Deselect All</button>
@@ -855,6 +951,7 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                   <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:340,overflowY:"auto",padding:"2px 0"}}>
                     {aiGenerated.map((q,i)=>{
                       const sel=aiSelected.includes(q.id);
+                      const opts=q.options||[];
                       return(
                         <div key={q.id} style={{background:sel?G.wash:"#f9fafb",border:`1.5px solid ${sel?G.light:"#e5e7eb"}`,borderRadius:8,padding:"12px 14px",cursor:"pointer",transition:"all .15s"}}
                           onClick={()=>setAiSelected(s=>sel?s.filter(id=>id!==q.id):[...s,q.id])}>
@@ -864,18 +961,21 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                             </div>
                             <div style={{flex:1}}>
                               <div style={{fontSize:13,fontWeight:600,color:G.dark,marginBottom:6,lineHeight:1.5}}>
-                                <span style={{fontSize:11,fontWeight:700,color:G.base,marginRight:6}}>Q{i+1}</span>{q.question_text}
+                                <span style={{fontSize:11,fontWeight:700,color:G.base,marginRight:6}}>Q{i+1}</span>
+                                {q.question_text}
                               </div>
-                              {q.question_type!=="short_answer"?(
+                              {q.question_type!=="short_answer"&&(
                                 <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                                  {(q.options||[]).map((o,j)=>(
+                                  {opts.map((o,j)=>(
                                     <div key={j} style={{fontSize:12,padding:"4px 8px",borderRadius:5,background:o.is_correct?"#dcfce7":"#f3f4f6",color:o.is_correct?"#16a34a":G.dark,display:"flex",alignItems:"center",gap:6}}>
-                                      <i className={`bi bi-${o.is_correct?"check-circle-fill":"circle"}`} style={{color:o.is_correct?"#16a34a":"#d1d5db"}}/>{o.option_text}
+                                      <i className={`bi bi-${o.is_correct?"check-circle-fill":"circle"}`} style={{color:o.is_correct?"#16a34a":"#d1d5db"}}/>
+                                      {o.option_text}
                                       {o.is_correct&&<span style={{marginLeft:"auto",fontSize:10,fontWeight:700}}>✓ Correct</span>}
                                     </div>
                                   ))}
                                 </div>
-                              ):(
+                              )}
+                              {q.question_type==="short_answer"&&(
                                 <div style={{fontSize:12,color:"#888",fontStyle:"italic"}}>Open-ended — students type their answer</div>
                               )}
                             </div>
@@ -884,6 +984,7 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                       );
                     })}
                   </div>
+                  {/* Regenerate option */}
                   <button style={{...s.btnSm(G.wash,G.base),marginTop:10,fontSize:12}} onClick={()=>{setAiGenerated([]);setAiSelected([]);}}>
                     <i className="bi bi-arrow-clockwise"/>Regenerate
                   </button>
@@ -893,7 +994,8 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
             <div style={{...s.mFooter,background:G.wash}}>
               <button style={s.btnSecondary} onClick={()=>setShowAI(false)}>Cancel</button>
               {aiGenerated.length>0&&(
-                <button style={{...s.btnPrimary,background:`linear-gradient(135deg,${G.dark},${G.base})`,opacity:aiSelected.length===0?0.5:1}}
+                <button
+                  style={{...s.btnPrimary,background:`linear-gradient(135deg,${G.dark},${G.base})`,opacity:aiSelected.length===0?0.5:1}}
                   onClick={addAIQuestions} disabled={aiSelected.length===0}>
                   <i className="bi bi-plus-circle"/>Add {aiSelected.length} Selected Question{aiSelected.length!==1?"s":""}
                 </button>
@@ -922,9 +1024,7 @@ function FilesPanel({ module, onConfirm }) {
   },[module.id]);
 
   const upload = async (file) => {
-    // Validate file size (max 100MB)
-    if (file.size > 100 * 1024 * 1024) { toast(`"${file.name}" exceeds the 100MB limit.`, "error"); return; }
-    setUploading(true); setUploadName(file.name);
+    setUploading(true);setUploadName(file.name);
     const{data:{user}}=await supabase.auth.getUser();
     const fileType=normalizeFileType(file.name);
     const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
@@ -934,13 +1034,12 @@ function FilesPanel({ module, onConfirm }) {
     const{data:{publicUrl}}=supabase.storage.from("module-files").getPublicUrl(path);
     const{data:row}=await supabase.from("module_files").insert({module_id:module.id,file_name:file.name,file_url:publicUrl,file_type:fileType,file_size_kb:Math.round(file.size/1024),sort_order:files.length,uploaded_by:user?.id}).select().single();
     if(row)setFiles(f=>[...f,row]);
-    setUploading(false); setUploadName("");
-    toast(`"${file.name}" uploaded successfully.`, "success");
+    setUploading(false);setUploadName("");
+    logActivity("module_file_uploaded", { module_id: module.id, module_title: module.title, file_name: file.name });
   };
 
   const onDrop=async(e)=>{e.preventDefault();setDragging(false);for(const f of Array.from(e.dataTransfer.files))await upload(f);};
   const onPick=async(e)=>{for(const f of Array.from(e.target.files))await upload(f);e.target.value="";};
-
   const del=(file)=>{
     onConfirm?.({ title:"Delete File", message:`Delete "${file.file_name}"? This cannot be undone.`, confirmLabel:"Delete", danger:true,
       onConfirm: async()=>{
@@ -948,8 +1047,8 @@ function FilesPanel({ module, onConfirm }) {
         if(path)await supabase.storage.from("module-files").remove([path]);
         await supabase.from("module_files").delete().eq("id",file.id);
         setFiles(f=>f.filter(x=>x.id!==file.id));
-        toast("File deleted.", "success");
         onConfirm?.(null);
+        logActivity("module_file_deleted", { module_id: module.id, module_title: module.title, file_name: file.file_name });
       }
     });
   };
@@ -961,7 +1060,7 @@ function FilesPanel({ module, onConfirm }) {
         {uploading?(
           <><i className="bi bi-hourglass-split d-block mb-2" style={{fontSize:32,color:G.base}}/><div style={{fontWeight:700,color:G.dark,fontSize:14}}>Uploading "{uploadName}"…</div><div style={{fontSize:12,color:"#aaa",marginTop:4}}>Please wait</div></>
         ):(
-          <><i className="bi bi-cloud-upload d-block mb-2" style={{fontSize:36,color:G.pale}}/><div style={{fontWeight:700,color:G.dark,fontSize:14}}>Drop files here or click to upload</div><div style={{fontSize:12,color:"#aaa",marginTop:6}}>PDF · Video · Images · Audio · PowerPoint · Word · Excel · ZIP · Max 100MB</div></>
+          <><i className="bi bi-cloud-upload d-block mb-2" style={{fontSize:36,color:G.pale}}/><div style={{fontWeight:700,color:G.dark,fontSize:14}}>Drop files here or click to upload</div><div style={{fontSize:12,color:"#aaa",marginTop:6}}>PDF · Video · Images · Audio · PowerPoint · Word · Excel · ZIP</div></>
         )}
         <input ref={ref} type="file" multiple style={{display:"none"}} onChange={onPick} accept=".pdf,.mp4,.mov,.avi,.webm,.mkv,.jpg,.jpeg,.png,.gif,.webp,.mp3,.wav,.pptx,.ppt,.docx,.doc,.xlsx,.xls,.txt,.zip"/>
       </div>
@@ -995,7 +1094,8 @@ function FilesPanel({ module, onConfirm }) {
 
 // ── Module Form Modal ─────────────────────────────────────────────
 function ModuleModal({ initial, categories, onSave, onClose }) {
-  const [form, setForm] = useState({
+  const toast = useToast();
+  const [form,setForm]=useState({
     title:          initial?.title||"",
     description:    initial?.description||"",
     category_id:    initial?.category_id||"",
@@ -1005,135 +1105,49 @@ function ModuleModal({ initial, categories, onSave, onClose }) {
     tags:           Array.isArray(initial?.tags) ? initial.tags.join(", ") : (initial?.tags||""),
   });
   const [err, setErr] = useState({});
-  // Optional field visibility — show if initial already has value
-  const [showAuthor, setShowAuthor]   = useState(!!(initial?.author));
-  const [showDate,   setShowDate]     = useState(!!(initial?.published_date));
-
-  const set = (k,v) => { setForm(f=>({...f,[k]:v})); setErr(e=>({...e,[k]:null})); };
-
-  const removeAuthor = () => { setShowAuthor(false); set("author",""); };
-  const removeDate   = () => { setShowDate(false);   set("published_date",""); };
-
-  const submit = () => {
-    const errors = {};
-    const titleErr = V.title(form.title, "Module Title");
-    if (titleErr) errors.title = titleErr;
-    if (showAuthor && form.author) {
-      const authorErr = V.name(form.author, "Author");
-      if (authorErr) errors.author = authorErr;
-    }
-    if (showDate && form.published_date) {
-      const dateErr = V.date(form.published_date, "Publication Date");
-      if (dateErr) errors.published_date = dateErr;
-    }
-    if (form.tags) {
-      const tagsErr = V.tags(form.tags);
-      if (tagsErr) errors.tags = tagsErr;
-    }
-    if (Object.keys(errors).length) { setErr(errors); return; }
-    const tagsArray = form.tags ? form.tags.split(",").map(t=>t.trim()).filter(Boolean) : [];
-    onSave({
-      ...form,
-      author:         showAuthor && form.author.trim() ? form.author.trim() : null,
-      published_date: showDate && form.published_date   ? form.published_date   : null,
-      tags:           tagsArray,
-    });
-  };
-
+  const set=(k,v)=>{ setForm(f=>({...f,[k]:v})); setErr(e=>({...e,[k]:null})); };
   return(
     <div style={s.overlay}>
       <div style={{...s.modal(560),maxHeight:"92vh",overflow:"auto"}}>
         <div style={s.mHeader}><span style={s.mTitle}>{initial?"Edit Module":"Create New Module"}</span><button style={s.iconBtn()} onClick={onClose}>×</button></div>
         <div style={s.mBody}>
           {/* Title */}
-          <div style={s.fg}>
-            <label style={s.label}>Module Title *</label>
-            <input style={err.title?s.inputErr:s.input} value={form.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Gender Sensitivity Training" autoFocus/>
-            <FieldError msg={err.title}/>
-          </div>
+          <div style={s.fg}><label style={s.label}>Module Title *</label><input style={{...s.input,borderColor:err.title?"#dc2626":undefined}} value={form.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Gender Sensitivity Training" autoFocus/><FieldError msg={err.title}/></div>
           {/* Description */}
-          <div style={s.fg}>
-            <label style={s.label}>Description</label>
-            <textarea style={s.textarea} value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What will students learn?"/>
-          </div>
+          <div style={s.fg}><label style={s.label}>Description</label><textarea style={s.textarea} value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What will students learn?"/></div>
           {/* Category + Status */}
           <div style={s.row}>
+            <div style={{...s.fg,flex:1}}><label style={s.label}>Category</label><select style={s.select} value={form.category_id} onChange={e=>set("category_id",e.target.value)}><option value="">— Select —</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <div style={{...s.fg,flex:1}}><label style={s.label}>Status</label><select style={s.select} value={form.status} onChange={e=>set("status",e.target.value)}><option value="draft">Draft</option><option value="published">Published</option></select></div>
+          </div>
+          {/* Author + Published Date */}
+          <div style={s.row}>
             <div style={{...s.fg,flex:1}}>
-              <label style={s.label}>Category</label>
-              <select style={s.select} value={form.category_id} onChange={e=>set("category_id",e.target.value)}>
-                <option value="">— Select —</option>
-                {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <label style={s.label}>Author</label>
+              <input style={{...s.input,borderColor:err.author?"#dc2626":undefined}} value={form.author}
+                onChange={e=>{ const v=e.target.value.replace(/[0-9]/g,""); set("author",v); }}
+                placeholder="e.g. Dr. Maria Santos"/>
+              <FieldError msg={err.author}/>
+              {form.author && /\d/.test(form.author) && <div style={{color:"#dc2626",fontSize:11,marginTop:4}}>⚠ Numbers are not allowed in author name.</div>}
             </div>
             <div style={{...s.fg,flex:1}}>
-              <label style={s.label}>Status</label>
-              <select style={s.select} value={form.status} onChange={e=>set("status",e.target.value)}>
-                <option value="draft">Draft</option>
-                <option value="published">Published</option>
-              </select>
+              <label style={s.label}>Publication Date</label>
+              <input style={s.input} type="date" value={form.published_date} onChange={e=>set("published_date",e.target.value)}/>
             </div>
           </div>
-
-          {/* ── Optional: Author ── */}
-          {showAuthor ? (
-            <div style={s.optionalFieldWrap}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                <label style={{...s.label,marginBottom:0}}>Author</label>
-                <button style={{...s.iconBtn("#dc2626"),fontSize:12}} onClick={removeAuthor} title="Remove author field">
-                  <i className="bi bi-x-circle me-1"/>Remove
-                </button>
-              </div>
-              <input
-                style={err.author?s.inputErr:s.input}
-                value={form.author}
-                onChange={e=>{ const v=e.target.value.replace(/[0-9]/g,""); set("author",v); }}
-                onKeyDown={e=>{
-                  if (!/[a-zA-ZñÑáéíóúÁÉÍÓÚ\s.\-']/.test(e.key) &&
-                      !["Backspace","Delete","Tab","ArrowLeft","ArrowRight","Home","End"].includes(e.key))
-                    e.preventDefault();
-                }}
-                placeholder="e.g. Dr. Maria Santos"
-              />
-              <FieldError msg={err.author}/>
-            </div>
-          ) : (
-            <div style={{marginBottom:16}}>
-              <button style={s.btnOptional} onClick={()=>setShowAuthor(true)}>
-                <i className="bi bi-plus-circle"/>Add Author
-              </button>
-            </div>
-          )}
-
-          {/* ── Optional: Publication Date ── */}
-          {showDate ? (
-            <div style={s.optionalFieldWrap}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                <label style={{...s.label,marginBottom:0}}>Publication Date</label>
-                <button style={{...s.iconBtn("#dc2626"),fontSize:12}} onClick={removeDate} title="Remove date field">
-                  <i className="bi bi-x-circle me-1"/>Remove
-                </button>
-              </div>
-              <input style={err.published_date?s.inputErr:s.input} type="date" value={form.published_date} onChange={e=>set("published_date",e.target.value)}/>
-              <FieldError msg={err.published_date}/>
-            </div>
-          ) : (
-            <div style={{marginBottom:16}}>
-              <button style={s.btnOptional} onClick={()=>setShowDate(true)}>
-                <i className="bi bi-plus-circle"/>Add Publication Date
-              </button>
-            </div>
-          )}
-
           {/* Tags */}
           <div style={s.fg}>
             <label style={s.label}>Tags / Keywords</label>
-            <input style={err.tags?s.inputErr:s.input} value={form.tags} onChange={e=>set("tags",e.target.value)} placeholder="e.g. GAD, Women's Rights, VAWC (comma separated)"/>
+            <input style={{...s.input,borderColor:err.tags?"#dc2626":undefined}} value={form.tags} onChange={e=>set("tags",e.target.value)} placeholder="e.g. GAD, Women's Rights, VAWC (comma separated)"/>
             <div style={{fontSize:11,color:"#888",marginTop:4}}><i className="bi bi-tag me-1"/>Separate tags with commas. Max 10 tags, 30 characters each.</div>
             <FieldError msg={err.tags}/>
-            {form.tags&&(
+            {/* Tag preview */}
+            {form.tags && (
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
                 {form.tags.split(",").map(t=>t.trim()).filter(Boolean).map((t,i)=>(
-                  <span key={i} style={{background:G.wash,border:`1px solid ${G.pale}`,borderRadius:12,padding:"2px 10px",fontSize:11,color:G.dark,fontWeight:600}}>#{t}</span>
+                  <span key={i} style={{background:G.wash,border:`1px solid ${G.pale}`,borderRadius:12,padding:"2px 10px",fontSize:11,color:G.dark,fontWeight:600}}>
+                    #{t}
+                  </span>
                 ))}
               </div>
             )}
@@ -1142,8 +1156,340 @@ function ModuleModal({ initial, categories, onSave, onClose }) {
         </div>
         <div style={s.mFooter}>
           <button style={s.btnSecondary} onClick={onClose}>Cancel</button>
-          <button style={s.btnPrimary} onClick={submit}>{initial?"Save Changes":"Create Module"}</button>
+          <button style={s.btnPrimary} onClick={()=>{
+            const errors = V.all({
+              title:  V.title(form.title, "Module Title"),
+              author: form.author ? V.name(form.author, "Author") : null,
+              published_date: V.date(form.published_date, "Publication Date"),
+              tags:   V.tags(form.tags),
+              category_id: form.category_id ? null : null, // optional
+            });
+            if (errors) { setErr(errors); return; }
+            const tagsArray = form.tags ? form.tags.split(",").map(t=>t.trim()).filter(Boolean) : [];
+            onSave({...form, tags: tagsArray});
+          }}>{initial?"Save Changes":"Create Module"}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Content Panel ─────────────────────────────────────────────────
+let _quillLoaded = null;
+function loadQuill() {
+  if (!_quillLoaded) {
+    _quillLoaded = new Promise(async (resolve) => {
+      if (window.Quill) { resolve(); return; }
+      if (!document.querySelector('link[href*="quill"]')) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = "https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css";
+        document.head.appendChild(link);
+      }
+      await new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js";
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+      resolve();
+    });
+  }
+  return _quillLoaded;
+}
+
+let _jsPDFContentLoaded = null;
+function loadJsPDFContent() {
+  if (!_jsPDFContentLoaded) {
+    _jsPDFContentLoaded = new Promise((resolve, reject) => {
+      if (window.jspdf) { resolve(); return; }
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
+      s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  return _jsPDFContentLoaded;
+}
+
+function ContentPanel({ module }) {
+  const toast = useToast();
+  const [subTab,    setSubTab]    = useState("document");
+  const [saving,    setSaving]    = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [loading,   setLoading]   = useState(true);
+  const quillRef  = useRef(null);
+  const quillInst = useRef(null);
+  const [docContent,  setDocContent]  = useState("");
+  const [slides,      setSlides]      = useState([{ id: 1, title: "", body: "" }]);
+  const [activeSlide, setActiveSlide] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setLoading(true);
+      const { data } = await supabase.from("module_files")
+        .select("*").eq("module_id", module.id).eq("file_type", "content").maybeSingle();
+      if (active && data?.file_name) {
+        try {
+          const parsed = JSON.parse(data.file_name);
+          if (parsed.docContent) setDocContent(parsed.docContent);
+          if (parsed.slides?.length) setSlides(parsed.slides);
+        } catch { /* first save */ }
+      }
+      if (active) setLoading(false);
+    })();
+    return () => { active = false; };
+  }, [module.id]);
+
+  useEffect(() => {
+    if (subTab !== "document" || loading) return;
+    // Destroy any stale Quill instance before reinitialising.
+    // Without this, switching Document→Slides→Document leaves a dead instance
+    // attached to the DOM node and the editor becomes unresponsive.
+    if (quillInst.current) {
+      try { quillInst.current.off("text-change"); } catch (_) {}
+      quillInst.current = null;
+      if (quillRef.current) quillRef.current.innerHTML = "";
+    }
+    let active = true;
+    loadQuill().then(() => {
+      if (!active || !quillRef.current) return;
+      quillInst.current = new window.Quill(quillRef.current, {
+        theme: "snow",
+        placeholder: "Start writing your module content here…",
+        modules: {
+          toolbar: [
+            [{ header: [1, 2, 3, false] }],
+            ["bold", "italic", "underline", "strike"],
+            [{ color: [] }, { background: [] }],
+            [{ list: "ordered" }, { list: "bullet" }],
+            [{ align: [] }],
+            ["link"],
+            ["clean"],
+          ],
+        },
+      });
+      if (docContent) quillInst.current.root.innerHTML = docContent;
+      quillInst.current.on("text-change", () => {
+        setDocContent(quillInst.current.root.innerHTML);
+      });
+    });
+    return () => {
+      active = false;
+      if (quillInst.current) {
+        try { quillInst.current.off("text-change"); } catch (_) {}
+        quillInst.current = null;
+        if (quillRef.current) quillRef.current.innerHTML = "";
+      }
+    };
+  }, [subTab, loading]); // eslint-disable-line
+
+  const saveContent = async () => {
+    setSaving(true);
+    try {
+      const payload = JSON.stringify({ docContent, slides });
+      const { data: existing } = await supabase.from("module_files")
+        .select("id").eq("module_id", module.id).eq("file_type", "content").maybeSingle();
+      if (existing) {
+        await supabase.from("module_files").update({ file_name: payload }).eq("id", existing.id);
+      } else {
+        await supabase.from("module_files").insert({
+          module_id: module.id, file_name: payload,
+          file_url: "", file_type: "content", sort_order: 999,
+        });
+      }
+      toast("Content saved successfully.", "success");
+      logActivity("module_content_saved", { module_id: module.id, title: module.title });
+    } catch (e) { toast("Save failed: " + e.message, "error"); }
+    setSaving(false);
+  };
+
+  const exportPDF = async () => {
+    setExporting(true);
+    try {
+      await loadJsPDFContent();
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+      const W = doc.internal.pageSize.getWidth();
+      const margin = 18;
+      let y = 20;
+
+      // Title
+      doc.setFontSize(22); doc.setFont(undefined, "bold"); doc.setTextColor(26, 46, 26);
+      const titleLines = doc.splitTextToSize(module.title, W - margin * 2);
+      doc.text(titleLines, margin, y); y += titleLines.length * 9 + 4;
+      if (module.author) {
+        doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(100);
+        doc.text(`Author: ${module.author}`, margin, y); y += 6;
+      }
+      doc.setDrawColor(45, 106, 45); doc.setLineWidth(0.5);
+      doc.line(margin, y, W - margin, y); y += 10;
+
+      if (subTab === "document") {
+        const tmp = document.createElement("div");
+        tmp.innerHTML = docContent;
+        const blocks = tmp.querySelectorAll("h1,h2,h3,p,li");
+        blocks.forEach(el => {
+          const tag = el.tagName.toLowerCase();
+          const text = el.innerText?.trim();
+          if (!text) return;
+          if (tag === "h1") { doc.setFontSize(16); doc.setFont(undefined, "bold"); doc.setTextColor(26,46,26); }
+          else if (tag === "h2") { doc.setFontSize(14); doc.setFont(undefined, "bold"); doc.setTextColor(45,106,45); }
+          else if (tag === "h3") { doc.setFontSize(12); doc.setFont(undefined, "bold"); doc.setTextColor(58,122,58); }
+          else { doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(60,60,60); }
+          const lines = doc.splitTextToSize((tag==="li"?"• ":"")+text, W - margin*2);
+          if (y + lines.length*6 > doc.internal.pageSize.getHeight()-20) { doc.addPage(); y=20; }
+          doc.text(lines, margin, y);
+          y += lines.length*6 + (tag.startsWith("h")?4:3);
+        });
+      } else {
+        slides.forEach((slide, i) => {
+          if (i > 0) { doc.addPage(); y = 20; }
+          doc.setFillColor(45,106,45);
+          doc.roundedRect(margin, y-5, 28, 8, 2, 2, "F");
+          doc.setFontSize(9); doc.setFont(undefined,"bold"); doc.setTextColor(255,255,255);
+          doc.text(`Slide ${i+1}`, margin+2, y); y += 10;
+          doc.setFontSize(18); doc.setFont(undefined,"bold"); doc.setTextColor(26,46,26);
+          const tl = doc.splitTextToSize(slide.title||`Slide ${i+1}`, W-margin*2);
+          doc.text(tl, margin, y); y += tl.length*8+5;
+          doc.setDrawColor(200,230,200); doc.setLineWidth(0.3);
+          doc.line(margin, y, W-margin, y); y += 8;
+          doc.setFontSize(12); doc.setFont(undefined,"normal"); doc.setTextColor(60,60,60);
+          const bl = doc.splitTextToSize(slide.body||"", W-margin*2);
+          doc.text(bl, margin, y);
+        });
+      }
+      doc.save(`${module.title.replace(/\s+/g,"-").toLowerCase()}-content.pdf`);
+      toast("PDF exported successfully.", "success");
+    } catch(e) { toast("Export failed: "+e.message, "error"); }
+    setExporting(false);
+  };
+
+  const addSlide    = () => { setSlides(s=>[...s,{id:Date.now(),title:"",body:""}]); setActiveSlide(slides.length); };
+  const deleteSlide = (i) => { if(slides.length<=1) return; setSlides(s=>s.filter((_,j)=>j!==i)); setActiveSlide(Math.max(0,i-1)); };
+  const updateSlide = (i,k,v) => setSlides(s=>s.map((sl,j)=>j===i?{...sl,[k]:v}:sl));
+  const moveSlide   = (i,dir) => { const arr=[...slides],t=i+dir; if(t<0||t>=arr.length)return; [arr[i],arr[t]]=[arr[t],arr[i]]; setSlides(arr); setActiveSlide(t); };
+
+  if (loading) return <div style={{padding:40,textAlign:"center",color:"#aaa"}}>Loading content…</div>;
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
+        <div style={{display:"flex",gap:4,background:G.wash,borderRadius:8,padding:4}}>
+          {[{id:"document",icon:"bi-file-earmark-richtext",label:"Document"},{id:"slides",icon:"bi-easel",label:"Slides"}].map(t=>(
+            <button key={t.id} onClick={()=>setSubTab(t.id)}
+              style={{padding:"7px 16px",borderRadius:6,border:"none",cursor:"pointer",fontWeight:600,fontSize:12,
+                background:subTab===t.id?"#fff":"transparent",color:subTab===t.id?G.dark:"#888",
+                boxShadow:subTab===t.id?"0 1px 4px rgba(0,0,0,.1)":"none"}}>
+              <i className={`bi ${t.icon} me-1`}/>{t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={exportPDF} disabled={exporting}
+            style={{...s.btnSecondary,opacity:exporting?0.6:1,display:"inline-flex",alignItems:"center",gap:6}}>
+            <i className="bi bi-file-earmark-pdf"/>{exporting?"Exporting…":"Export PDF"}
+          </button>
+          <button onClick={saveContent} disabled={saving}
+            style={{...s.btnPrimary,opacity:saving?0.6:1,display:"inline-flex",alignItems:"center",gap:6}}>
+            <i className="bi bi-floppy"/>{saving?"Saving…":"Save Content"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── DOCUMENT ── */}
+      {subTab==="document"&&(
+        <div style={{background:"#fff",borderRadius:10,border:"1px solid #DDE8DD",overflow:"hidden"}}>
+          <style>{`
+            .ql-toolbar{border:none!important;border-bottom:1px solid #DDE8DD!important;background:#F9FBF9}
+            .ql-container{border:none!important;font-family:'Inter',sans-serif!important;font-size:14px!important}
+            .ql-editor{min-height:420px;padding:24px!important;color:#1A2E1A}
+            .ql-editor h1{font-size:24px;color:#1A2E1A}
+            .ql-editor h2{font-size:20px;color:#2D6A2D}
+            .ql-editor h3{font-size:16px;color:#3A7A3A}
+            .ql-editor.ql-blank::before{color:#bbb;font-style:normal!important}
+          `}</style>
+          <div ref={quillRef}/>
+        </div>
+      )}
+
+      {/* ── SLIDES ── */}
+      {subTab==="slides"&&(
+        <div style={{display:"flex",gap:16}}>
+          {/* Slide list */}
+          <div style={{width:180,flexShrink:0}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>
+              Slides ({slides.length})
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {slides.map((sl,i)=>(
+                <div key={sl.id} onClick={()=>setActiveSlide(i)}
+                  style={{padding:"10px 12px",borderRadius:8,cursor:"pointer",
+                    border:`2px solid ${activeSlide===i?G.base:"#DDE8DD"}`,
+                    background:activeSlide===i?G.wash:"#fff",transition:"all .15s"}}>
+                  <div style={{fontSize:10,fontWeight:700,color:G.base,marginBottom:2}}>Slide {i+1}</div>
+                  <div style={{fontSize:12,fontWeight:600,color:G.dark,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                    {sl.title||"Untitled"}
+                  </div>
+                </div>
+              ))}
+              <button onClick={addSlide}
+                style={{padding:"8px 12px",borderRadius:8,border:`2px dashed ${G.pale}`,background:"transparent",
+                  cursor:"pointer",fontSize:12,color:G.base,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+                <i className="bi bi-plus-circle"/>Add Slide
+              </button>
+            </div>
+          </div>
+
+          {/* Slide editor */}
+          <div style={{flex:1,background:"#fff",borderRadius:10,border:"1px solid #DDE8DD",overflow:"hidden"}}>
+            <div style={{padding:"10px 16px",borderBottom:"1px solid #DDE8DD",background:"#F9FBF9",
+              display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <span style={{fontSize:13,fontWeight:700,color:G.dark}}>Slide {activeSlide+1} of {slides.length}</span>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={()=>moveSlide(activeSlide,-1)} disabled={activeSlide===0}
+                  style={{...s.iconBtn("#888"),opacity:activeSlide===0?0.3:1}}><i className="bi bi-arrow-up"/></button>
+                <button onClick={()=>moveSlide(activeSlide,1)} disabled={activeSlide===slides.length-1}
+                  style={{...s.iconBtn("#888"),opacity:activeSlide===slides.length-1?0.3:1}}><i className="bi bi-arrow-down"/></button>
+                <button onClick={()=>deleteSlide(activeSlide)} disabled={slides.length<=1}
+                  style={{...s.iconBtn("#dc2626"),opacity:slides.length<=1?0.3:1}}><i className="bi bi-trash"/></button>
+              </div>
+            </div>
+            <div style={{padding:24}}>
+              <div style={s.fg}>
+                <label style={s.label}>Slide Title</label>
+                <input style={{...s.input,fontSize:18,fontWeight:700,padding:"12px 14px"}}
+                  value={slides[activeSlide]?.title||""} onChange={e=>updateSlide(activeSlide,"title",e.target.value)}
+                  placeholder="Enter slide title…"/>
+              </div>
+              <div style={s.fg}>
+                <label style={s.label}>Slide Content</label>
+                <textarea style={{...s.textarea,minHeight:220,fontSize:14,lineHeight:1.7}}
+                  value={slides[activeSlide]?.body||""} onChange={e=>updateSlide(activeSlide,"body",e.target.value)}
+                  placeholder="Write the content for this slide…"/>
+              </div>
+              {/* Live preview */}
+              <div style={{background:"linear-gradient(135deg,#1A2E1A,#2D6A2D)",borderRadius:10,padding:"24px 28px",color:"#fff"}}>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:1,color:"rgba(255,255,255,.5)",marginBottom:8,textTransform:"uppercase"}}>
+                  Preview · Slide {activeSlide+1}
+                </div>
+                <div style={{fontSize:20,fontWeight:800,marginBottom:12,lineHeight:1.3}}>
+                  {slides[activeSlide]?.title||"Slide Title"}
+                </div>
+                <div style={{fontSize:13,color:"rgba(255,255,255,.8)",lineHeight:1.7,whiteSpace:"pre-wrap"}}>
+                  {slides[activeSlide]?.body||"Slide content will appear here…"}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{marginTop:12,fontSize:12,color:"#888"}}>
+        <i className="bi bi-info-circle me-1"/>
+        Content is saved to this module. Use <strong>Export PDF</strong> to download a printable version.
       </div>
     </div>
   );
@@ -1165,7 +1511,7 @@ export default function ModulesPage() {
   const [filterTag,      setFilterTag]      = useState("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo,   setFilterDateTo]   = useState("");
-  const [confirm,    setConfirm]    = useState(null);
+  const [confirm,    setConfirm]    = useState(null); // {title,message,onConfirm,danger?}
 
   const loadModules = async () => {
     const{data}=await supabase.from("modules").select("*, categories(name), module_files(count), assessments(id,is_published,title), author, published_date, tags").order("created_at",{ascending:false});
@@ -1187,11 +1533,11 @@ export default function ModulesPage() {
 
   const saveModule = async (form) => {
     const { data: { user } } = await supabase.auth.getUser();
+    // Clean form — convert empty strings to null for UUID fields
     const clean = {
       ...form,
       category_id:    form.category_id    || null,
       published_date: form.published_date || null,
-      author:         form.author         || null,
       tags:           Array.isArray(form.tags) ? form.tags : [],
     };
     if (editMod) {
@@ -1200,11 +1546,13 @@ export default function ModulesPage() {
       setModules(ms => ms.map(m => m.id === editMod.id ? data : m));
       if (selected?.id === editMod.id) setSelected(data);
       toast("Module updated successfully.", "success");
+      logActivity("module_updated", { module_id: data.id, title: data.title });
     } else {
       const { data, error } = await supabase.from("modules").insert({ ...clean, created_by: user?.id }).select("*, categories(name), module_files(count), assessments(id,is_published,title)").single();
       if (error) { toast("Create error: " + error.message, "error"); return; }
       setModules(ms => [data, ...ms]); setSelected(data);
       toast("Module created successfully.", "success");
+      logActivity("module_created", { module_id: data.id, title: data.title });
     }
     setShowModal(false); setEditMod(null);
   };
@@ -1212,33 +1560,43 @@ export default function ModulesPage() {
   const togglePublish = (mod, e) => {
     e?.stopPropagation();
     const isPublishing = mod.status !== "published";
-    setConfirm({
-      title: isPublishing?"Publish Module":"Unpublish Module",
-      message: isPublishing?`Publish "${mod.title}"? It will become visible to all students in the app.`:`Unpublish "${mod.title}"? Students will no longer see this module.`,
-      confirmLabel: isPublishing?"Publish":"Unpublish", danger:!isPublishing,
-      onConfirm: async () => {
-        const newStatus = isPublishing?"published":"draft";
-        await supabase.from("modules").update({status:newStatus}).eq("id",mod.id);
-        const updated={...mod,status:newStatus};
-        setModules(ms=>ms.map(m=>m.id===mod.id?updated:m));
-        if(selected?.id===mod.id)setSelected(updated);
-        toast(isPublishing?"Module published.":"Module unpublished.", "success");
-        setConfirm(null);
-      }
-    });
+    if (isPublishing) {
+      setConfirm({ title:"Publish Module", message:`Publish "${mod.title}"? It will become visible to all students in the app.`, confirmLabel:"Publish", danger:false,
+        onConfirm: async () => {
+          await supabase.from("modules").update({status:"published"}).eq("id",mod.id);
+          const updated={...mod,status:"published"};
+          setModules(ms=>ms.map(m=>m.id===mod.id?updated:m));
+          if(selected?.id===mod.id)setSelected(updated);
+          setConfirm(null);
+          logActivity("module_published", { module_id: mod.id, title: mod.title });
+        }
+      });
+    } else {
+      setConfirm({ title:"Unpublish Module", message:`Unpublish "${mod.title}"? Students will no longer see this module.`, confirmLabel:"Unpublish", danger:true,
+        onConfirm: async () => {
+          await supabase.from("modules").update({status:"draft"}).eq("id",mod.id);
+          const updated={...mod,status:"draft"};
+          setModules(ms=>ms.map(m=>m.id===mod.id?updated:m));
+          if(selected?.id===mod.id)setSelected(updated);
+          setConfirm(null);
+          logActivity("module_unpublished", { module_id: mod.id, title: mod.title });
+        }
+      });
+    }
   };
 
   const deleteMod = () => {
     if (!selected) return;
     setConfirm({
-      title:"Delete Module",
-      message:`Delete "${selected?.title}"? This will permanently remove the module, all files, and the linked assessment.`,
-      confirmLabel:"Delete", danger:true,
+      title: "Delete Module",
+      message: `Delete "${selected?.title}"? This will permanently remove the module, all files, and the linked assessment.`,
+      confirmLabel: "Delete",
+      danger: true,
       onConfirm: async () => {
         await supabase.from("modules").delete().eq("id", selected.id);
+        logActivity("module_deleted", { module_id: selected.id, title: selected.title });
         const rest = modules.filter(m => m.id !== selected.id);
         setModules(rest); setSelected(rest[0] || null);
-        toast("Module deleted.", "success");
         setConfirm(null);
       }
     });
@@ -1262,7 +1620,6 @@ export default function ModulesPage() {
     if (filterDateTo   && m.published_date && m.published_date > filterDateTo)   return false;
     return true;
   });
-
   const uniqueAuthors    = [...new Set(modules.map(m=>m.author).filter(Boolean))].sort();
   const uniqueCategories = [...new Set(modules.map(m=>m.categories?.name).filter(Boolean))].sort();
   const uniqueTags       = [...new Set(modules.flatMap(m=>Array.isArray(m.tags)?m.tags:[]))].sort();
@@ -1282,8 +1639,9 @@ export default function ModulesPage() {
             style={{...s.input,marginTop:10,background:"rgba(255,255,255,0.1)",border:"none",color:"#fff",fontSize:12}}/>
         </div>
 
-        {/* Filters */}
+        {/* ── Filters ── */}
         <div style={{padding:"12px 14px",borderBottom:"1px solid rgba(255,255,255,0.1)"}}>
+          {/* Author */}
           {uniqueAuthors.length>0&&(
             <div style={{marginBottom:8}}>
               <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Author</div>
@@ -1294,6 +1652,7 @@ export default function ModulesPage() {
               </select>
             </div>
           )}
+          {/* Category */}
           {uniqueCategories.length>0&&(
             <div style={{marginBottom:8}}>
               <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Category</div>
@@ -1304,6 +1663,7 @@ export default function ModulesPage() {
               </select>
             </div>
           )}
+          {/* Tag */}
           {uniqueTags.length>0&&(
             <div style={{marginBottom:8}}>
               <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Tag</div>
@@ -1314,6 +1674,7 @@ export default function ModulesPage() {
               </select>
             </div>
           )}
+          {/* Date Range */}
           <div style={{marginBottom:4}}>
             <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Publication Date</div>
             <div style={{display:"flex",gap:4}}>
@@ -1323,6 +1684,7 @@ export default function ModulesPage() {
                 style={{flex:1,padding:"5px 6px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#fff",fontSize:10,outline:"none",colorScheme:"dark"}}/>
             </div>
           </div>
+          {/* Clear filters */}
           {activeFilters>0&&(
             <button onClick={()=>{setFilterAuthor("");setFilterCategory("");setFilterTag("");setFilterDateFrom("");setFilterDateTo("");}}
               style={{marginTop:8,width:"100%",padding:"5px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,color:"#fff",fontSize:11,cursor:"pointer",fontWeight:600}}>
@@ -1377,6 +1739,7 @@ export default function ModulesPage() {
               <div style={{flex:1,minWidth:0}}>
                 <div style={s.topBarTitle}>{selected.title}</div>
                 <div style={{fontSize:12,color:"#aaa"}}>{selected.categories?.name||"Uncategorized"}{selected.description?` · ${selected.description.slice(0,60)}…`:""}</div>
+                {/* Metadata row */}
                 <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:6,alignItems:"center"}}>
                   {selected.author&&(
                     <span style={{fontSize:11,color:"#666",display:"flex",alignItems:"center",gap:4}}>
@@ -1408,6 +1771,9 @@ export default function ModulesPage() {
               <div style={s.tab(tab==="files")} onClick={()=>setTab("files")}>
                 <i className="bi bi-folder2-open"/>Files{fileCount(selected)>0&&<span style={s.badge}>{fileCount(selected)}</span>}
               </div>
+              <div style={s.tab(tab==="content")} onClick={()=>setTab("content")}>
+                <i className="bi bi-file-earmark-richtext"/>Content Creator
+              </div>
               <div style={s.tab(tab==="assessment")} onClick={()=>setTab("assessment")}>
                 <i className="bi bi-clipboard-check"/>Assessment
                 {hasAssess(selected)&&<span style={{...s.badge,background:"#dcfce7",color:"#16a34a"}}><i className="bi bi-check"/></span>}
@@ -1416,6 +1782,7 @@ export default function ModulesPage() {
 
             <div style={s.content}>
               {tab==="files"      &&<FilesPanel      key={selected.id+"_f"} module={selected} onConfirm={setConfirm}/>}
+              {tab==="content"    &&<ContentPanel    key={selected.id+"_c"} module={selected}/>}
               {tab==="assessment" &&<AssessmentPanel key={selected.id+"_a"} module={selected} onAssessmentChange={handleAssessmentChange} onConfirm={setConfirm}/>}
             </div>
           </>

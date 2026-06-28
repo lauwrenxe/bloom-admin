@@ -4,6 +4,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase.js";
 import { ConfirmModal, useToast } from "./App.jsx";
+import { V, FieldError } from "./lib/Validate.jsx";
+import { logActivity } from "./lib/activityLog.js";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -58,14 +60,13 @@ const s = {
   emptyBox:    { background: "#fff", borderRadius: 14, border: `2px dashed ${G.pale}`, padding: "50px 20px", textAlign: "center" },
   badgeCard:   { background: "#fff", borderRadius: 10, padding: "16px", border: "1px solid #DDE8DD", display: "flex", alignItems: "center", gap: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.04)" },
   toolbar:     { display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" },
-  // Fixed: added color, appearance, and consistent sizing
   searchBar:   { padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", color: G.dark, width: 260 },
   filterSelect:{ padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", color: G.dark, appearance: "auto", cursor: "pointer", minWidth: 140 },
   infoBox:    (c) => ({ background: c === "green" ? "#f0fdf4" : c === "red" ? "#fef2f2" : c === "yellow" ? "#fffbeb" : "#eff6ff", border: `1px solid ${c === "green" ? "#bbf7d0" : c === "red" ? "#fecaca" : c === "yellow" ? "#fed7aa" : "#bfdbfe"}`, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: c === "green" ? "#15803d" : c === "red" ? "#b91c1c" : c === "yellow" ? "#92400e" : "#1d4ed8", display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 14 }),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SIGNATORY SETTINGS  (persisted in app_settings table)
+//  SIGNATORY SETTINGS
 // ─────────────────────────────────────────────────────────────────────────────
 const DEFAULT_SIGS = {
   sig1_name:  "GAD Coordinator",
@@ -87,132 +88,109 @@ async function loadSignatorySettings() {
 
 async function saveSignatorySettings(sigs) {
   const rows = Object.entries(sigs).map(([key, value]) => ({ key, value }));
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert(rows, { onConflict: "key" });
+  const { error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" });
   return error;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SIGNATORY SETTINGS PANEL (rendered at top of Certificates page)
+//  SIGNATORY SETTINGS PANEL — with validation
 // ─────────────────────────────────────────────────────────────────────────────
 function SignatorySettingsPanel({ sigs, onChange }) {
   const toast = useToast();
   const [open,   setOpen]   = useState(false);
   const [form,   setForm]   = useState({ ...sigs });
   const [saving, setSaving] = useState(false);
+  const [sigErr, setSigErr] = useState({});
 
-  // Sync form when sigs prop changes (on first load)
   useEffect(() => { setForm({ ...sigs }); }, [sigs]);
 
-  const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setF = (k, v) => { setForm(f => ({ ...f, [k]: v })); setSigErr(e => ({ ...e, [k]: null })); };
 
   const save = async () => {
+    const errs = V.all({
+      sig1_name:  V.name(form.sig1_name,  "Left signatory name"),
+      sig1_title: !form.sig1_title?.trim() ? "Left signatory title is required."
+                  : form.sig1_title.trim().length > 80 ? "Title must not exceed 80 characters." : null,
+      sig2_name:  V.name(form.sig2_name,  "Right signatory name"),
+      sig2_title: !form.sig2_title?.trim() ? "Right signatory title is required."
+                  : form.sig2_title.trim().length > 80 ? "Title must not exceed 80 characters." : null,
+    });
+    if (errs) { setSigErr(errs); return; }
     setSaving(true);
-    const err = await saveSignatorySettings(form);
+    const saveErr = await saveSignatorySettings(form);
     setSaving(false);
-    if (err) { toast("Failed to save settings.", "error"); return; }
-    onChange(form);
-    setOpen(false);
+    if (saveErr) { toast("Failed to save settings.", "error"); return; }
+    onChange(form); setOpen(false); setSigErr({});
     toast("Signatory settings saved.", "success");
+    logActivity("certificate_signatories_updated", { sig1: form.sig1_name, sig2: form.sig2_name });
   };
 
-  const reset = () => setForm({ ...sigs });
+  const reset = () => { setForm({ ...sigs }); setSigErr({}); };
 
   return (
     <div style={{ marginBottom: 20 }}>
-      {/* Collapsed bar */}
       <div
-        onClick={() => { setOpen(v => !v); setForm({ ...sigs }); }}
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          background: "#fff", border: "1px solid #DDE8DD", borderRadius: open ? "8px 8px 0 0" : 8,
-          padding: "10px 16px", cursor: "pointer", userSelect: "none",
-        }}
+        onClick={() => { setOpen(v => !v); setForm({ ...sigs }); setSigErr({}); }}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#fff", border: "1px solid #DDE8DD", borderRadius: open ? "8px 8px 0 0" : 8, padding: "10px 16px", cursor: "pointer", userSelect: "none" }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <i className="bi bi-pen" style={{ color: G.base, fontSize: 14 }} />
           <span style={{ fontSize: 13, fontWeight: 700, color: G.dark }}>Signatory Settings</span>
-          {!open && (
-            <span style={{ fontSize: 12, color: "#888", marginLeft: 4 }}>
-              {sigs.sig1_name} &amp; {sigs.sig2_name}
-            </span>
-          )}
+          {!open && <span style={{ fontSize: 12, color: "#888", marginLeft: 4 }}>{sigs.sig1_name} &amp; {sigs.sig2_name}</span>}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {!open && (
-            <span style={{
-              fontSize: 11, fontWeight: 600, color: G.base,
-              background: G.wash, padding: "2px 8px", borderRadius: 10,
-            }}>
-              <i className="bi bi-pencil me-1" style={{ fontSize: 10 }} />Edit
-            </span>
-          )}
+          {!open && <span style={{ fontSize: 11, fontWeight: 600, color: G.base, background: G.wash, padding: "2px 8px", borderRadius: 10 }}><i className="bi bi-pencil me-1" style={{ fontSize: 10 }} />Edit</span>}
           <i className={`bi bi-chevron-${open ? "up" : "down"}`} style={{ color: "#aaa", fontSize: 12 }} />
         </div>
       </div>
 
-      {/* Expanded form */}
       {open && (
-        <div style={{
-          background: "#fff", border: "1px solid #DDE8DD", borderTop: "none",
-          borderRadius: "0 0 8px 8px", padding: "16px 20px",
-        }}>
+        <div style={{ background: "#fff", border: "1px solid #DDE8DD", borderTop: "none", borderRadius: "0 0 8px 8px", padding: "16px 20px" }}>
           <div style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>
             <i className="bi bi-info-circle me-1" />
             These names appear on every certificate by default. Admins can still override them per certificate if needed.
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            {/* Left signatory */}
             <div style={{ flex: 1, minWidth: 220 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
                 <i className="bi bi-person-badge me-1" style={{ color: G.base }} />Left Signatory
               </div>
               <div style={{ marginBottom: 8 }}>
-                <label style={s.label}>Name</label>
-                <input style={s.input} value={form.sig1_name || ""} onChange={e => setF("sig1_name", e.target.value)} placeholder="e.g. Dr. Maria Santos" />
+                <label style={s.label}>Name *</label>
+                <input style={{ ...s.input, borderColor: sigErr.sig1_name ? "#dc2626" : undefined }} value={form.sig1_name || ""} onChange={e => setF("sig1_name", e.target.value)} placeholder="e.g. Dr. Maria Santos" />
+                <FieldError msg={sigErr.sig1_name}/>
               </div>
               <div>
-                <label style={s.label}>Title / Position</label>
-                <input style={s.input} value={form.sig1_title || ""} onChange={e => setF("sig1_title", e.target.value)} placeholder="e.g. GAD Coordinator" />
+                <label style={s.label}>Title / Position *</label>
+                <input style={{ ...s.input, borderColor: sigErr.sig1_title ? "#dc2626" : undefined }} value={form.sig1_title || ""} onChange={e => setF("sig1_title", e.target.value)} placeholder="e.g. GAD Coordinator" />
+                <FieldError msg={sigErr.sig1_title}/>
               </div>
             </div>
-            {/* Divider */}
             <div style={{ width: 1, background: "#DDE8DD", margin: "0 4px", alignSelf: "stretch" }} />
-            {/* Right signatory */}
             <div style={{ flex: 1, minWidth: 220 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
                 <i className="bi bi-person-badge me-1" style={{ color: G.base }} />Right Signatory
               </div>
               <div style={{ marginBottom: 8 }}>
-                <label style={s.label}>Name</label>
-                <input style={s.input} value={form.sig2_name || ""} onChange={e => setF("sig2_name", e.target.value)} placeholder="e.g. Dr. Jose Reyes" />
+                <label style={s.label}>Name *</label>
+                <input style={{ ...s.input, borderColor: sigErr.sig2_name ? "#dc2626" : undefined }} value={form.sig2_name || ""} onChange={e => setF("sig2_name", e.target.value)} placeholder="e.g. Dr. Jose Reyes" />
+                <FieldError msg={sigErr.sig2_name}/>
               </div>
               <div>
-                <label style={s.label}>Title / Position</label>
-                <input style={s.input} value={form.sig2_title || ""} onChange={e => setF("sig2_title", e.target.value)} placeholder="e.g. GADRC Director" />
+                <label style={s.label}>Title / Position *</label>
+                <input style={{ ...s.input, borderColor: sigErr.sig2_title ? "#dc2626" : undefined }} value={form.sig2_title || ""} onChange={e => setF("sig2_title", e.target.value)} placeholder="e.g. GADRC Director" />
+                <FieldError msg={sigErr.sig2_title}/>
               </div>
             </div>
           </div>
-          {/* Preview strip */}
           <div style={{ marginTop: 14, background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark, display: "flex", gap: 24, flexWrap: "wrap" }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontWeight: 700 }}>{form.sig1_name || "—"}</div>
-              <div style={{ color: "#888", fontSize: 11 }}>{form.sig1_title || "—"}</div>
-            </div>
+            <div style={{ textAlign: "center" }}><div style={{ fontWeight: 700 }}>{form.sig1_name || "—"}</div><div style={{ color: "#888", fontSize: 11 }}>{form.sig1_title || "—"}</div></div>
             <div style={{ color: "#ccc", alignSelf: "center" }}>|</div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontWeight: 700 }}>{form.sig2_name || "—"}</div>
-              <div style={{ color: "#888", fontSize: 11 }}>{form.sig2_title || "—"}</div>
-            </div>
+            <div style={{ textAlign: "center" }}><div style={{ fontWeight: 700 }}>{form.sig2_name || "—"}</div><div style={{ color: "#888", fontSize: 11 }}>{form.sig2_title || "—"}</div></div>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
-            <button onClick={reset} style={{ padding: "8px 16px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
-              Reset
-            </button>
-            <button onClick={() => { setOpen(false); reset(); }} style={{ padding: "8px 16px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
-              Cancel
-            </button>
+            <button onClick={reset} style={{ padding: "8px 16px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Reset</button>
+            <button onClick={() => { setOpen(false); reset(); }} style={{ padding: "8px 16px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Cancel</button>
             <button onClick={save} disabled={saving} style={{ padding: "8px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6, opacity: saving ? 0.7 : 1 }}>
               <i className="bi bi-check-lg" />{saving ? "Saving…" : "Save Settings"}
             </button>
@@ -232,10 +210,7 @@ const CERT_TITLES = {
   assessment: "Certificate of Achievement",
   manual:     "Certificate of Recognition",
 };
-
-function certTitle(refType) {
-  return CERT_TITLES[refType] || "Certificate of Achievement";
-}
+function certTitle(refType) { return CERT_TITLES[refType] || "Certificate of Achievement"; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  DEFAULT TEMPLATE GENERATOR
@@ -245,14 +220,12 @@ function buildDefaultTemplate({ seminar, recipientName = "[Participant Name]", r
   const semDate    = seminar?.scheduled_start ? formatDateLong(seminar.scheduled_start) : "";
   const semVenue   = seminar?.venue || "";
   const dateClause = semDate ? ` held on ${semDate}${semVenue ? ` at ${semVenue}` : ""}` : "";
-
   const bodyMap = {
     seminar:    `has successfully participated in "${semTitle}"${dateClause}, organized by the Gender and Development Resource Center (GADRC) of Cavite State University. This certificate is awarded in recognition of active participation and commitment to advancing Gender and Development advocacy.`,
     module:     `has successfully completed the module "${semTitle}"${dateClause} as part of the BLOOM GAD e-Learning Program. This certificate is awarded in recognition of dedication to learning and Gender and Development advocacy.`,
     assessment: `has successfully passed the assessment for "${semTitle}"${dateClause} under the BLOOM GAD e-Learning Program. This certificate is awarded in recognition of outstanding performance and commitment to Gender and Development principles.`,
     manual:     `is hereby recognized for outstanding contribution and participation in Gender and Development activities organized by the GADRC of Cavite State University.`,
   };
-
   return {
     body_text:   bodyMap[refType] || bodyMap.manual,
     sig1_name:   sigs.sig1_name  || DEFAULT_SIGS.sig1_name,
@@ -269,30 +242,19 @@ function buildDefaultTemplate({ seminar, recipientName = "[Participant Name]", r
 async function insertCertificateNotification(userId, certCode, seminarTitle) {
   try {
     await supabase.from("notifications").insert({
-      user_id:        userId,
-      type:           "new_certificate",
-      title:          "Certificate Issued",
-      body:           seminarTitle
-        ? `Your certificate for "${seminarTitle}" has been issued (${certCode}). View it in Achievements.`
-        : `Your certificate (${certCode}) has been issued. View it in Achievements.`,
-      reference_type: "certificate",
-      reference_id:   null,
-      is_read:        false,
+      user_id: userId, type: "new_certificate", title: "Certificate Issued",
+      body: seminarTitle ? `Your certificate for "${seminarTitle}" has been issued (${certCode}). View it in Achievements.` : `Your certificate (${certCode}) has been issued. View it in Achievements.`,
+      reference_type: "certificate", reference_id: null, is_read: false,
     });
-  } catch (e) {
-    console.error("insertCertificateNotification failed:", e);
-  }
+  } catch (e) { console.error("insertCertificateNotification failed:", e); }
 }
-
-function genCertCode() {
-  return `CERT-${Date.now().toString(36).toUpperCase()}`;
-}
+function genCertCode() { return `CERT-${Date.now().toString(36).toUpperCase()}`; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  MINI CERTIFICATE PREVIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function MiniCertPreview({ recipientName, refType, seminarTitle, template }) {
-  const title      = certTitle(refType);
+  const title = certTitle(refType);
   const themeColor = template.theme_color || "#2D6A2D";
   const bodyText   = template.body_text   || "";
   const sig1Name   = template.sig1_name   || "GAD Coordinator";
@@ -300,43 +262,17 @@ function MiniCertPreview({ recipientName, refType, seminarTitle, template }) {
   const sig2Name   = template.sig2_name   || "GADRC Director";
   const sig2Title  = template.sig2_title  || "Cavite State University";
   const today      = new Date().toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" });
-
   return (
-    <div style={{
-      width: "100%", aspectRatio: "842/595",
-      border: `6px double ${themeColor}`,
-      background: "linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%)",
-      padding: "16px 20px", boxSizing: "border-box",
-      fontFamily: "'Georgia', serif",
-      boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
-      borderRadius: 6, position: "relative",
-      display: "flex", flexDirection: "column", justifyContent: "space-between",
-    }}>
+    <div style={{ width: "100%", aspectRatio: "842/595", border: `6px double ${themeColor}`, background: "linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%)", padding: "16px 20px", boxSizing: "border-box", fontFamily: "'Georgia', serif", boxShadow: "0 4px 16px rgba(0,0,0,0.10)", borderRadius: 6, position: "relative", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
       <div style={{ position: "absolute", inset: 10, border: `1px solid ${themeColor}22`, borderRadius: 2, pointerEvents: "none" }} />
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 8, fontWeight: 700, color: themeColor, letterSpacing: 3, textTransform: "uppercase", fontFamily: "'Inter',sans-serif" }}>
-          Cavite State University
-        </div>
-        <div style={{ fontSize: 7, color: "#888", letterSpacing: 1, fontFamily: "'Inter',sans-serif" }}>
-          Gender and Development Resource Center (GADRC) · BLOOM e-Learning Platform
-        </div>
+        <div style={{ fontSize: 8, fontWeight: 700, color: themeColor, letterSpacing: 3, textTransform: "uppercase", fontFamily: "'Inter',sans-serif" }}>Cavite State University</div>
+        <div style={{ fontSize: 7, color: "#888", letterSpacing: 1, fontFamily: "'Inter',sans-serif" }}>Gender and Development Resource Center (GADRC) · BLOOM e-Learning Platform</div>
         <div style={{ borderTop: `1.5px solid ${themeColor}`, margin: "6px 32px" }} />
         <div style={{ fontSize: 18, fontWeight: 700, color: "#1A2E1A", margin: "4px 0" }}>{title}</div>
-        <div style={{ fontSize: 7, color: "#888", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'Inter',sans-serif", margin: "4px 0" }}>
-          This is to certify that
-        </div>
-        <div style={{ margin: "6px 0" }}>
-          <span style={{
-            fontStyle: "italic", fontSize: 22, color: themeColor,
-            borderBottom: `2px solid ${themeColor}44`,
-            paddingBottom: 4, paddingLeft: 24, paddingRight: 24,
-          }}>
-            {recipientName || "[Participant Name]"}
-          </span>
-        </div>
-        <div style={{ fontSize: 7, color: "#444", maxWidth: 340, margin: "6px auto", lineHeight: 1.7, fontFamily: "'Inter',sans-serif", textAlign: "center" }}>
-          {bodyText.length > 220 ? bodyText.slice(0, 220) + "…" : bodyText}
-        </div>
+        <div style={{ fontSize: 7, color: "#888", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'Inter',sans-serif", margin: "4px 0" }}>This is to certify that</div>
+        <div style={{ margin: "6px 0" }}><span style={{ fontStyle: "italic", fontSize: 22, color: themeColor, borderBottom: `2px solid ${themeColor}44`, paddingBottom: 4, paddingLeft: 24, paddingRight: 24 }}>{recipientName || "[Participant Name]"}</span></div>
+        <div style={{ fontSize: 7, color: "#444", maxWidth: 340, margin: "6px auto", lineHeight: 1.7, fontFamily: "'Inter',sans-serif", textAlign: "center" }}>{bodyText.length > 220 ? bodyText.slice(0, 220) + "…" : bodyText}</div>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderTop: `1px solid ${themeColor}33`, paddingTop: 8 }}>
         <div style={{ textAlign: "center", minWidth: 100 }}>
@@ -366,15 +302,13 @@ function CertPreviewModal({ cert, onClose }) {
   const refType     = cert.reference_type || "achievement";
   const title       = certTitle(refType);
   const studentName = cert.profiles?.full_name || "Recipient";
-  const issuedDate  = cert.issued_at
-    ? new Date(cert.issued_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" })
-    : "—";
-  const bodyText   = cert.body_text   || "has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.";
-  const sig1Name   = cert.sig1_name   || "GAD Coordinator";
-  const sig1Title  = cert.sig1_title  || "Cavite State University";
-  const sig2Name   = cert.sig2_name   || "GADRC Director";
-  const sig2Title  = cert.sig2_title  || "Cavite State University";
-  const themeColor = cert.theme_color || "#2D6A2D";
+  const issuedDate  = cert.issued_at ? new Date(cert.issued_at).toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }) : "—";
+  const bodyText    = cert.body_text   || "has successfully completed the requirements of the BLOOM GAD e-Learning Program and is hereby awarded this certificate in recognition of outstanding participation and commitment to Gender and Development advocacy.";
+  const sig1Name    = cert.sig1_name   || "GAD Coordinator";
+  const sig1Title   = cert.sig1_title  || "Cavite State University";
+  const sig2Name    = cert.sig2_name   || "GADRC Director";
+  const sig2Title   = cert.sig2_title  || "Cavite State University";
+  const themeColor  = cert.theme_color || "#2D6A2D";
 
   const certHTML = () => `<!DOCTYPE html><html><head><title>${title}</title>
     <style>
@@ -413,24 +347,11 @@ function CertPreviewModal({ cert, onClose }) {
         <div class="desc">${bodyText}</div>
       </div>
       <div class="footer">
-        <div class="sig-block">
-          <div class="seal">★</div>
-          <div class="sig-line">${sig1Name}</div>
-          <div class="sig-sub">${sig1Title}</div>
-        </div>
-        <div class="code-block">
-          <div class="code-label">Certificate Code</div>
-          <div class="code-value">${cert.certificate_code || "—"}</div>
-          <div class="code-date">Issued: ${issuedDate}</div>
-        </div>
-        <div class="sig-block">
-          <div class="seal">✦</div>
-          <div class="sig-line">${sig2Name}</div>
-          <div class="sig-sub">${sig2Title}</div>
-        </div>
+        <div class="sig-block"><div class="seal">★</div><div class="sig-line">${sig1Name}</div><div class="sig-sub">${sig1Title}</div></div>
+        <div class="code-block"><div class="code-label">Certificate Code</div><div class="code-value">${cert.certificate_code || "—"}</div><div class="code-date">Issued: ${issuedDate}</div></div>
+        <div class="sig-block"><div class="seal">✦</div><div class="sig-line">${sig2Name}</div><div class="sig-sub">${sig2Title}</div></div>
       </div>
-    </div>
-    </body></html>`;
+    </div></body></html>`;
 
   const printCert = () => {
     const w = window.open("", "_blank");
@@ -443,13 +364,9 @@ function CertPreviewModal({ cert, onClose }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 16 }}>
       <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 900, maxHeight: "95vh", overflow: "auto", boxShadow: "0 32px 80px rgba(0,0,0,.3)" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #DDE8DD", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
-          <div style={{ fontWeight: 700, color: "#1A2E1A", fontSize: 15 }}>
-            <i className="bi bi-patch-check me-2" style={{ color: "#2D6A2D" }} />Certificate Preview
-          </div>
+          <div style={{ fontWeight: 700, color: "#1A2E1A", fontSize: 15 }}><i className="bi bi-patch-check me-2" style={{ color: "#2D6A2D" }} />Certificate Preview</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={printCert} style={{ padding: "8px 16px", background: "#1A2E1A", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-              <i className="bi bi-printer" />Print / Save PDF
-            </button>
+            <button onClick={printCert} style={{ padding: "8px 16px", background: "#1A2E1A", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><i className="bi bi-printer" />Print / Save PDF</button>
             <button onClick={onClose} style={{ padding: "8px 16px", background: "#F5F7F5", color: "#1A2E1A", border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Close</button>
           </div>
         </div>
@@ -517,13 +434,8 @@ function CertificatesTab() {
   const [loading,  setLoading]  = useState(true);
   const [search,   setSearch]   = useState("");
   const [filterType, setFilterType] = useState("all");
-
-  // Signatory settings
   const [sigs, setSigs] = useState({ ...DEFAULT_SIGS });
-
-  useEffect(() => {
-    loadSignatorySettings().then(setSigs);
-  }, []);
+  useEffect(() => { loadSignatorySettings().then(setSigs); }, []);
 
   const [showAdd,  setShowAdd]  = useState(false);
   const [form,     setForm]     = useState({ reference_type: "seminar" });
@@ -531,44 +443,31 @@ function CertificatesTab() {
   const [showTemplateEdit, setShowTemplateEdit] = useState(false);
   const [saving,   setSaving]   = useState(false);
   const [error,    setError]    = useState("");
-
   const [recipientSearch,    setRecipientSearch]    = useState("");
   const [selectedRecipients, setSelectedRecipients] = useState([]);
-
   const [attendanceCheck, setAttendanceCheck] = useState(null);
   const [alreadyHasCert,  setAlreadyHasCert]  = useState(false);
-
   const [editCert,   setEditCert]   = useState(null);
   const [editForm,   setEditForm]   = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [editError,  setEditError]  = useState("");
-
+  const [editErr,    setEditErr]    = useState({});
   const [previewCert, setPreviewCert] = useState(null);
+
+  const COLORS = [["#2D6A2D","Forest Green"],["#1A2E1A","Dark Green"],["#1d4ed8","Blue"],["#7c3aed","Purple"],["#c2410c","Orange"],["#0f766e","Teal"]];
 
   const setF  = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const setT  = (k, v) => setTemplate(t => ({ ...t, [k]: v }));
-  const setEF = (k, v) => setEditForm(f => ({ ...f, [k]: v }));
+  const setEF = (k, v) => { setEditForm(f => ({ ...f, [k]: v })); setEditErr(e => ({ ...e, [k]: null })); };
 
   const load = useCallback(async () => {
     setLoading(true);
     const [{ data: c }, { data: profiles }, { data: sems }] = await Promise.all([
-      supabase
-        .from("certificates")
-        .select("*, profiles!certificates_user_id_fkey(full_name, student_id, email)")
-        .order("issued_at", { ascending: false }),
-      supabase
-        .from("profiles")
-        .select("id, full_name, student_id, role")
-        .order("full_name"),
-      supabase
-        .from("seminars")
-        .select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status")
-        .order("scheduled_start", { ascending: false }),
+      supabase.from("certificates").select("*, profiles!certificates_user_id_fkey(full_name, student_id, email)").order("issued_at", { ascending: false }),
+      supabase.from("profiles").select("id, full_name, student_id, role").order("full_name"),
+      supabase.from("seminars").select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status").order("scheduled_start", { ascending: false }),
     ]);
-    setCerts(c || []);
-    setStudents(profiles || []);
-    setSeminars(sems || []);
-    setLoading(false);
+    setCerts(c || []); setStudents(profiles || []); setSeminars(sems || []); setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -576,41 +475,24 @@ function CertificatesTab() {
   useEffect(() => {
     const seminar   = seminars.find(s => s.id === form.seminar_id) || null;
     const refType   = form.reference_type || "seminar";
-    const recipient = selectedRecipients.length === 1
-      ? (students.find(s => s.id === selectedRecipients[0])?.full_name || "")
-      : "";
-    const defaults = buildDefaultTemplate({ seminar, recipientName: recipient, refType, sigs });
+    const recipient = selectedRecipients.length === 1 ? (students.find(s => s.id === selectedRecipients[0])?.full_name || "") : "";
+    const defaults  = buildDefaultTemplate({ seminar, recipientName: recipient, refType, sigs });
     setTemplate(defaults);
   }, [form.seminar_id, form.reference_type, seminars, sigs]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (form.reference_type !== "seminar") {
-        if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); }
-        return;
-      }
-      const userId    = selectedRecipients[0];
-      const seminarId = form.seminar_id;
-      if (!userId || !seminarId) {
-        if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); }
-        return;
-      }
+      if (form.reference_type !== "seminar") { if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); } return; }
+      const userId = selectedRecipients[0], seminarId = form.seminar_id;
+      if (!userId || !seminarId) { if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); } return; }
       if (!cancelled) setAttendanceCheck("checking");
       const [attendance, existingCert] = await Promise.all([
         checkAttendance(userId, seminarId),
-        supabase
-          .from("certificates")
-          .select("id")
-          .eq("user_id", userId)
-          .eq("reference_type", "seminar")
-          .eq("reference_id", seminarId)
-          .eq("is_revoked", false)
-          .maybeSingle(),
+        supabase.from("certificates").select("id").eq("user_id", userId).eq("reference_type", "seminar").eq("reference_id", seminarId).eq("is_revoked", false).maybeSingle(),
       ]);
       if (cancelled) return;
-      setAttendanceCheck(attendance);
-      setAlreadyHasCert(!!existingCert.data);
+      setAttendanceCheck(attendance); setAlreadyHasCert(!!existingCert.data);
     })();
     return () => { cancelled = true; };
   }, [selectedRecipients, form.seminar_id, form.reference_type]);
@@ -621,14 +503,8 @@ function CertificatesTab() {
     if (form.reference_type === "seminar") {
       if (!form.seminar_id) { setError("Please select a seminar."); return; }
       if (attendanceCheck === "checking") { setError("Checking attendance, please wait…"); return; }
-      if (!attendanceCheck?.attended) {
-        setError("This participant has no verified attendance for the selected seminar.");
-        return;
-      }
-      if (alreadyHasCert) {
-        setError("A valid certificate for this seminar has already been issued to this participant.");
-        return;
-      }
+      if (!attendanceCheck?.attended) { setError("This participant has no verified attendance for the selected seminar."); return; }
+      if (alreadyHasCert) { setError("A valid certificate for this seminar has already been issued to this participant."); return; }
     }
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -637,39 +513,21 @@ function CertificatesTab() {
     for (const uid of selectedRecipients) {
       const code = genCertCode();
       const { error: err } = await supabase.from("certificates").insert({
-        user_id:          uid,
-        reference_type:   form.reference_type || "seminar",
-        reference_id:     form.reference_type === "seminar" ? form.seminar_id : (form.reference_id || null),
-        certificate_code: code,
-        is_revoked:       false,
-        issued_at:        new Date().toISOString(),
-        issued_by:        user?.id,
-        body_text:        template.body_text   || null,
-        sig1_name:        template.sig1_name   || null,
-        sig1_title:       template.sig1_title  || null,
-        sig2_name:        template.sig2_name   || null,
-        sig2_title:       template.sig2_title  || null,
-        theme_color:      template.theme_color || "#2D6A2D",
+        user_id: uid, reference_type: form.reference_type || "seminar",
+        reference_id: form.reference_type === "seminar" ? form.seminar_id : (form.reference_id || null),
+        certificate_code: code, is_revoked: false, issued_at: new Date().toISOString(), issued_by: user?.id,
+        body_text: template.body_text || null, sig1_name: template.sig1_name || null, sig1_title: template.sig1_title || null,
+        sig2_name: template.sig2_name || null, sig2_title: template.sig2_title || null, theme_color: template.theme_color || "#2D6A2D",
       });
       if (err) { failed++; continue; }
       await insertCertificateNotification(uid, code, seminar?.title);
     }
     setSaving(false);
     if (failed > 0) { setError(`${failed} certificate(s) failed to issue.`); return; }
-    toast(
-      selectedRecipients.length > 1
-        ? `${selectedRecipients.length} certificates issued successfully.`
-        : "Certificate issued successfully.",
-      "success"
-    );
-    setShowAdd(false);
-    setForm({ reference_type: "seminar" });
-    setTemplate({});
-    setSelectedRecipients([]);
-    setRecipientSearch("");
-    setAttendanceCheck(null);
-    setAlreadyHasCert(false);
-    setShowTemplateEdit(false);
+    toast(selectedRecipients.length > 1 ? `${selectedRecipients.length} certificates issued successfully.` : "Certificate issued successfully.", "success");
+    logActivity("certificate_issued", { count: selectedRecipients.length, type: form.reference_type });
+    setShowAdd(false); setForm({ reference_type: "seminar" }); setTemplate({});
+    setSelectedRecipients([]); setRecipientSearch(""); setAttendanceCheck(null); setAlreadyHasCert(false); setShowTemplateEdit(false);
     load();
   };
 
@@ -678,53 +536,52 @@ function CertificatesTab() {
     await supabase.from("certificates").update({ is_revoked: newVal }).eq("id", cert.id);
     setCerts(cs => cs.map(c => c.id === cert.id ? { ...c, is_revoked: newVal } : c));
     toast(newVal ? "Certificate revoked." : "Certificate restored.", "success");
+    logActivity(newVal ? "certificate_revoked" : "certificate_restored", { certificate_code: cert.certificate_code });
   };
 
   const openEdit = (cert) => {
     setEditCert(cert);
     setEditForm({
-      user_id:        cert.user_id || "",
-      reference_type: cert.reference_type || "manual",
-      issued_at:      cert.issued_at ? cert.issued_at.split("T")[0] : "",
-      body_text:      cert.body_text  || "",
-      sig1_name:      cert.sig1_name  || "GAD Coordinator",
-      sig1_title:     cert.sig1_title || "Cavite State University",
-      sig2_name:      cert.sig2_name  || "GADRC Director",
-      sig2_title:     cert.sig2_title || "Cavite State University",
-      theme_color:    cert.theme_color || "#2D6A2D",
+      user_id: cert.user_id || "", reference_type: cert.reference_type || "manual",
+      issued_at: cert.issued_at ? cert.issued_at.split("T")[0] : "",
+      body_text: cert.body_text || "", sig1_name: cert.sig1_name || "GAD Coordinator",
+      sig1_title: cert.sig1_title || "Cavite State University", sig2_name: cert.sig2_name || "GADRC Director",
+      sig2_title: cert.sig2_title || "Cavite State University", theme_color: cert.theme_color || "#2D6A2D",
     });
-    setEditError("");
+    setEditError(""); setEditErr({});
   };
 
   const saveEdit = async () => {
-    if (!editForm.user_id)   { setEditError("Please select a student."); return; }
-    if (!editForm.issued_at) { setEditError("Please set an issue date."); return; }
-    setEditSaving(true); setEditError("");
+    const errs = V.all({
+      user_id:   !editForm.user_id ? "Please select a student." : null,
+      issued_at: !editForm.issued_at ? "Please set an issue date."
+                 : new Date(editForm.issued_at) > new Date() ? "Issue date cannot be in the future." : null,
+      body_text: editForm.body_text?.trim().length > 0 && editForm.body_text.trim().length < 10
+                 ? "Body text must be at least 10 characters."
+                 : editForm.body_text?.trim().length > 500 ? "Body text must not exceed 500 characters." : null,
+      sig1_name: V.name(editForm.sig1_name, "Left signatory name"),
+      sig2_name: V.name(editForm.sig2_name, "Right signatory name"),
+    });
+    if (errs) { setEditErr(errs); return; }
+    setEditSaving(true); setEditError(""); setEditErr({});
     const { error: err } = await supabase.from("certificates").update({
-      user_id:        editForm.user_id,
-      reference_type: editForm.reference_type || "manual",
-      issued_at:      new Date(editForm.issued_at).toISOString(),
-      body_text:      editForm.body_text  || null,
-      sig1_name:      editForm.sig1_name  || null,
-      sig1_title:     editForm.sig1_title || null,
-      sig2_name:      editForm.sig2_name  || null,
-      sig2_title:     editForm.sig2_title || null,
-      theme_color:    editForm.theme_color || "#2D6A2D",
+      user_id: editForm.user_id, reference_type: editForm.reference_type || "manual",
+      issued_at: new Date(editForm.issued_at).toISOString(),
+      body_text: editForm.body_text || null, sig1_name: editForm.sig1_name || null, sig1_title: editForm.sig1_title || null,
+      sig2_name: editForm.sig2_name || null, sig2_title: editForm.sig2_title || null, theme_color: editForm.theme_color || "#2D6A2D",
     }).eq("id", editCert.id);
     setEditSaving(false);
     if (err) { setEditError(err.message); return; }
     toast("Certificate updated.", "success");
+    logActivity("certificate_updated", { certificate_code: editCert.certificate_code });
     setEditCert(null);
     if (previewCert?.id === editCert.id) setPreviewCert(p => ({ ...p, ...editForm }));
     load();
   };
 
   const filtered = certs.filter(c => {
-    const matchSearch =
-      (c.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) ||
-      (c.profiles?.student_id || "").toLowerCase().includes(search.toLowerCase()) ||
-      (c.certificate_code || "").toLowerCase().includes(search.toLowerCase());
-    const matchType = filterType === "all" || c.reference_type === filterType;
+    const matchSearch = (c.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) || (c.profiles?.student_id || "").toLowerCase().includes(search.toLowerCase()) || (c.certificate_code || "").toLowerCase().includes(search.toLowerCase());
+    const matchType   = filterType === "all" || c.reference_type === filterType;
     return matchSearch && matchType;
   });
 
@@ -732,80 +589,30 @@ function CertificatesTab() {
     if (form.reference_type !== "seminar") return null;
     const userId = selectedRecipients[0];
     if (!userId || !form.seminar_id) return null;
-    if (attendanceCheck === "checking") return (
-      <div style={s.infoBox("blue")}>
-        <span className="spinner-border spinner-border-sm me-2" />Checking attendance record…
-      </div>
-    );
-    if (alreadyHasCert) return (
-      <div style={s.infoBox("yellow")}>
-        <i className="bi bi-exclamation-triangle-fill" />
-        <div><strong>Certificate already issued.</strong> A valid certificate for this seminar already exists for this participant.</div>
-      </div>
-    );
-    if (attendanceCheck?.attended) return (
-      <div style={s.infoBox("green")}>
-        <i className="bi bi-check-circle-fill" />
-        <div><strong>Attendance verified.</strong> Checked in on {formatDate(attendanceCheck.checkedInAt)}. Certificate can be issued.</div>
-      </div>
-    );
-    return (
-      <div style={s.infoBox("red")}>
-        <i className="bi bi-x-circle-fill" />
-        <div><strong>No attendance record found.</strong> This participant has no verified check-in for the selected seminar.</div>
-      </div>
-    );
+    if (attendanceCheck === "checking") return <div style={s.infoBox("blue")}><span className="spinner-border spinner-border-sm me-2" />Checking attendance record…</div>;
+    if (alreadyHasCert) return <div style={s.infoBox("yellow")}><i className="bi bi-exclamation-triangle-fill" /><div><strong>Certificate already issued.</strong> A valid certificate for this seminar already exists for this participant.</div></div>;
+    if (attendanceCheck?.attended) return <div style={s.infoBox("green")}><i className="bi bi-check-circle-fill" /><div><strong>Attendance verified.</strong> Checked in on {formatDate(attendanceCheck.checkedInAt)}. Certificate can be issued.</div></div>;
+    return <div style={s.infoBox("red")}><i className="bi bi-x-circle-fill" /><div><strong>No attendance record found.</strong> This participant has no verified check-in for the selected seminar.</div></div>;
   };
 
   const canIssue = () => {
     if (selectedRecipients.length === 0) return false;
-    if (form.reference_type === "seminar") {
-      return !!form.seminar_id && attendanceCheck !== "checking" && attendanceCheck?.attended === true && !alreadyHasCert;
-    }
+    if (form.reference_type === "seminar") return !!form.seminar_id && attendanceCheck !== "checking" && attendanceCheck?.attended === true && !alreadyHasCert;
     return true;
   };
 
-  const typeLabel = (t) => {
-    const map = { manual: "Manual", module: "Module Completion", seminar: "Seminar Attendance", assessment: "Assessment" };
-    return map[t] || t;
-  };
-
-  const filteredStudents = students.filter(st => {
-    const q = recipientSearch.toLowerCase();
-    return (
-      (st.full_name  || "").toLowerCase().includes(q) ||
-      (st.student_id || "").toLowerCase().includes(q) ||
-      (st.role       || "").toLowerCase().includes(q)
-    );
-  });
-
-  const previewRecipientName = selectedRecipients.length === 1
-    ? (students.find(s => s.id === selectedRecipients[0])?.full_name || "")
-    : selectedRecipients.length > 1
-      ? `${selectedRecipients.length} Recipients`
-      : "";
-
+  const typeLabel = (t) => ({ manual: "Manual", module: "Module Completion", seminar: "Seminar Attendance", assessment: "Assessment" }[t] || t);
+  const filteredStudents = students.filter(st => { const q = recipientSearch.toLowerCase(); return (st.full_name || "").toLowerCase().includes(q) || (st.student_id || "").toLowerCase().includes(q) || (st.role || "").toLowerCase().includes(q); });
+  const previewRecipientName = selectedRecipients.length === 1 ? (students.find(s => s.id === selectedRecipients[0])?.full_name || "") : selectedRecipients.length > 1 ? `${selectedRecipients.length} Recipients` : "";
   const selectedSeminar = seminars.find(s => s.id === form.seminar_id);
 
   return (
     <div>
-      {/* Signatory Settings Panel */}
       <SignatorySettingsPanel sigs={sigs} onChange={setSigs} />
 
-      {/* Toolbar */}
       <div style={s.toolbar}>
-        <input
-          style={s.searchBar}
-          placeholder="Search by name, ID, or code…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-        {/* Fixed filter select — always visible, never requires hover */}
-        <select
-          style={s.filterSelect}
-          value={filterType}
-          onChange={e => setFilterType(e.target.value)}
-        >
+        <input style={s.searchBar} placeholder="Search by name, ID, or code…" value={search} onChange={e => setSearch(e.target.value)} />
+        <select style={s.filterSelect} value={filterType} onChange={e => setFilterType(e.target.value)}>
           <option value="all">All Types</option>
           <option value="manual">Manual</option>
           <option value="seminar">Seminar</option>
@@ -813,120 +620,62 @@ function CertificatesTab() {
           <option value="assessment">Assessment</option>
         </select>
         <div style={{ marginLeft: "auto" }}>
-          <button style={s.addBtn} onClick={() => {
-            setForm({ reference_type: "seminar" });
-            setTemplate({});
-            setError("");
-            setSelectedRecipients([]);
-            setRecipientSearch("");
-            setAttendanceCheck(null);
-            setAlreadyHasCert(false);
-            setShowTemplateEdit(false);
-            setShowAdd(true);
-          }}>
+          <button style={s.addBtn} onClick={() => { setForm({ reference_type: "seminar" }); setTemplate({}); setError(""); setSelectedRecipients([]); setRecipientSearch(""); setAttendanceCheck(null); setAlreadyHasCert(false); setShowTemplateEdit(false); setShowAdd(true); }}>
             <i className="bi bi-plus-lg" />Issue Certificate
           </button>
         </div>
       </div>
 
-      {/* Table */}
-      {loading
-        ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>
-        : filtered.length === 0
-          ? (
-            <div style={s.emptyBox}>
-              <div style={{ fontSize: 40, marginBottom: 10 }}><i className="bi bi-trophy" /></div>
-              <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No certificates found</div>
-              <div style={{ fontSize: 13, color: "#aaa" }}>Issue a certificate using the button above.</div>
-            </div>
-          ) : (
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  <th style={s.th}>Recipient</th>
-                  <th style={s.th}>Certificate Code</th>
-                  <th style={s.th}>Type</th>
-                  <th style={s.th}>Issued</th>
-                  <th style={s.th}>Status</th>
-                  <th style={s.th}>Actions</th>
+      {loading ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>
+        : filtered.length === 0 ? (
+          <div style={s.emptyBox}>
+            <div style={{ fontSize: 40, marginBottom: 10 }}><i className="bi bi-trophy" /></div>
+            <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No certificates found</div>
+            <div style={{ fontSize: 13, color: "#aaa" }}>Issue a certificate using the button above.</div>
+          </div>
+        ) : (
+          <table style={s.table}>
+            <thead><tr>
+              <th style={s.th}>Recipient</th><th style={s.th}>Certificate Code</th>
+              <th style={s.th}>Type</th><th style={s.th}>Issued</th>
+              <th style={s.th}>Status</th><th style={s.th}>Actions</th>
+            </tr></thead>
+            <tbody>
+              {filtered.map(c => (
+                <tr key={c.id}>
+                  <td style={s.td}><div style={{ fontWeight: 600 }}>{c.profiles?.full_name || "—"}</div><div style={{ fontSize: 11, color: "#aaa" }}>{c.profiles?.student_id || c.profiles?.email}</div></td>
+                  <td style={s.td}><code style={{ background: G.wash, padding: "2px 6px", borderRadius: 4, fontSize: 12 }}>{c.certificate_code || "—"}</code></td>
+                  <td style={s.td}><span style={s.tag(c.reference_type === "seminar" ? "blue" : c.reference_type === "module" ? "green" : c.reference_type === "assessment" ? "orange" : "")}>{typeLabel(c.reference_type)}</span></td>
+                  <td style={s.td}>{formatDate(c.issued_at)}</td>
+                  <td style={s.td}><span style={s.tag(c.is_revoked ? "red" : "green")}>{c.is_revoked ? "Revoked" : "Valid"}</span></td>
+                  <td style={s.td}>
+                    <button style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: "#1A2E1A", marginRight: 4 }} onClick={() => setPreviewCert(c)}><i className="bi bi-eye me-1" />View</button>
+                    <button style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: "#2D6A2D", marginRight: 4 }} onClick={() => openEdit(c)}><i className="bi bi-pencil me-1" />Edit</button>
+                    <button style={{ padding: "5px 10px", border: "none", borderRadius: 6, background: c.is_revoked ? "#dcfce7" : "#fee2e2", fontSize: 12, cursor: "pointer", fontWeight: 600, color: c.is_revoked ? "#16a34a" : "#dc2626" }} onClick={() => toggleRevoke(c)}>{c.is_revoked ? "Restore" : "Revoke"}</button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {filtered.map(c => (
-                  <tr key={c.id}>
-                    <td style={s.td}>
-                      <div style={{ fontWeight: 600 }}>{c.profiles?.full_name || "—"}</div>
-                      <div style={{ fontSize: 11, color: "#aaa" }}>{c.profiles?.student_id || c.profiles?.email}</div>
-                    </td>
-                    <td style={s.td}>
-                      <code style={{ background: G.wash, padding: "2px 6px", borderRadius: 4, fontSize: 12 }}>
-                        {c.certificate_code || "—"}
-                      </code>
-                    </td>
-                    <td style={s.td}>
-                      <span style={s.tag(c.reference_type === "seminar" ? "blue" : c.reference_type === "module" ? "green" : c.reference_type === "assessment" ? "orange" : "")}>
-                        {typeLabel(c.reference_type)}
-                      </span>
-                    </td>
-                    <td style={s.td}>{formatDate(c.issued_at)}</td>
-                    <td style={s.td}>
-                      <span style={s.tag(c.is_revoked ? "red" : "green")}>
-                        {c.is_revoked ? "Revoked" : "Valid"}
-                      </span>
-                    </td>
-                    <td style={s.td}>
-                      <button style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: "#1A2E1A", marginRight: 4 }}
-                        onClick={() => setPreviewCert(c)}>
-                        <i className="bi bi-eye me-1" />View
-                      </button>
-                      <button style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: "#2D6A2D", marginRight: 4 }}
-                        onClick={() => openEdit(c)}>
-                        <i className="bi bi-pencil me-1" />Edit
-                      </button>
-                      <button style={{ padding: "5px 10px", border: "none", borderRadius: 6, background: c.is_revoked ? "#dcfce7" : "#fee2e2", fontSize: 12, cursor: "pointer", fontWeight: 600, color: c.is_revoked ? "#16a34a" : "#dc2626" }}
-                        onClick={() => toggleRevoke(c)}>
-                        {c.is_revoked ? "Restore" : "Revoke"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
+              ))}
+            </tbody>
+          </table>
+        )
       }
 
       {previewCert && <CertPreviewModal cert={previewCert} onClose={() => setPreviewCert(null)} />}
 
-      {/* ── Issue Certificate Modal ──────────────────────────────────────── */}
+      {/* ── Issue Certificate Modal ── */}
       {showAdd && (
         <div style={s.overlay}>
           <div style={{ ...s.modal(860), display: "flex", flexDirection: "column" }}>
             <div style={s.mHeader}>
               <span style={s.mTitle}><i className="bi bi-patch-check me-2" />Issue Certificate</span>
-              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}>
-                <i className="bi bi-x-lg" />
-              </button>
+              <button style={s.iconBtn()} onClick={() => setShowAdd(false)}><i className="bi bi-x-lg" /></button>
             </div>
-
             <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
-              {/* Left: form */}
               <div style={{ flex: "0 0 380px", borderRight: `1px solid ${G.wash}`, overflow: "auto", padding: "20px 24px" }}>
-                {error && (
-                  <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "flex-start", gap: 8 }}>
-                    <i className="bi bi-exclamation-triangle-fill" style={{ flexShrink: 0, marginTop: 1 }} />{error}
-                  </div>
-                )}
+                {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "flex-start", gap: 8 }}><i className="bi bi-exclamation-triangle-fill" style={{ flexShrink: 0, marginTop: 1 }} />{error}</div>}
                 <div style={s.fg}>
                   <label style={s.label}>Certificate Type *</label>
-                  <select style={s.select} value={form.reference_type || "seminar"}
-                    onChange={e => {
-                      setF("reference_type", e.target.value);
-                      setF("seminar_id", "");
-                      setSelectedRecipients([]);
-                      setRecipientSearch("");
-                      setAttendanceCheck(null);
-                      setAlreadyHasCert(false);
-                    }}>
+                  <select style={s.select} value={form.reference_type || "seminar"} onChange={e => { setF("reference_type", e.target.value); setF("seminar_id", ""); setSelectedRecipients([]); setRecipientSearch(""); setAttendanceCheck(null); setAlreadyHasCert(false); }}>
                     <option value="seminar">Certificate of Participation (Seminar)</option>
                     <option value="module">Certificate of Completion (Module)</option>
                     <option value="assessment">Certificate of Achievement (Assessment)</option>
@@ -936,113 +685,58 @@ function CertificatesTab() {
                 {form.reference_type === "seminar" && (
                   <div style={s.fg}>
                     <label style={s.label}>Seminar *</label>
-                    <select style={s.select} value={form.seminar_id || ""}
-                      onChange={e => setF("seminar_id", e.target.value)}>
+                    <select style={s.select} value={form.seminar_id || ""} onChange={e => setF("seminar_id", e.target.value)}>
                       <option value="">— Select seminar —</option>
-                      {seminars.map(sem => (
-                        <option key={sem.id} value={sem.id}>
-                          {sem.title}{sem.scheduled_start ? ` (${formatDate(sem.scheduled_start)})` : ""}
-                        </option>
-                      ))}
+                      {seminars.map(sem => <option key={sem.id} value={sem.id}>{sem.title}{sem.scheduled_start ? ` (${formatDate(sem.scheduled_start)})` : ""}</option>)}
                     </select>
                     {selectedSeminar && (
                       <div style={{ marginTop: 6, fontSize: 11, color: "#888", background: G.wash, borderRadius: 6, padding: "6px 10px" }}>
                         <i className="bi bi-info-circle me-1" />
-                        {[
-                          selectedSeminar.venue && `Venue: ${selectedSeminar.venue}`,
-                          selectedSeminar.scheduled_start && `Date: ${formatDateLong(selectedSeminar.scheduled_start)}`,
-                        ].filter(Boolean).join(" · ")}
+                        {[selectedSeminar.venue && `Venue: ${selectedSeminar.venue}`, selectedSeminar.scheduled_start && `Date: ${formatDateLong(selectedSeminar.scheduled_start)}`].filter(Boolean).join(" · ")}
                       </div>
                     )}
                   </div>
                 )}
                 <div style={s.fg}>
-                  <label style={s.label}>
-                    Recipient *{" "}
-                    {selectedRecipients.length > 0 && (
-                      <span style={{ color: G.base, fontWeight: 700 }}>({selectedRecipients.length} selected)</span>
-                    )}
-                  </label>
-                  <input
-                    style={{ ...s.input, marginBottom: 8 }}
-                    placeholder="Search by name, ID, or role…"
-                    value={recipientSearch}
-                    onChange={e => setRecipientSearch(e.target.value)}
-                  />
+                  <label style={s.label}>Recipient * {selectedRecipients.length > 0 && <span style={{ color: G.base, fontWeight: 700 }}>({selectedRecipients.length} selected)</span>}</label>
+                  <input style={{ ...s.input, marginBottom: 8 }} placeholder="Search by name, ID, or role…" value={recipientSearch} onChange={e => setRecipientSearch(e.target.value)} />
                   <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff" }}>
-                    {filteredStudents.length === 0 ? (
-                      <div style={{ padding: "20px", textAlign: "center", color: "#aaa", fontSize: 13 }}>No results</div>
-                    ) : (
-                      filteredStudents.map(st => {
-                        const checked = selectedRecipients.includes(st.id);
-                        return (
-                          <label key={st.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", cursor: "pointer", borderBottom: `1px solid ${G.wash}`, background: checked ? G.wash : "transparent" }}>
-                            <input type="checkbox" checked={checked}
-                              onChange={() => setSelectedRecipients(prev => checked ? prev.filter(id => id !== st.id) : [...prev, st.id])}
-                              style={{ width: 15, height: 15, accentColor: G.base, flexShrink: 0 }} />
-                            <div>
-                              <div style={{ fontWeight: 600, fontSize: 13, color: G.dark }}>{st.full_name}</div>
-                              <div style={{ fontSize: 11, color: "#aaa" }}>{[st.student_id, st.role].filter(Boolean).join(" · ")}</div>
-                            </div>
-                          </label>
-                        );
-                      })
-                    )}
+                    {filteredStudents.length === 0 ? <div style={{ padding: "20px", textAlign: "center", color: "#aaa", fontSize: 13 }}>No results</div>
+                      : filteredStudents.map(st => {
+                          const checked = selectedRecipients.includes(st.id);
+                          return (
+                            <label key={st.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", cursor: "pointer", borderBottom: `1px solid ${G.wash}`, background: checked ? G.wash : "transparent" }}>
+                              <input type="checkbox" checked={checked} onChange={() => setSelectedRecipients(prev => checked ? prev.filter(id => id !== st.id) : [...prev, st.id])} style={{ width: 15, height: 15, accentColor: G.base, flexShrink: 0 }} />
+                              <div><div style={{ fontWeight: 600, fontSize: 13, color: G.dark }}>{st.full_name}</div><div style={{ fontSize: 11, color: "#aaa" }}>{[st.student_id, st.role].filter(Boolean).join(" · ")}</div></div>
+                            </label>
+                          );
+                        })
+                    }
                   </div>
-                  {selectedRecipients.length > 0 && (
-                    <div style={{ marginTop: 6, fontSize: 12, color: "#888", display: "flex", justifyContent: "space-between" }}>
-                      <span>{selectedRecipients.length} recipient(s) selected</span>
-                      <span style={{ cursor: "pointer", color: G.base, textDecoration: "underline" }} onClick={() => setSelectedRecipients([])}>Clear all</span>
-                    </div>
-                  )}
+                  {selectedRecipients.length > 0 && <div style={{ marginTop: 6, fontSize: 12, color: "#888", display: "flex", justifyContent: "space-between" }}><span>{selectedRecipients.length} recipient(s) selected</span><span style={{ cursor: "pointer", color: G.base, textDecoration: "underline" }} onClick={() => setSelectedRecipients([])}>Clear all</span></div>}
                 </div>
                 {renderAttendanceGate()}
                 {form.reference_type === "seminar" && !form.seminar_id && (
-                  <div style={s.infoBox("blue")}>
-                    <i className="bi bi-info-circle-fill" />
-                    Select a seminar to auto-populate the certificate template. Only participants with verified attendance can receive a certificate.
-                  </div>
+                  <div style={s.infoBox("blue")}><i className="bi bi-info-circle-fill" />Select a seminar to auto-populate the certificate template. Only participants with verified attendance can receive a certificate.</div>
                 )}
                 <div style={{ background: G.wash, borderRadius: 8, padding: "12px 14px", marginBottom: 16 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showTemplateEdit ? 14 : 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: G.dark, display: "flex", alignItems: "center", gap: 6 }}>
-                      <i className="bi bi-magic" style={{ color: G.base }} />
-                      Auto-populated Template
-                      <span style={{ ...s.tag("green"), fontSize: 10 }}>Ready</span>
-                    </div>
-                    <button
-                      style={{ ...s.iconBtn(G.base), fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}
-                      onClick={() => setShowTemplateEdit(v => !v)}
-                    >
-                      <i className={`bi ${showTemplateEdit ? "bi-chevron-up" : "bi-pencil"}`} />
-                      {showTemplateEdit ? "Collapse" : "Edit"}
-                    </button>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: G.dark, display: "flex", alignItems: "center", gap: 6 }}><i className="bi bi-magic" style={{ color: G.base }} />Auto-populated Template<span style={{ ...s.tag("green"), fontSize: 10 }}>Ready</span></div>
+                    <button style={{ ...s.iconBtn(G.base), fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }} onClick={() => setShowTemplateEdit(v => !v)}><i className={`bi ${showTemplateEdit ? "bi-chevron-up" : "bi-pencil"}`} />{showTemplateEdit ? "Collapse" : "Edit"}</button>
                   </div>
                   {!showTemplateEdit && (
                     <div style={{ fontSize: 11, color: "#666", lineHeight: 1.5 }}>
                       <div><strong>Title:</strong> {certTitle(form.reference_type)}</div>
                       <div style={{ marginTop: 3 }}><strong>Signatories:</strong> {template.sig1_name || "GAD Coordinator"} &amp; {template.sig2_name || "GADRC Director"}</div>
-                      <div style={{ marginTop: 3 }}><strong>Theme:</strong>
-                        <span style={{ display: "inline-block", width: 12, height: 12, borderRadius: "50%", background: template.theme_color || "#2D6A2D", marginLeft: 6, verticalAlign: "middle", border: "1px solid #ccc" }} />
-                        <span style={{ marginLeft: 4 }}>{template.theme_color || "#2D6A2D"}</span>
-                      </div>
+                      <div style={{ marginTop: 3 }}><strong>Theme:</strong><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: "50%", background: template.theme_color || "#2D6A2D", marginLeft: 6, verticalAlign: "middle", border: "1px solid #ccc" }} /><span style={{ marginLeft: 4 }}>{template.theme_color || "#2D6A2D"}</span></div>
                     </div>
                   )}
                   {showTemplateEdit && (
                     <>
                       <div style={s.fg}>
                         <label style={s.label}>Body Text</label>
-                        <textarea style={{ ...s.textarea, minHeight: 80, fontSize: 12 }}
-                          value={template.body_text || ""}
-                          onChange={e => setT("body_text", e.target.value)} />
-                        <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }}
-                          onClick={() => {
-                            const sem = seminars.find(s => s.id === form.seminar_id) || null;
-                            const d   = buildDefaultTemplate({ seminar: sem, refType: form.reference_type });
-                            setT("body_text", d.body_text);
-                          }}>
-                          ↺ Reset to default
-                        </div>
+                        <textarea style={{ ...s.textarea, minHeight: 80, fontSize: 12 }} value={template.body_text || ""} onChange={e => setT("body_text", e.target.value)} />
+                        <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }} onClick={() => { const sem = seminars.find(s => s.id === form.seminar_id) || null; const d = buildDefaultTemplate({ seminar: sem, refType: form.reference_type }); setT("body_text", d.body_text); }}>↺ Reset to default</div>
                       </div>
                       <div style={{ display: "flex", gap: 10 }}>
                         <div style={{ flex: 1 }}>
@@ -1059,56 +753,31 @@ function CertificatesTab() {
                       <div style={{ marginTop: 12 }}>
                         <label style={s.label}>Theme Color</label>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <input type="color" value={template.theme_color || "#2D6A2D"}
-                            onChange={e => setT("theme_color", e.target.value)}
-                            style={{ width: 40, height: 32, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", padding: 2 }} />
-                          {[["#2D6A2D","Forest Green"],["#1A2E1A","Dark Green"],["#1d4ed8","Blue"],["#7c3aed","Purple"],["#c2410c","Orange"],["#0f766e","Teal"]].map(([c, label]) => (
-                            <span key={c} onClick={() => setT("theme_color", c)} title={label}
-                              style={{ display: "inline-block", width: 20, height: 20, borderRadius: "50%", background: c, cursor: "pointer", border: template.theme_color === c ? "3px solid #000" : "2px solid transparent" }} />
-                          ))}
+                          <input type="color" value={template.theme_color || "#2D6A2D"} onChange={e => setT("theme_color", e.target.value)} style={{ width: 40, height: 32, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", padding: 2 }} />
+                          {COLORS.map(([c, label]) => <span key={c} onClick={() => setT("theme_color", c)} title={label} style={{ display: "inline-block", width: 20, height: 20, borderRadius: "50%", background: c, cursor: "pointer", border: template.theme_color === c ? "3px solid #000" : "2px solid transparent" }} />)}
                         </div>
                       </div>
                     </>
                   )}
                 </div>
               </div>
-
-              {/* Right: live preview */}
               <div style={{ flex: 1, background: "#F5F7F5", padding: "20px 24px", display: "flex", flexDirection: "column", overflow: "auto" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.6, display: "flex", alignItems: "center", gap: 6 }}>
-                  <i className="bi bi-eye" />Live Preview
-                </div>
-                <MiniCertPreview
-                  recipientName={previewRecipientName}
-                  refType={form.reference_type}
-                  seminarTitle={selectedSeminar?.title}
-                  template={template}
-                />
-                <div style={{ marginTop: 10, fontSize: 11, color: "#aaa", textAlign: "center" }}>
-                  Preview updates as you make changes. The actual certificate code will be generated on issue.
-                </div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.6, display: "flex", alignItems: "center", gap: 6 }}><i className="bi bi-eye" />Live Preview</div>
+                <MiniCertPreview recipientName={previewRecipientName} refType={form.reference_type} seminarTitle={selectedSeminar?.title} template={template} />
+                <div style={{ marginTop: 10, fontSize: 11, color: "#aaa", textAlign: "center" }}>Preview updates as you make changes. The actual certificate code will be generated on issue.</div>
               </div>
             </div>
-
             <div style={s.mFooter}>
               <button style={s.btnSecondary} onClick={() => setShowAdd(false)}>Cancel</button>
-              <button
-                style={{ ...s.btnPrimary, opacity: (saving || !canIssue()) ? 0.5 : 1, cursor: canIssue() ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 6 }}
-                onClick={issueCert}
-                disabled={saving || !canIssue()}>
-                <i className="bi bi-send-check" />
-                {saving
-                  ? "Issuing…"
-                  : selectedRecipients.length > 1
-                    ? `Issue ${selectedRecipients.length} Certificates`
-                    : "Issue Certificate"}
+              <button style={{ ...s.btnPrimary, opacity: (saving || !canIssue()) ? 0.5 : 1, cursor: canIssue() ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 6 }} onClick={issueCert} disabled={saving || !canIssue()}>
+                <i className="bi bi-send-check" />{saving ? "Issuing…" : selectedRecipients.length > 1 ? `Issue ${selectedRecipients.length} Certificates` : "Issue Certificate"}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Edit Certificate Modal ───────────────────────────────────────── */}
+      {/* ── Edit Certificate Modal ── */}
       {editCert && (
         <div style={s.overlay}>
           <div style={s.modal(480)}>
@@ -1117,20 +786,17 @@ function CertificatesTab() {
               <button style={s.iconBtn()} onClick={() => setEditCert(null)}><i className="bi bi-x-lg" /></button>
             </div>
             <div style={s.mBody}>
-              {editError && (
-                <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{editError}</div>
-              )}
+              {editError && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{editError}</div>}
               <div style={s.fg}>
                 <label style={s.label}>Recipient *</label>
-                <select style={s.select} value={editForm.user_id || ""} onChange={e => setEF("user_id", e.target.value)}>
+                <select style={{ ...s.select, borderColor: editErr.user_id ? "#dc2626" : undefined }} value={editForm.user_id || ""} onChange={e => setEF("user_id", e.target.value)}>
                   <option value="">— Select student —</option>
-                  {students.map(st => (
-                    <option key={st.id} value={st.id}>{st.full_name}{st.student_id ? ` (${st.student_id})` : ""}</option>
-                  ))}
+                  {students.map(st => <option key={st.id} value={st.id}>{st.full_name}{st.student_id ? ` (${st.student_id})` : ""}</option>)}
                 </select>
+                <FieldError msg={editErr.user_id}/>
               </div>
               <div style={s.fg}>
-                <label style={s.label}>Certificate Type *</label>
+                <label style={s.label}>Certificate Type</label>
                 <select style={s.select} value={editForm.reference_type || "manual"} onChange={e => setEF("reference_type", e.target.value)}>
                   <option value="seminar">Certificate of Participation (Seminar)</option>
                   <option value="module">Certificate of Completion (Module)</option>
@@ -1140,26 +806,20 @@ function CertificatesTab() {
               </div>
               <div style={s.fg}>
                 <label style={s.label}>Issue Date *</label>
-                <input type="date" style={s.input} value={editForm.issued_at || ""}
-                  max={new Date().toISOString().split("T")[0]}
-                  onChange={e => setEF("issued_at", e.target.value)} />
+                <input type="date" style={{ ...s.input, borderColor: editErr.issued_at ? "#dc2626" : undefined }} value={editForm.issued_at || ""} max={new Date().toISOString().split("T")[0]} onChange={e => setEF("issued_at", e.target.value)} />
+                <FieldError msg={editErr.issued_at}/>
               </div>
               <div style={s.fg}>
-                <label style={s.label}>Body Text</label>
-                <textarea style={{ ...s.textarea, minHeight: 80 }} value={editForm.body_text || ""}
-                  onChange={e => setEF("body_text", e.target.value)} />
-                <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }}
-                  onClick={() => {
-                    const d = buildDefaultTemplate({ refType: editForm.reference_type });
-                    setEF("body_text", d.body_text);
-                  }}>
-                  ↺ Reset to default
-                </div>
+                <label style={s.label}>Body Text <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>({(editForm.body_text||"").length}/500)</span></label>
+                <textarea style={{ ...s.textarea, minHeight: 80, borderColor: editErr.body_text ? "#dc2626" : undefined }} value={editForm.body_text || ""} onChange={e => setEF("body_text", e.target.value)} />
+                <FieldError msg={editErr.body_text}/>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }} onClick={() => { const d = buildDefaultTemplate({ refType: editForm.reference_type }); setEF("body_text", d.body_text); }}>↺ Reset to default</div>
               </div>
               <div style={s.row}>
                 <div style={{ flex: 1, ...s.fg }}>
-                  <label style={s.label}>Left Signatory Name</label>
-                  <input style={s.input} value={editForm.sig1_name || ""} onChange={e => setEF("sig1_name", e.target.value)} placeholder="GAD Coordinator" />
+                  <label style={s.label}>Left Signatory Name *</label>
+                  <input style={{ ...s.input, borderColor: editErr.sig1_name ? "#dc2626" : undefined }} value={editForm.sig1_name || ""} onChange={e => setEF("sig1_name", e.target.value)} placeholder="GAD Coordinator" />
+                  <FieldError msg={editErr.sig1_name}/>
                 </div>
                 <div style={{ flex: 1, ...s.fg }}>
                   <label style={s.label}>Left Signatory Title</label>
@@ -1168,8 +828,9 @@ function CertificatesTab() {
               </div>
               <div style={s.row}>
                 <div style={{ flex: 1, ...s.fg }}>
-                  <label style={s.label}>Right Signatory Name</label>
-                  <input style={s.input} value={editForm.sig2_name || ""} onChange={e => setEF("sig2_name", e.target.value)} placeholder="GADRC Director" />
+                  <label style={s.label}>Right Signatory Name *</label>
+                  <input style={{ ...s.input, borderColor: editErr.sig2_name ? "#dc2626" : undefined }} value={editForm.sig2_name || ""} onChange={e => setEF("sig2_name", e.target.value)} placeholder="GADRC Director" />
+                  <FieldError msg={editErr.sig2_name}/>
                 </div>
                 <div style={{ flex: 1, ...s.fg }}>
                   <label style={s.label}>Right Signatory Title</label>
@@ -1179,29 +840,18 @@ function CertificatesTab() {
               <div style={s.fg}>
                 <label style={s.label}>Theme Color</label>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <input type="color" value={editForm.theme_color || "#2D6A2D"}
-                    onChange={e => setEF("theme_color", e.target.value)}
-                    style={{ width: 48, height: 36, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", padding: 2 }} />
-                  <div style={{ flex: 1 }}>
-                    {[["#2D6A2D","Forest Green"],["#1A2E1A","Dark Green"],["#1d4ed8","Blue"],["#7c3aed","Purple"],["#c2410c","Orange"],["#0f766e","Teal"]].map(([c, label]) => (
-                      <span key={c} onClick={() => setEF("theme_color", c)} title={label}
-                        style={{ display: "inline-block", width: 22, height: 22, borderRadius: "50%", background: c, marginRight: 6, cursor: "pointer", border: editForm.theme_color === c ? "3px solid #000" : "2px solid transparent", verticalAlign: "middle" }} />
-                    ))}
-                  </div>
+                  <input type="color" value={editForm.theme_color || "#2D6A2D"} onChange={e => setEF("theme_color", e.target.value)} style={{ width: 48, height: 36, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", padding: 2 }} />
+                  <div style={{ flex: 1 }}>{COLORS.map(([c, label]) => <span key={c} onClick={() => setEF("theme_color", c)} title={label} style={{ display: "inline-block", width: 22, height: 22, borderRadius: "50%", background: c, marginRight: 6, cursor: "pointer", border: editForm.theme_color === c ? "3px solid #000" : "2px solid transparent", verticalAlign: "middle" }} />)}</div>
                   <code style={{ fontSize: 11, color: "#888" }}>{editForm.theme_color}</code>
                 </div>
               </div>
               <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-                <i className="bi bi-info-circle me-1" />
-                Certificate Code <strong>{editCert.certificate_code}</strong> cannot be changed.
+                <i className="bi bi-info-circle me-1" />Certificate Code <strong>{editCert.certificate_code}</strong> cannot be changed.
               </div>
             </div>
             <div style={s.mFooter}>
               <button style={s.btnSecondary} onClick={() => setEditCert(null)}>Cancel</button>
-              <button style={{ ...s.btnPrimary, opacity: editSaving ? 0.7 : 1 }}
-                onClick={saveEdit} disabled={editSaving}>
-                {editSaving ? "Saving…" : "Save Changes"}
-              </button>
+              <button style={{ ...s.btnPrimary, opacity: editSaving ? 0.7 : 1 }} onClick={saveEdit} disabled={editSaving}>{editSaving ? "Saving…" : "Save Changes"}</button>
             </div>
           </div>
         </div>
@@ -1215,7 +865,6 @@ function CertificatesTab() {
 // ─────────────────────────────────────────────────────────────────────────────
 function AutoIssueTab() {
   const toast = useToast();
-
   const [seminars,  setSeminars]  = useState([]);
   const [selected,  setSelected]  = useState(null);
   const [eligible,  setEligible]  = useState([]);
@@ -1223,51 +872,28 @@ function AutoIssueTab() {
   const [issuing,   setIssuing]   = useState(false);
   const [issuedIds, setIssuedIds] = useState(new Set());
   const [error,     setError]     = useState("");
-
-  // Signatory settings
   const [sigs, setSigs] = useState({ ...DEFAULT_SIGS });
   useEffect(() => { loadSignatorySettings().then(setSigs); }, []);
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase
-        .from("seminars")
-        .select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status")
-        .order("scheduled_start", { ascending: false });
+      const { data } = await supabase.from("seminars").select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status").order("scheduled_start", { ascending: false });
       setSeminars(data || []);
     })();
   }, []);
 
   const loadEligible = async (seminarId) => {
-    setLoading(true);
-    setEligible([]);
-    setIssuedIds(new Set());
-    setError("");
-    const [
-      { data: registered, error: regErr },
-      { data: evaluated,  error: evalErr },
-      { data: existing }
-    ] = await Promise.all([
-      supabase.from("seminar_registrations")
-        .select("user_id, full_name, email, role, department")
-        .eq("seminar_id", seminarId),
-      supabase.from("seminar_evaluations")
-        .select("user_id, submitted_at")
-        .eq("seminar_id", seminarId)
-        .not("submitted_at", "is", null),
-      supabase.from("certificates")
-        .select("user_id")
-        .eq("reference_type", "seminar")
-        .eq("reference_id", seminarId)
-        .eq("is_revoked", false),
+    setLoading(true); setEligible([]); setIssuedIds(new Set()); setError("");
+    const [{ data: registered, error: regErr }, { data: evaluated, error: evalErr }, { data: existing }] = await Promise.all([
+      supabase.from("seminar_registrations").select("user_id, full_name, email, role, department").eq("seminar_id", seminarId),
+      supabase.from("seminar_evaluations").select("user_id, submitted_at").eq("seminar_id", seminarId).not("submitted_at", "is", null),
+      supabase.from("certificates").select("user_id").eq("reference_type", "seminar").eq("reference_id", seminarId).eq("is_revoked", false),
     ]);
     if (regErr || evalErr) { setError((regErr || evalErr).message); setLoading(false); return; }
     const evaluatedIds = new Set((evaluated || []).map(e => e.user_id));
     const certUserIds  = new Set((existing  || []).map(c => c.user_id));
-    const pending      = (registered || []).filter(r => evaluatedIds.has(r.user_id) && !certUserIds.has(r.user_id));
-    setEligible(pending);
-    setIssuedIds(certUserIds);
-    setLoading(false);
+    setEligible((registered || []).filter(r => evaluatedIds.has(r.user_id) && !certUserIds.has(r.user_id)));
+    setIssuedIds(certUserIds); setLoading(false);
   };
 
   const onSeminarChange = (seminarId) => {
@@ -1280,22 +906,12 @@ function AutoIssueTab() {
 
   const issueOne = async (userId, seminarId) => {
     const { data: { user } } = await supabase.auth.getUser();
-    const code     = genCertCode();
-    const tmpl     = getTemplate();
+    const code = genCertCode(), tmpl = getTemplate();
     const { error: err } = await supabase.from("certificates").insert({
-      user_id:          userId,
-      reference_type:   "seminar",
-      reference_id:     seminarId,
-      certificate_code: code,
-      is_revoked:       false,
-      issued_at:        new Date().toISOString(),
-      issued_by:        user?.id,
-      body_text:        tmpl.body_text,
-      sig1_name:        tmpl.sig1_name,
-      sig1_title:       tmpl.sig1_title,
-      sig2_name:        tmpl.sig2_name,
-      sig2_title:       tmpl.sig2_title,
-      theme_color:      tmpl.theme_color,
+      user_id: userId, reference_type: "seminar", reference_id: seminarId,
+      certificate_code: code, is_revoked: false, issued_at: new Date().toISOString(), issued_by: user?.id,
+      body_text: tmpl.body_text, sig1_name: tmpl.sig1_name, sig1_title: tmpl.sig1_title,
+      sig2_name: tmpl.sig2_name, sig2_title: tmpl.sig2_title, theme_color: tmpl.theme_color,
     });
     if (!err) await insertCertificateNotification(userId, code, selected?.title);
     return err;
@@ -1335,34 +951,20 @@ function AutoIssueTab() {
 
   return (
     <div>
-      {/* Signatory Settings Panel */}
       <SignatorySettingsPanel sigs={sigs} onChange={setSigs} />
-
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #DDE8DD", marginBottom: 20 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: G.dark, marginBottom: 10 }}>
           <i className="bi bi-lightning-charge me-2" style={{ color: G.base }} />
           Select a seminar to see participants who have <strong>registered</strong> and <strong>submitted an evaluation</strong> but have not yet received a certificate.
         </div>
-        <select style={{ ...s.select, maxWidth: 480 }}
-          value={selected?.id || ""}
-          onChange={e => onSeminarChange(e.target.value)}>
+        <select style={{ ...s.select, maxWidth: 480 }} value={selected?.id || ""} onChange={e => onSeminarChange(e.target.value)}>
           <option value="">— Choose seminar —</option>
-          {seminars.map(sem => (
-            <option key={sem.id} value={sem.id}>
-              {sem.title}{sem.scheduled_start ? ` · ${formatDate(sem.scheduled_start)}` : ""}
-            </option>
-          ))}
+          {seminars.map(sem => <option key={sem.id} value={sem.id}>{sem.title}{sem.scheduled_start ? ` · ${formatDate(sem.scheduled_start)}` : ""}</option>)}
         </select>
-        {selected && selectedSeminarInfo && (
-          <div style={{ marginTop: 8, fontSize: 11, color: "#888", background: G.wash, borderRadius: 6, padding: "6px 10px", maxWidth: 480 }}>
-            <i className="bi bi-info-circle me-1" />{selectedSeminarInfo}
-          </div>
-        )}
+        {selected && selectedSeminarInfo && <div style={{ marginTop: 8, fontSize: 11, color: "#888", background: G.wash, borderRadius: 6, padding: "6px 10px", maxWidth: 480 }}><i className="bi bi-info-circle me-1" />{selectedSeminarInfo}</div>}
         {selected && (
           <div style={{ marginTop: 10, background: G.wash, borderRadius: 8, padding: "10px 14px", maxWidth: 480 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
-              <i className="bi bi-magic" style={{ color: G.base }} />Certificate Template Preview
-            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}><i className="bi bi-magic" style={{ color: G.base }} />Certificate Template Preview</div>
             <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6 }}>
               <div><strong>Title:</strong> {certTitle("seminar")}</div>
               <div><strong>Body:</strong> {(getTemplate().body_text || "").slice(0, 120)}…</div>
@@ -1371,83 +973,50 @@ function AutoIssueTab() {
           </div>
         )}
       </div>
-
       {selected && (
         <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #DDE8DD", overflow: "hidden" }}>
           <div style={{ padding: "16px 24px", borderBottom: "1px solid #DDE8DD", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
             <div>
               <div style={{ fontWeight: 700, color: G.dark }}>{selected.title}</div>
-              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
-                {loading ? "Checking records…" : `${eligible.length} participant(s) registered + evaluated, no certificate yet`}
-              </div>
+              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{loading ? "Checking records…" : `${eligible.length} participant(s) registered + evaluated, no certificate yet`}</div>
             </div>
             {eligible.length > 0 && !loading && (
               <button style={{ ...s.btnSuccess, opacity: issuing ? 0.7 : 1 }} onClick={issueAll} disabled={issuing}>
-                {issuing
-                  ? <><span className="spinner-border spinner-border-sm" />Issuing…</>
-                  : <><i className="bi bi-send-check" />Issue All ({eligible.length})</>
-                }
+                {issuing ? <><span className="spinner-border spinner-border-sm" />Issuing…</> : <><i className="bi bi-send-check" />Issue All ({eligible.length})</>}
               </button>
             )}
           </div>
-          {error && (
-            <div style={{ margin: "12px 24px 0", ...s.infoBox("red"), marginBottom: 0 }}>
-              <i className="bi bi-exclamation-triangle-fill" />{error}
-            </div>
-          )}
-          {loading
-            ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Checking registration and evaluation records…</div>
-            : eligible.length === 0
-              ? (
-                <div style={{ padding: "40px 20px", textAlign: "center" }}>
-                  <i className="bi bi-check-circle" style={{ fontSize: 36, color: "#16a34a" }} />
-                  <div style={{ fontWeight: 700, color: G.dark, marginTop: 12, marginBottom: 6 }}>All caught up!</div>
-                  <div style={{ fontSize: 13, color: "#888" }}>All eligible participants have received their certificates.</div>
-                </div>
-              )
-              : (
-                <table style={{ ...s.table, borderRadius: 0, boxShadow: "none" }}>
-                  <thead>
-                    <tr>
-                      <th style={s.th}>Participant</th>
-                      <th style={s.th}>Role</th>
-                      <th style={s.th}>Eligibility</th>
-                      <th style={s.th}>Action</th>
+          {error && <div style={{ margin: "12px 24px 0", ...s.infoBox("red"), marginBottom: 0 }}><i className="bi bi-exclamation-triangle-fill" />{error}</div>}
+          {loading ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Checking registration and evaluation records…</div>
+            : eligible.length === 0 ? (
+              <div style={{ padding: "40px 20px", textAlign: "center" }}>
+                <i className="bi bi-check-circle" style={{ fontSize: 36, color: "#16a34a" }} />
+                <div style={{ fontWeight: 700, color: G.dark, marginTop: 12, marginBottom: 6 }}>All caught up!</div>
+                <div style={{ fontSize: 13, color: "#888" }}>All eligible participants have received their certificates.</div>
+              </div>
+            ) : (
+              <table style={{ ...s.table, borderRadius: 0, boxShadow: "none" }}>
+                <thead><tr><th style={s.th}>Participant</th><th style={s.th}>Role</th><th style={s.th}>Eligibility</th><th style={s.th}>Action</th></tr></thead>
+                <tbody>
+                  {eligible.map(reg => (
+                    <tr key={reg.user_id}>
+                      <td style={s.td}><div style={{ fontWeight: 600 }}>{reg.full_name || "—"}</div><div style={{ fontSize: 11, color: "#aaa" }}>{reg.email}</div></td>
+                      <td style={s.td}>{reg.role && <span style={s.tag("blue")}>{reg.role.charAt(0).toUpperCase() + reg.role.slice(1)}</span>}</td>
+                      <td style={s.td}><span style={s.tag("green")}>Registered + Evaluated</span></td>
+                      <td style={s.td}><button style={{ ...s.btnSuccess, padding: "6px 14px", fontSize: 12, opacity: issuing ? 0.6 : 1 }} onClick={() => issueSingle(reg)} disabled={issuing}><i className="bi bi-send-check" />Issue</button></td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {eligible.map(reg => (
-                      <tr key={reg.user_id}>
-                        <td style={s.td}>
-                          <div style={{ fontWeight: 600 }}>{reg.full_name || "—"}</div>
-                          <div style={{ fontSize: 11, color: "#aaa" }}>{reg.email}</div>
-                        </td>
-                        <td style={s.td}>
-                          {reg.role && <span style={s.tag("blue")}>{reg.role.charAt(0).toUpperCase() + reg.role.slice(1)}</span>}
-                        </td>
-                        <td style={s.td}><span style={s.tag("green")}>Registered + Evaluated</span></td>
-                        <td style={s.td}>
-                          <button style={{ ...s.btnSuccess, padding: "6px 14px", fontSize: 12, opacity: issuing ? 0.6 : 1 }}
-                            onClick={() => issueSingle(reg)} disabled={issuing}>
-                            <i className="bi bi-send-check" />Issue
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )
+                  ))}
+                </tbody>
+              </table>
+            )
           }
         </div>
       )}
-
       {!selected && (
         <div style={s.emptyBox}>
           <i className="bi bi-lightning-charge" style={{ fontSize: 36, color: G.pale }} />
           <div style={{ fontWeight: 700, color: G.dark, marginTop: 12, marginBottom: 6 }}>Select a seminar above</div>
-          <div style={{ fontSize: 13, color: "#aaa" }}>
-            Participants who registered and evaluated the seminar but have no certificate will appear here.
-          </div>
+          <div style={{ fontSize: 13, color: "#aaa" }}>Participants who registered and evaluated the seminar but have no certificate will appear here.</div>
         </div>
       )}
     </div>
@@ -1455,9 +1024,10 @@ function AutoIssueTab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  BADGES TAB
+//  BADGES TAB — with validation and logActivity
 // ─────────────────────────────────────────────────────────────────────────────
 function BadgesTab() {
+  const toast = useToast();
   const [badges,  setBadges]  = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -1465,7 +1035,8 @@ function BadgesTab() {
   const [form,    setForm]    = useState({});
   const [saving,  setSaving]  = useState(false);
   const [error,   setError]   = useState("");
-  const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const [err,     setErr]     = useState({});
+  const setF = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErr(e => ({ ...e, [k]: null })); };
 
   useEffect(() => {
     let active = true;
@@ -1482,26 +1053,29 @@ function BadgesTab() {
     setBadges(data || []);
   };
 
-  const openAdd  = () => { setEditB(null); setForm({ badge_type: "completion" }); setError(""); setShowAdd(true); };
-  const openEdit = (b) => { setEditB(b); setForm({ ...b }); setError(""); setShowAdd(true); };
+  const openAdd  = () => { setEditB(null); setForm({ badge_type: "completion" }); setError(""); setErr({}); setShowAdd(true); };
+  const openEdit = (b) => { setEditB(b); setForm({ ...b }); setError(""); setErr({}); setShowAdd(true); };
 
   const save = async () => {
-    if (!form.name?.trim()) { setError("Name is required."); return; }
-    setSaving(true); setError("");
+    const errs = V.all({
+      name: !form.name?.trim() ? "Badge name is required."
+            : form.name.trim().length < 2 ? "Must be at least 2 characters."
+            : form.name.trim().length > 80 ? "Must not exceed 80 characters." : null,
+      description: form.description?.trim().length > 300 ? "Must not exceed 300 characters." : null,
+    });
+    if (errs) { setErr(errs); return; }
+    setSaving(true); setError(""); setErr({});
     const payload = {
-      name:        form.name.trim(),
-      description: form.description?.trim() || null,
-      badge_type:  form.badge_type || "completion",
-      icon_url:    form.icon_url?.trim() || null,
+      name: form.name.trim(), description: form.description?.trim() || null,
+      badge_type: form.badge_type || "completion", icon_url: form.icon_url?.trim() || null,
     };
-    let err;
-    if (editB) {
-      ({ error: err } = await supabase.from("badges").update(payload).eq("id", editB.id));
-    } else {
-      ({ error: err } = await supabase.from("badges").insert(payload));
-    }
+    let dbErr;
+    if (editB) { ({ error: dbErr } = await supabase.from("badges").update(payload).eq("id", editB.id)); }
+    else       { ({ error: dbErr } = await supabase.from("badges").insert(payload)); }
     setSaving(false);
-    if (err) { setError(err.message); return; }
+    if (dbErr) { setError(dbErr.message); return; }
+    toast(editB ? "Badge updated." : "Badge created.", "success");
+    logActivity(editB ? "badge_updated" : "badge_created", { name: payload.name });
     setShowAdd(false); setForm({}); reload();
   };
 
@@ -1509,6 +1083,8 @@ function BadgesTab() {
     const count = b.student_badges?.[0]?.count || 0;
     if (!window.confirm(`Delete "${b.name}"?${count > 0 ? ` This will remove it from ${count} student(s).` : ""}`)) return;
     await supabase.from("badges").delete().eq("id", b.id);
+    logActivity("badge_deleted", { name: b.name });
+    toast("Badge deleted.", "success");
     reload();
   };
 
@@ -1520,43 +1096,40 @@ function BadgesTab() {
         <div style={{ fontSize: 13, color: "#888" }}>{badges.length} badge{badges.length !== 1 ? "s" : ""} created</div>
         <button style={s.addBtn} onClick={openAdd}><i className="bi bi-plus-lg" />Create Badge</button>
       </div>
-      {loading
-        ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>
-        : badges.length === 0
-          ? (
-            <div style={s.emptyBox}>
-              <i className="bi bi-award" style={{ fontSize: 40, color: G.pale }} />
-              <div style={{ fontWeight: 700, color: G.dark, margin: "10px 0 6px" }}>No badges created yet</div>
-              <div style={{ fontSize: 13, color: "#aaa", marginBottom: 16 }}>Create badges to award students for completing modules or passing assessments.</div>
-              <button style={s.addBtn} onClick={openAdd}>+ Create First Badge</button>
-            </div>
-          )
-          : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-              {badges.map(b => {
-                const awardCount = b.student_badges?.[0]?.count || 0;
-                return (
-                  <div key={b.id} style={s.badgeCard}>
-                    <div style={{ width: 52, height: 52, borderRadius: 10, background: "#fef9c3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }}>
-                      {b.icon_url ? <img src={b.icon_url} alt="" style={{ width: 40, height: 40, objectFit: "contain" }} /> : "🏅"}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}>{b.name}</div>
-                      {b.description && <div style={{ fontSize: 12, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.description}</div>}
-                      <div style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center" }}>
-                        <span style={s.tag("yellow")}>{b.badge_type}</span>
-                        <span style={{ fontSize: 11, color: "#aaa" }}>Awarded: {awardCount}</span>
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", gap: 2 }}>
-                      <button style={s.iconBtn(G.base)} onClick={() => openEdit(b)}><i className="bi bi-pencil" /></button>
-                      <button style={s.iconBtn("#dc2626")} onClick={() => del(b)}><i className="bi bi-trash" /></button>
+      {loading ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>
+        : badges.length === 0 ? (
+          <div style={s.emptyBox}>
+            <i className="bi bi-award" style={{ fontSize: 40, color: G.pale }} />
+            <div style={{ fontWeight: 700, color: G.dark, margin: "10px 0 6px" }}>No badges created yet</div>
+            <div style={{ fontSize: 13, color: "#aaa", marginBottom: 16 }}>Create badges to award students for completing modules or passing assessments.</div>
+            <button style={s.addBtn} onClick={openAdd}>+ Create First Badge</button>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+            {badges.map(b => {
+              const awardCount = b.student_badges?.[0]?.count || 0;
+              return (
+                <div key={b.id} style={s.badgeCard}>
+                  <div style={{ width: 52, height: 52, borderRadius: 10, background: "#fef9c3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }}>
+                    {b.icon_url ? <img src={b.icon_url} alt="" style={{ width: 40, height: 40, objectFit: "contain" }} /> : "🏅"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, color: G.dark, fontSize: 14 }}>{b.name}</div>
+                    {b.description && <div style={{ fontSize: 12, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.description}</div>}
+                    <div style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center" }}>
+                      <span style={s.tag("yellow")}>{b.badge_type}</span>
+                      <span style={{ fontSize: 11, color: "#aaa" }}>Awarded: {awardCount}</span>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )
+                  <div style={{ display: "flex", gap: 2 }}>
+                    <button style={s.iconBtn(G.base)} onClick={() => openEdit(b)}><i className="bi bi-pencil" /></button>
+                    <button style={s.iconBtn("#dc2626")} onClick={() => del(b)}><i className="bi bi-trash" /></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
       }
       {showAdd && (
         <div style={s.overlay}>
@@ -1568,12 +1141,14 @@ function BadgesTab() {
             <div style={s.mBody}>
               {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
               <div style={s.fg}>
-                <label style={s.label}>Badge Name *</label>
-                <input style={s.input} value={form.name || ""} onChange={e => setF("name", e.target.value)} placeholder="e.g. Gender Champion" autoFocus />
+                <label style={s.label}>Badge Name * <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>({(form.name||"").length}/80)</span></label>
+                <input style={{ ...s.input, borderColor: err.name ? "#dc2626" : undefined }} value={form.name || ""} onChange={e => setF("name", e.target.value)} placeholder="e.g. Gender Champion" autoFocus />
+                <FieldError msg={err.name}/>
               </div>
               <div style={s.fg}>
-                <label style={s.label}>Description</label>
-                <textarea style={s.textarea} value={form.description || ""} onChange={e => setF("description", e.target.value)} placeholder="What does this badge represent?" />
+                <label style={s.label}>Description <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>({(form.description||"").length}/300)</span></label>
+                <textarea style={{ ...s.textarea, borderColor: err.description ? "#dc2626" : undefined }} value={form.description || ""} onChange={e => setF("description", e.target.value)} placeholder="What does this badge represent?" />
+                <FieldError msg={err.description}/>
               </div>
               <div style={s.fg}>
                 <label style={s.label}>Badge Type</label>
@@ -1588,9 +1163,7 @@ function BadgesTab() {
             </div>
             <div style={s.mFooter}>
               <button style={s.btnSecondary} onClick={() => setShowAdd(false)}>Cancel</button>
-              <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>
-                {saving ? "Saving…" : editB ? "Save Changes" : "Create Badge"}
-              </button>
+              <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>{saving ? "Saving…" : editB ? "Save Changes" : "Create Badge"}</button>
             </div>
           </div>
         </div>
@@ -1613,16 +1186,9 @@ export default function CertificatesPage() {
         </div>
       </div>
       <div style={s.tabs}>
-        <div style={s.tab(tab === "certificates")} onClick={() => setTab("certificates")}>
-          <i className="bi bi-patch-check" />Certificates
-        </div>
-        <div style={s.tab(tab === "auto-issue")} onClick={() => setTab("auto-issue")}>
-          <i className="bi bi-lightning-charge" />Auto-Issue
-          <span style={{ ...s.tag("blue"), marginLeft: 4, fontSize: 10 }}>Reg + Eval gated</span>
-        </div>
-        <div style={s.tab(tab === "badges")} onClick={() => setTab("badges")}>
-          <i className="bi bi-award" />Badges
-        </div>
+        <div style={s.tab(tab === "certificates")} onClick={() => setTab("certificates")}><i className="bi bi-patch-check" />Certificates</div>
+        <div style={s.tab(tab === "auto-issue")} onClick={() => setTab("auto-issue")}><i className="bi bi-lightning-charge" />Auto-Issue<span style={{ ...s.tag("blue"), marginLeft: 4, fontSize: 10 }}>Reg + Eval gated</span></div>
+        <div style={s.tab(tab === "badges")} onClick={() => setTab("badges")}><i className="bi bi-award" />Badges</div>
       </div>
       {tab === "certificates" && <CertificatesTab />}
       {tab === "auto-issue"   && <AutoIssueTab />}

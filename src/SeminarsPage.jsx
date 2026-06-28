@@ -1,6 +1,9 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
+import { logActivity } from "./lib/activityLog.js";
+import { useToast } from "./App.jsx";
 import { ConfirmModal } from "./App.jsx";
+import { V, FieldError } from "./lib/Validate.jsx";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -23,87 +26,6 @@ function formatDateShort(iso) {
   return new Date(utcStr).toLocaleString("en-PH", {
     timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric",
   });
-}
-
-// ─────────────────────────────────────────────────────────────────
-//  NOTIFICATION HELPERS
-// ─────────────────────────────────────────────────────────────────
-
-async function insertSeminarNotifications(seminarId, seminarTitle) {
-  try {
-    const { data: users, error } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("is_active", true);
-
-    if (error || !users?.length) return;
-
-    const now  = new Date().toISOString();
-    const rows = users.map(u => ({
-      user_id:        u.id,
-      type:           "new_seminar",
-      title:          "New Seminar Available",
-      body:           `"${seminarTitle}" is now open for registration.`,
-      reference_type: "seminar",
-      reference_id:   seminarId,
-      is_read:        false,
-      created_at:     now,
-    }));
-
-    await supabase.from("notifications").insert(rows);
-  } catch (e) {
-    console.error("insertSeminarNotifications error:", e);
-  }
-}
-
-async function triggerEvaluationNotifications() {
-  try {
-    const now          = new Date();
-    const thirtyMinAgo = new Date(now.getTime() - 30 * 60 * 1000).toISOString();
-
-    const { data: endedSeminars } = await supabase
-      .from("seminars")
-      .select("id, title")
-      .lte("scheduled_end", now.toISOString())
-      .gte("scheduled_end", thirtyMinAgo)
-      .neq("status", "cancelled");
-
-    if (!endedSeminars?.length) return;
-
-    for (const sem of endedSeminars) {
-      const { data: registrations } = await supabase
-        .from("seminar_registrations")
-        .select("user_id")
-        .eq("seminar_id", sem.id)
-        .neq("status", "cancelled");
-
-      if (!registrations?.length) continue;
-
-      for (const reg of registrations) {
-        const { data: existing } = await supabase
-          .from("notifications")
-          .select("id")
-          .eq("user_id", reg.user_id)
-          .eq("reference_id", sem.id)
-          .eq("type", "evaluation_available")
-          .maybeSingle();
-
-        if (existing) continue;
-
-        await supabase.from("notifications").insert({
-          user_id:        reg.user_id,
-          type:           "evaluation_available",
-          title:          "Seminar Evaluation Available",
-          body:           `You can now evaluate "${sem.title}". Share your feedback!`,
-          reference_type: "seminar",
-          reference_id:   sem.id,
-          is_read:        false,
-        });
-      }
-    }
-  } catch (e) {
-    console.error("triggerEvaluationNotifications failed:", e);
-  }
 }
 
 const s = {
@@ -158,32 +80,55 @@ const s = {
 
 // ── Details Tab ───────────────────────────────────────────────────
 function DetailsTab({ seminar, onUpdate }) {
-  const [form, setForm]           = useState({ ...seminar });
-  const [saving, setSaving]       = useState(false);
+  const toast = useToast();
+  const [form, setForm]       = useState({ ...seminar });
+  const [saving, setSaving]   = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [error, setError]         = useState("");
-  const coverRef                  = useRef();
-  const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const [error, setError]     = useState("");
+  const [err,   setErr]       = useState({});
+  const coverRef              = useRef();
+  const setF = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErr(e => ({ ...e, [k]: null })); };
 
   const uploadCover = async (file) => {
     setUploading(true);
     const path = `${seminar.id}/${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
     const { error: upErr } = await supabase.storage.from("seminar-covers").upload(path, file, { upsert: true });
-    if (upErr) { alert("Upload failed: " + upErr.message); setUploading(false); return; }
+    if (upErr) { toast("Upload failed: " + upErr.message, "error"); setUploading(false); return; }
     const { data: { publicUrl } } = supabase.storage.from("seminar-covers").getPublicUrl(path);
     setF("cover_image_url", publicUrl);
     setUploading(false);
   };
 
   const save = async () => {
-    if (!form.title?.trim()) { setError("Title is required."); return; }
-    setSaving(true); setError("");
+    // ── Field-level validation ──
+    const errors = V.all({
+      title: V.title(form.title, "Title"),
+      max_participants: form.max_participants
+        ? (isNaN(Number(form.max_participants)) || Number(form.max_participants) < 1
+            ? "Max participants must be a number of at least 1."
+            : Number(form.max_participants) > 10000
+              ? "Max participants cannot exceed 10,000."
+              : !Number.isInteger(Number(form.max_participants))
+                ? "Max participants must be a whole number."
+                : null)
+        : null,
+      venue: form.venue && form.venue.trim().length > 200
+        ? "Venue must not exceed 200 characters."
+        : null,
+    });
+    if (errors) { setErr(errors); return; }
 
+    setSaving(true); setError(""); setErr({});
+
+    // Fix dates — convert local datetime-local input to UTC ISO string
     let scheduledStart = null;
     let scheduledEnd   = null;
-    if (form.scheduled_start) scheduledStart = new Date(form.scheduled_start).toISOString();
-    if (form.scheduled_end)   scheduledEnd   = new Date(form.scheduled_end).toISOString();
-
+    if (form.scheduled_start) {
+      scheduledStart = new Date(form.scheduled_start).toISOString();
+    }
+    if (form.scheduled_end) {
+      scheduledEnd = new Date(form.scheduled_end).toISOString();
+    }
     if (scheduledStart && scheduledEnd && new Date(scheduledEnd) <= new Date(scheduledStart)) {
       setError("End date/time must be after start date/time."); setSaving(false); return;
     }
@@ -192,35 +137,35 @@ function DetailsTab({ seminar, onUpdate }) {
       scheduledEnd = d.toISOString();
     }
 
+    // Fix webinar_platform — strip to null if empty
     const platform = form.webinar_platform?.trim() || null;
 
     const payload = {
-      title:            form.title.trim(),
-      description:      form.description?.trim() || null,
-      seminar_type:     form.seminar_type || "webinar",
-      status:           form.status || "upcoming",
-      cover_image_url:  form.cover_image_url || null,
-      webinar_link:     form.webinar_link?.trim() || null,
+      title: form.title.trim(), description: form.description?.trim() || null,
+      seminar_type: form.seminar_type || "webinar", status: form.status || "upcoming",
+      cover_image_url: form.cover_image_url || null,
+      webinar_link: form.webinar_link?.trim() || null,
       webinar_platform: platform,
-      venue:            form.venue?.trim() || null,
-      scheduled_start:  scheduledStart,
-      scheduled_end:    scheduledEnd,
+      venue: form.venue?.trim() || null,
+      scheduled_start: scheduledStart,
+      scheduled_end:   scheduledEnd,
       max_participants: form.max_participants ? Number(form.max_participants) : null,
-      is_public:        form.is_public ?? true,
+      is_public: form.is_public ?? true,
     };
-
-    const wasPublic = seminar.is_public;
-    const nowPublic = payload.is_public;
+    const wasPublic = !!seminar.is_public;
+    const nowPublic = !!payload.is_public;
 
     const { error: err } = await supabase.from("seminars").update(payload).eq("id", seminar.id);
     setSaving(false);
     if (err) { setError(err.message); return; }
+    toast("Seminar saved successfully!", "success");
 
-    if (!wasPublic && nowPublic) {
-      await insertSeminarNotifications(seminar.id, payload.title);
+    if (wasPublic !== nowPublic) {
+      logActivity(nowPublic ? "seminar_published" : "seminar_unpublished", { seminar_id: seminar.id, title: payload.title });
+    } else {
+      logActivity("seminar_updated", { seminar_id: seminar.id, title: payload.title });
     }
 
-    alert("Seminar saved!");
     onUpdate();
   };
 
@@ -232,18 +177,17 @@ function DetailsTab({ seminar, onUpdate }) {
       <div style={s.coverBox} onClick={() => !uploading && coverRef.current?.click()}>
         {form.cover_image_url
           ? <img src={form.cover_image_url} alt="cover" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          : uploading
-            ? <><div style={{ fontSize: 28 }}>⏳</div><div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Uploading…</div></>
-            : <><div style={{ fontSize: 36 }}><i className="bi bi-image me-1"/>️</div><div style={{ fontSize: 13, color: "#aaa", marginTop: 6 }}>Click to upload cover image</div></>
+          : uploading ? <><div style={{ fontSize: 28 }}>⏳</div><div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Uploading…</div></>
+          : <><div style={{ fontSize: 36 }}><i className="bi bi-image me-1"/>️</div><div style={{ fontSize: 13, color: "#aaa", marginTop: 6 }}>Click to upload cover image</div></>
         }
-        <input ref={coverRef} type="file" accept="image/*" style={{ display: "none" }}
-          onChange={e => { if (e.target.files[0]) uploadCover(e.target.files[0]); e.target.value = ""; }} />
+        <input ref={coverRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => { if (e.target.files[0]) uploadCover(e.target.files[0]); e.target.value = ""; }} />
       </div>
 
       <div style={s.card}>
         <div style={s.fg}>
           <label style={s.label}>Title *</label>
-          <input style={s.input} value={form.title || ""} onChange={e => setF("title", e.target.value)} />
+          <input style={{...s.input, borderColor: err.title ? "#dc2626" : undefined}} value={form.title || ""} onChange={e => setF("title", e.target.value)} />
+          <FieldError msg={err.title}/>
         </div>
         <div style={s.fg}>
           <label style={s.label}>Description</label>
@@ -269,28 +213,21 @@ function DetailsTab({ seminar, onUpdate }) {
           </div>
           <div style={{ ...s.fg, flex: 1, minWidth: 130 }}>
             <label style={s.label}>Max Participants</label>
-            <input style={s.input} type="number" min={1} value={form.max_participants || ""} onChange={e => setF("max_participants", e.target.value)} placeholder="Unlimited" />
+            <input style={{...s.input, borderColor: err.max_participants ? "#dc2626" : undefined}} type="number" min={1} value={form.max_participants || ""} onChange={e => setF("max_participants", e.target.value)} placeholder="Unlimited" />
+            <FieldError msg={err.max_participants}/>
           </div>
         </div>
         <div style={s.row}>
           <div style={{ ...s.fg, flex: 1 }}>
             <label style={s.label}>Start Date & Time</label>
             <input style={s.input} type="datetime-local"
-              value={form.scheduled_start
-                ? (form.scheduled_start.includes("Z") || form.scheduled_start.includes("+")
-                    ? (() => { const d = new Date(form.scheduled_start); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()
-                    : form.scheduled_start.slice(0, 16))
-                : ""}
+              value={form.scheduled_start ? (() => { try { const d = new Date(form.scheduled_start); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } catch { return form.scheduled_start.slice(0, 16); } })() : ""}
               onChange={e => setF("scheduled_start", e.target.value)} />
           </div>
           <div style={{ ...s.fg, flex: 1 }}>
             <label style={s.label}>End Date & Time</label>
             <input style={s.input} type="datetime-local"
-              value={form.scheduled_end
-                ? (form.scheduled_end.includes("Z") || form.scheduled_end.includes("+")
-                    ? (() => { const d = new Date(form.scheduled_end); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()
-                    : form.scheduled_end.slice(0, 16))
-                : ""}
+              value={form.scheduled_end ? (() => { try { const d = new Date(form.scheduled_end); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } catch { return form.scheduled_end.slice(0, 16); } })() : ""}
               onChange={e => setF("scheduled_end", e.target.value)} />
           </div>
         </div>
@@ -315,7 +252,8 @@ function DetailsTab({ seminar, onUpdate }) {
         {(form.seminar_type === "in_person" || form.seminar_type === "hybrid") && (
           <div style={s.fg}>
             <label style={s.label}>Venue</label>
-            <input style={s.input} value={form.venue || ""} onChange={e => setF("venue", e.target.value)} placeholder="e.g. CvSU Main Campus, Room 101" />
+            <input style={{...s.input, borderColor: err.venue ? "#dc2626" : undefined}} value={form.venue || ""} onChange={e => setF("venue", e.target.value)} placeholder="e.g. CvSU Main Campus, Room 101" />
+            <FieldError msg={err.venue}/>
           </div>
         )}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -323,9 +261,7 @@ function DetailsTab({ seminar, onUpdate }) {
             <input type="checkbox" checked={!!form.is_public} onChange={e => setF("is_public", e.target.checked)} style={{ width: 16, height: 16, accentColor: G.base }} />
             Visible to students in app
           </label>
-          <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>
-            {saving ? "Saving…" : "Save Seminar"}
-          </button>
+          <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Seminar"}</button>
         </div>
       </div>
     </div>
@@ -341,16 +277,18 @@ const SEMINAR_ROLES = [
   { value: "staff",         label: "Staff",         color: "blue"   },
 ];
 
-function roleColor(role) { return SEMINAR_ROLES.find(r => r.value === role)?.color || "blue"; }
-function roleLabel(role) { return SEMINAR_ROLES.find(r => r.value === role)?.label || role || "Student"; }
-
+function roleColor(role) {
+  return SEMINAR_ROLES.find(r => r.value === role)?.color || "blue";
+}
+function roleLabel(role) {
+  return SEMINAR_ROLES.find(r => r.value === role)?.label || role || "Student";
+}
 
 function RegistrationsTab({ seminar }) {
-  const [regs, setRegs]                 = useState([]);
-  const [loading, setLoading]           = useState(true);
-  const [search, setSearch]             = useState("");
-  const [roleFilter, setRoleFilter]     = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [regs, setRegs]         = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [search, setSearch]     = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
 
   const load = async () => {
     setLoading(true);
@@ -366,20 +304,19 @@ function RegistrationsTab({ seminar }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [seminar.id]);
 
+  const updateRole = async (id, role) => {
+    await supabase.from("seminar_registrations").update({ role, status: "registered" }).eq("id", id);
+    setRegs(r => r.map(x => x.id === id ? { ...x, role, status: "registered" } : x));
+    logActivity("seminar_registration_role_changed", { seminar_id: seminar.id, registration_id: id, new_role: role });
+  };
+
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
 
-  const active    = regs.filter(r => r.status !== "cancelled");
-  const cancelled = regs.filter(r => r.status === "cancelled");
-
+  const active = regs.filter(r => r.status !== "cancelled");
   const filtered = regs.filter(r => {
-    const matchSearch  = !search
-      || (r.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase())
-      || (r.profiles?.email || "").toLowerCase().includes(search.toLowerCase());
-    const matchRole    = roleFilter === "all" || (r.role || "student") === roleFilter;
-    const matchStatus  = statusFilter === "all"
-      || (statusFilter === "active"    && r.status !== "cancelled")
-      || (statusFilter === "cancelled" && r.status === "cancelled");
-    return matchSearch && matchRole && matchStatus;
+    const matchSearch = !search || (r.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) || (r.profiles?.email || "").toLowerCase().includes(search.toLowerCase());
+    const matchRole   = roleFilter === "all" || (r.role || "student") === roleFilter;
+    return matchSearch && matchRole;
   });
 
   const roleCounts = SEMINAR_ROLES.reduce((acc, r) => {
@@ -387,22 +324,15 @@ function RegistrationsTab({ seminar }) {
     return acc;
   }, {});
 
-  const filterBtn = (active) => ({
-    padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
-    border: `1.5px solid ${active ? "#2D6A2D" : "#DDE8DD"}`,
-    background: active ? "#E8F5E9" : "#fff",
-    color: active ? "#2D6A2D" : "#555",
-  });
-
   return (
     <div>
-      {/* Stat cards */}
+      {/* Stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
-          { label: "Total",     value: regs.length,      color: G.base    },
-          { label: "Active",    value: active.length,    color: "#16a34a" },
-          { label: "Cancelled", value: cancelled.length, color: "#dc2626" },
-          { label: "Capacity",  value: seminar.max_participants ? `${active.length}/${seminar.max_participants}` : "Unlimited", color: "#2563eb" },
+          { label: "Total", value: regs.length, color: G.base },
+          { label: "Active", value: active.length, color: "#16a34a" },
+          { label: "Cancelled", value: regs.filter(r => r.status === "cancelled").length, color: "#dc2626" },
+          { label: "Capacity", value: seminar.max_participants ? `${active.length}/${seminar.max_participants}` : "Unlimited", color: "#2563eb" },
         ].map(stat => (
           <div key={stat.label} style={s.statCard(stat.color)}>
             <div style={{ ...s.statNum, color: stat.color, fontSize: 22 }}>{stat.value}</div>
@@ -411,47 +341,25 @@ function RegistrationsTab({ seminar }) {
         ))}
       </div>
 
-      {/* Status filter */}
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>Registration Status</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {[
-            { value: "all",       label: `All (${regs.length})` },
-            { value: "active",    label: `✓ Active (${active.length})` },
-            { value: "cancelled", label: `✕ Cancelled (${cancelled.length})` },
-          ].map(opt => (
-            <button key={opt.value} onClick={() => setStatusFilter(opt.value)} style={filterBtn(statusFilter === opt.value)}>
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Role filter */}
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>Role</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => setRoleFilter("all")} style={filterBtn(roleFilter === "all")}>All Roles</button>
-          {SEMINAR_ROLES.map(r => (
-            <button key={r.value} onClick={() => setRoleFilter(r.value)} style={filterBtn(roleFilter === r.value)}>
-              {r.label} ({roleCounts[r.value] || 0})
-            </button>
-          ))}
-        </div>
+      {/* Role breakdown pills */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <button onClick={() => setRoleFilter("all")}
+          style={{ padding: "4px 12px", borderRadius: 20, border: `1.5px solid ${roleFilter==="all"?"#2D6A2D":"#DDE8DD"}`, background: roleFilter==="all"?"#E8F5E9":"#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: roleFilter==="all"?"#2D6A2D":"#555" }}>
+          All ({regs.length})
+        </button>
+        {SEMINAR_ROLES.map(r => (
+          <button key={r.value} onClick={() => setRoleFilter(r.value)}
+            style={{ padding: "4px 12px", borderRadius: 20, border: `1.5px solid ${roleFilter===r.value?"#2D6A2D":"#DDE8DD"}`, background: roleFilter===r.value?"#E8F5E9":"#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: roleFilter===r.value?"#2D6A2D":"#555" }}>
+            {r.label} ({roleCounts[r.value] || 0})
+          </button>
+        ))}
       </div>
 
       {/* Search */}
-      <div style={{ marginBottom: 10 }}>
+      <div style={{ marginBottom: 14 }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or email…"
-          style={{ ...s.input, maxWidth: 320 }} />
+          style={{ ...s.input, maxWidth: 300 }} />
       </div>
-
-      {/* Results count */}
-      {regs.length > 0 && (
-        <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
-          Showing <strong>{filtered.length}</strong> of <strong>{regs.length}</strong> registrations
-        </div>
-      )}
 
       {regs.length === 0 ? (
         <div style={s.emptyBox}>
@@ -470,24 +378,30 @@ function RegistrationsTab({ seminar }) {
                 <th style={s.th}>Department</th>
                 <th style={s.th}>Registered</th>
                 <th style={s.th}>Role</th>
-                <th style={s.th}>Status</th>
+                <th style={s.th}>Change Role</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map(r => {
                 const currentRole = r.role || "student";
-                const isCancelled = r.status === "cancelled";
                 return (
-                  <tr key={r.id} style={{ opacity: isCancelled ? 0.55 : 1 }}>
+                  <tr key={r.id}>
                     <td style={s.td}>
                       <div style={{ fontWeight: 600, color: G.dark }}>{r.profiles?.full_name || "—"}</div>
                       <div style={{ fontSize: 11, color: "#aaa" }}>{r.profiles?.student_id} · {r.profiles?.email}</div>
                     </td>
                     <td style={s.td}>{r.profiles?.department || "—"} · Yr {r.profiles?.year_level || "—"}</td>
-                    <td style={{ ...s.td, fontSize: 12 }}>{formatDate(r.registered_at)}</td>
-                    <td style={s.td}><span style={s.tag(roleColor(currentRole))}>{roleLabel(currentRole)}</span></td>
+                    <td style={{...s.td, fontSize:12}}>{formatDate(r.registered_at)}</td>
                     <td style={s.td}>
-                      <span style={s.tag(isCancelled ? "red" : "green")}>{isCancelled ? "Cancelled" : "Active"}</span>
+                      <span style={s.tag(roleColor(currentRole))}>{roleLabel(currentRole)}</span>
+                    </td>
+                    <td style={s.td}>
+                      <select value={currentRole} onChange={e => updateRole(r.id, e.target.value)}
+                        style={{ padding: "6px 10px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12, outline: "none", cursor: "pointer", background: "#fff" }}>
+                        {SEMINAR_ROLES.map(role => (
+                          <option key={role.value} value={role.value}>{role.label}</option>
+                        ))}
+                      </select>
                     </td>
                   </tr>
                 );
@@ -499,14 +413,15 @@ function RegistrationsTab({ seminar }) {
     </div>
   );
 }
+
 // ── Evaluation Fields ─────────────────────────────────────────────
 const EVAL_FIELDS = [
-  { key: "q_content",      label: "Content Quality",       desc: "Relevance and accuracy of the seminar content" },
-  { key: "q_speaker",      label: "Speaker Effectiveness", desc: "Clarity, knowledge, and delivery of the speaker(s)" },
-  { key: "q_organization", label: "Event Organization",    desc: "Logistics, time management, and flow of the event" },
-  { key: "q_relevance",    label: "Relevance to GAD",      desc: "How relevant was this activity to gender and development?" },
-  { key: "q_materials",    label: "Materials & Resources", desc: "Quality of presentation materials and handouts" },
-  { key: "q_overall",      label: "Overall Satisfaction",  desc: "Your overall experience with this seminar" },
+  { key: "q_content",      label: "Content Quality",          desc: "Relevance and accuracy of the seminar content" },
+  { key: "q_speaker",      label: "Speaker Effectiveness",    desc: "Clarity, knowledge, and delivery of the speaker(s)" },
+  { key: "q_organization", label: "Event Organization",       desc: "Logistics, time management, and flow of the event" },
+  { key: "q_relevance",    label: "Relevance to GAD",         desc: "How relevant was this activity to gender and development?" },
+  { key: "q_materials",    label: "Materials & Resources",    desc: "Quality of presentation materials and handouts" },
+  { key: "q_overall",      label: "Overall Satisfaction",     desc: "Your overall experience with this seminar" },
 ];
 
 function StarRating({ value }) {
@@ -523,10 +438,9 @@ function StarRating({ value }) {
 }
 
 function EvaluationsTab({ seminar }) {
-  const [evals, setEvals]           = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [selected, setSelected]     = useState(null);
-  const [starFilter, setStarFilter] = useState("all");
+  const [evals, setEvals]         = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [selected, setSelected]   = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -546,70 +460,37 @@ function EvaluationsTab({ seminar }) {
     const vals = evals.map(e => e[key]).filter(v => v != null);
     return vals.length ? (vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(1) : "—";
   };
-
   const overallAvg = evals.length > 0
     ? (EVAL_FIELDS.map(f => parseFloat(avg(f.key))||0).reduce((a,b)=>a+b,0)/EVAL_FIELDS.length).toFixed(1)
     : "—";
 
-  // Each eval's overall rating = rounded average of all q_ fields
-  const evalOverall = (e) => {
-    const vals = EVAL_FIELDS.map(f => e[f.key]).filter(v => v != null);
-    return vals.length ? Math.round(vals.reduce((a,b) => a+b, 0) / vals.length) : 0;
-  };
-
-  const starCounts = [5,4,3,2,1].reduce((acc, star) => {
-    acc[star] = evals.filter(e => evalOverall(e) === star).length;
-    return acc;
-  }, {});
-
-  const filteredEvals = starFilter === "all"
-    ? evals
-    : evals.filter(e => evalOverall(e) === parseInt(starFilter));
-
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
-
-  const filterBtn = (active) => ({
-    padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
-    border: `1.5px solid ${active ? "#2D6A2D" : "#DDE8DD"}`,
-    background: active ? "#E8F5E9" : "#fff",
-    color: active ? "#2D6A2D" : "#555",
-    display: "flex", alignItems: "center", gap: 4,
-  });
 
   return (
     <div>
-      {/* Stat cards */}
+      {/* Summary stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <div style={s.statCard(G.base)}>
           <div style={{ ...s.statNum, color: G.base }}>{evals.length}</div>
           <div style={s.statLabel}>Responses</div>
         </div>
         <div style={s.statCard("#f59e0b")}>
-          <div style={{ ...s.statNum, color: "#f59e0b", fontSize: 22 }}>
-            <i className="bi bi-star-fill me-1" style={{ fontSize: 18 }}/>{overallAvg}
+          <div style={{ ...s.statNum, color: "#f59e0b", fontSize:22 }}>
+            <i className="bi bi-star-fill me-1" style={{ fontSize:18 }}/>{overallAvg}
           </div>
           <div style={s.statLabel}>Overall Average</div>
         </div>
-        {[5,4,3,2,1].map(star => (
-          <div key={star} style={s.statCard("#f59e0b")}>
-            <div style={{ ...s.statNum, color: "#f59e0b", fontSize: 22 }}>{starCounts[star] || 0}</div>
-            <div style={s.statLabel}>
-              {[...Array(star)].map((_,i) => <i key={i} className="bi bi-star-fill" style={{ color: "#f59e0b", fontSize: 10 }}/>)}
-              {[...Array(5-star)].map((_,i) => <i key={i} className="bi bi-star" style={{ color: "#e5e7eb", fontSize: 10 }}/>)}
-            </div>
-          </div>
-        ))}
       </div>
 
       {evals.length === 0 ? (
         <div style={s.emptyBox}>
-          <i className="bi bi-clipboard-data d-block mb-2" style={{ fontSize: 40, color: G.pale }}/>
+          <i className="bi bi-clipboard-data d-block mb-2" style={{ fontSize:40, color:G.pale }}/>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No evaluations submitted yet</div>
           <div style={{ fontSize: 13, color: "#aaa" }}>Evaluation forms submitted by participants will appear here.</div>
         </div>
       ) : (
         <>
-          {/* Evaluation Summary */}
+          {/* Per-question averages card */}
           <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #DDE8DD", padding: "20px 24px", marginBottom: 20 }}>
             <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 14 }}>
               <i className="bi bi-bar-chart-line me-2" style={{ color: G.base }}/>Evaluation Summary
@@ -634,95 +515,149 @@ function EvaluationsTab({ seminar }) {
             </div>
           </div>
 
-          {/* Star rating filter */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
-              Filter by Rating
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={() => setStarFilter("all")} style={filterBtn(starFilter === "all")}>
-                All ({evals.length})
-              </button>
-              {[5,4,3,2,1].map(star => (
-                <button key={star} onClick={() => setStarFilter(String(star))} style={filterBtn(starFilter === String(star))}>
-                  {[...Array(star)].map((_,i) => (
-                    <i key={i} className="bi bi-star-fill" style={{ color: "#f59e0b", fontSize: 11 }}/>
-                  ))}
-                  {[...Array(5-star)].map((_,i) => (
-                    <i key={i} className="bi bi-star" style={{ color: "#d1d5db", fontSize: 11 }}/>
-                  ))}
-                  <span style={{ marginLeft: 4 }}>({starCounts[star] || 0})</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Results count */}
-          <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
-            Showing <strong>{filteredEvals.length}</strong> of <strong>{evals.length}</strong> responses
-          </div>
-
-          {/* Individual Responses */}
+          {/* Individual responses */}
           <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 12 }}>
             <i className="bi bi-person-lines-fill me-2" style={{ color: G.base }}/>Individual Responses
           </div>
-
-          {filteredEvals.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "40px 0", color: "#aaa" }}>No responses match the selected rating.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {filteredEvals.map(e => (
-                <div key={e.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #DDE8DD", overflow: "hidden" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#F9FBF9", borderBottom: "1px solid #DDE8DD", cursor: "pointer" }}
-                    onClick={() => setSelected(selected?.id === e.id ? null : e)}>
-                    <div>
-                      <div style={{ fontWeight: 600, color: G.dark }}>{e.profiles?.full_name || "Anonymous"}</div>
-                      <div style={{ fontSize: 11, color: "#aaa" }}>{e.profiles?.student_id} · {formatDate(e.submitted_at)}</div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <StarRating value={e.q_overall || 0}/>
-                      <i className={`bi bi-chevron-${selected?.id===e.id?"up":"down"}`} style={{ color: "#aaa" }}/>
-                    </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {evals.map(e => (
+              <div key={e.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #DDE8DD", overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#F9FBF9", borderBottom: "1px solid #DDE8DD", cursor: "pointer" }}
+                  onClick={() => setSelected(selected?.id === e.id ? null : e)}>
+                  <div>
+                    <div style={{ fontWeight: 600, color: G.dark }}>{e.profiles?.full_name || "Anonymous"}</div>
+                    <div style={{ fontSize: 11, color: "#aaa" }}>{e.profiles?.student_id} · {formatDate(e.submitted_at)}</div>
                   </div>
-                  {selected?.id === e.id && (
-                    <div style={{ padding: "16px" }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 12, marginBottom: 12 }}>
-                        {EVAL_FIELDS.map(f => (
-                          <div key={f.key} style={{ background: "#F5F7F5", borderRadius: 8, padding: "10px 12px" }}>
-                            <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>{f.label}</div>
-                            <StarRating value={e[f.key]}/>
-                          </div>
-                        ))}
-                      </div>
-                      {e.comments && (
-                        <div style={{ background: G.wash, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: G.dark, lineHeight: 1.6 }}>
-                          <i className="bi bi-chat-quote me-2" style={{ color: G.base }}/>
-                          {e.comments}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <StarRating value={parseFloat(avg("q_overall")) || e.q_overall || 0}/>
+                    <i className={`bi bi-chevron-${selected?.id===e.id?"up":"down"}`} style={{ color: "#aaa" }}/>
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
+                {selected?.id === e.id && (
+                  <div style={{ padding: "16px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 12, marginBottom: 12 }}>
+                      {EVAL_FIELDS.map(f => (
+                        <div key={f.key} style={{ background: "#F5F7F5", borderRadius: 8, padding: "10px 12px" }}>
+                          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>{f.label}</div>
+                          <StarRating value={e[f.key]}/>
+                        </div>
+                      ))}
+                    </div>
+                    {e.comments && (
+                      <div style={{ background: G.wash, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: G.dark, lineHeight: 1.6 }}>
+                        <i className="bi bi-chat-quote me-2" style={{ color: G.base }}/>
+                        {e.comments}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </>
       )}
     </div>
   );
 }
+
+// ── Jitsi Meeting Modal ───────────────────────────────────────────
+// Wrapped in memo + only re-renders if seminar.id changes (not the whole object).
+// This is critical: if the parent SeminarsPage re-renders (realtime updates,
+// tab switches, reload after save) and passes a NEW seminar object reference
+// with the SAME id, React must NOT remount the iframe — that drops the
+// WebRTC connection and kicks everyone out of the meeting.
+const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClose }) {
+  const roomName = `bloom-gad-${seminar.id}`;
+  const jitsiUrl = `https://meet.jit.si/${roomName}`;
+  const [copied, setCopied] = useState(false);
+
+  // Build the iframe src ONCE per room — never recompute on re-render
+  const iframeSrc = useRef(
+    `${jitsiUrl}#userInfo.displayName="GADRC Admin (Moderator)"&config.startWithVideoMuted=false&config.startWithAudioMuted=false&interfaceConfig.SHOW_JITSI_WATERMARK=false&interfaceConfig.TOOLBAR_BUTTONS=["microphone","camera","closedcaptions","desktop","fullscreen","fodeviceselection","hangup","chat","recording","livestreaming","raisehand","videoquality","filmstrip","tileview","participants-pane","shortcuts","mute-everyone","security"]`
+  ).current;
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(jitsiUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 2000, display: "flex", flexDirection: "column" }}>
+      {/* Header bar */}
+      <div style={{ background: "#1A2E1A", padding: "12px 20px", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+        {/* Left: title */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 8, background: "rgba(255,255,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <i className="bi bi-camera-video-fill" style={{ color: "#4CAF50", fontSize: 16 }}/>
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 700, color: "#fff", fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {seminar.title}
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
+              Live on meet.jit.si · Room: {roomName}
+            </div>
+          </div>
+        </div>
+
+        {/* Copy join link */}
+        <button onClick={copyLink}
+          style={{ padding: "7px 14px", background: copied ? "#16a34a" : "rgba(255,255,255,0.12)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, transition: "background .2s" }}>
+          <i className={`bi bi-${copied ? "check-circle-fill" : "link-45deg"}`}/>
+          {copied ? "Copied!" : "Copy Join Link"}
+        </button>
+
+        {/* Open in new tab */}
+        <a href={jitsiUrl} target="_blank" rel="noreferrer"
+          style={{ padding: "7px 14px", background: "rgba(255,255,255,0.12)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
+          <i className="bi bi-box-arrow-up-right"/> Open in Tab
+        </a>
+
+        {/* Close */}
+        <button onClick={onClose}
+          style={{ padding: "7px 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <i className="bi bi-x-circle"/> End & Close
+        </button>
+      </div>
+
+      {/* Info bar */}
+      <div style={{ background: "#0f1f0f", padding: "8px 20px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
+          <i className="bi bi-info-circle"/>
+          Share this link with students so they can join:
+        </div>
+        <code style={{ fontSize: 12, color: "#4CAF50", background: "rgba(255,255,255,0.06)", padding: "3px 10px", borderRadius: 4 }}>
+          {jitsiUrl}
+        </code>
+      </div>
+
+      {/* Jitsi iframe — key is the room name so React never remounts it
+          unless the meeting itself actually changes */}
+      <iframe
+        key={roomName}
+        src={iframeSrc}
+        allow="camera; microphone; fullscreen; display-capture; autoplay"
+        style={{ flex: 1, border: "none", width: "100%" }}
+        title="Jitsi Meeting"
+      />
+    </div>
+  );
+}, (prevProps, nextProps) => prevProps.seminar.id === nextProps.seminar.id);
+
 // ── Main Page ─────────────────────────────────────────────────────
 export default function SeminarsPage() {
-  const [seminars, setSeminars]   = useState([]);
-  const [selected, setSelected]   = useState(null);
-  const [tab, setTab]             = useState("details");
-  const [loading, setLoading]     = useState(true);
-  const [search, setSearch]       = useState("");
-  const [showAdd, setShowAdd]     = useState(false);
-  const [addForm, setAddForm]     = useState({});
+  const [seminars, setSeminars] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [tab, setTab]           = useState("details");
+  const [loading, setLoading]   = useState(true);
+  const [search, setSearch]     = useState("");
+  const [showAdd, setShowAdd]   = useState(false);
+  const [addForm, setAddForm]   = useState({});
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError]   = useState("");
-  const [confirm, setConfirm]     = useState(null);
+  const [confirm, setConfirm] = useState(null);
+  const [jitsiRoom, setJitsiRoom] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -734,9 +669,6 @@ export default function SeminarsPage() {
       if (error) console.error("Seminars load error:", error.message);
       if (active) { setSeminars(data || []); if (data?.length) setSelected(data[0]); setLoading(false); }
     })();
-
-    triggerEvaluationNotifications();
-
     return () => { active = false; };
   }, []);
 
@@ -747,38 +679,37 @@ export default function SeminarsPage() {
   };
 
   const createSeminar = async () => {
-    if (!addForm.title?.trim()) { setAddError("Title is required."); return; }
+    if (!addForm.title?.trim()) { setAddError("Title is required — must be at least 3 characters."); return; }
+    if (addForm.title.trim().length < 3) { setAddError("Title must be at least 3 characters."); return; }
+    if (addForm.title.trim().length > 150) { setAddError("Title must not exceed 150 characters."); return; }
     setAddSaving(true); setAddError("");
     const { data: { user } } = await supabase.auth.getUser();
     const { data, error: err } = await supabase.from("seminars").insert({
       title: addForm.title.trim(),
       seminar_type: addForm.seminar_type || "webinar",
-      status: "upcoming", is_public: false, created_by: user?.id,
+      status: "upcoming", is_public: true, created_by: user?.id,
     }).select("*, seminar_registrations(count)").single();
     setAddSaving(false);
     if (err) { setAddError(err.message); return; }
     setSeminars(s => [data, ...s]);
     setSelected(data); setTab("details");
     setShowAdd(false); setAddForm({});
+    logActivity("seminar_created", { seminar_id: data.id, title: data.title });
   };
 
   const deleteSeminar = async () => {
-    setConfirm({
-      title: "Delete Seminar",
-      message: `Delete "${selected?.title}"? All registrations and evaluations will be removed.`,
-      confirmLabel: "Delete", danger: true,
+    setConfirm({ title:"Delete Seminar", message:`Delete "${selected?.title}"? All registrations and evaluations will be removed.`, confirmLabel:"Delete", danger:true,
       onConfirm: async () => {
         await supabase.from("seminars").delete().eq("id", selected.id);
-        const rest = seminars.filter(s => s.id !== selected.id);
-        setSeminars(rest); setSelected(rest[0] || null);
-        setConfirm(null);
-      }
-    });
+        logActivity("seminar_deleted", { seminar_id: selected.id, title: selected.title });
+    const rest = seminars.filter(s => s.id !== selected.id);
+    setSeminars(rest); setSelected(rest[0] || null);
+      setConfirm(null); }});
   };
 
-  const statusColor = (st) => st === "ongoing" ? "green" : st === "completed" ? "blue" : st === "cancelled" ? "red" : "yellow";
-  const regCount    = (sem) => sem?.seminar_registrations?.[0]?.count || 0;
-  const filtered    = seminars.filter(s => (s.title || "").toLowerCase().includes(search.toLowerCase()));
+  const statusColor = (s) => s === "ongoing" ? "green" : s === "completed" ? "blue" : s === "cancelled" ? "red" : "yellow";
+  const regCount = (s) => s?.seminar_registrations?.[0]?.count || 0;
+  const filtered = seminars.filter(s => (s.title || "").toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div style={s.page}>
@@ -791,25 +722,23 @@ export default function SeminarsPage() {
         <button style={s.addBtn} onClick={() => { setAddForm({ seminar_type: "webinar" }); setAddError(""); setShowAdd(true); }}>＋ New Seminar</button>
         <input style={s.searchInput} placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} />
         <div style={s.list}>
-          {loading
-            ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>Loading…</div>
-            : filtered.length === 0
-              ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>No seminars found</div>
-              : filtered.map(sem => (
-                  <div key={sem.id} style={s.item(selected?.id === sem.id)} onClick={() => { setSelected(sem); setTab("details"); }}>
-                    <div style={s.itemIcon}>
-                      {sem.cover_image_url ? <img src={sem.cover_image_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt="" /> : ""}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={s.itemTitle}>{sem.title}</div>
-                      <div style={s.itemMeta}>{formatDateShort(sem.scheduled_start)} · {regCount(sem)} registered</div>
-                    </div>
-                    <div style={s.pubBadge(sem.is_public)}>
-                      <span style={{ width:6, height:6, borderRadius:"50%", background:sem.is_public?"#16a34a":"#a16207", display:"inline-block" }}/>
-                      {sem.is_public ? "Public" : "Private"}
-                    </div>
-                  </div>
-                ))
+          {loading ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>Loading…</div>
+            : filtered.length === 0 ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>No seminars found</div>
+            : filtered.map(sem => (
+              <div key={sem.id} style={s.item(selected?.id === sem.id)} onClick={() => { setSelected(sem); setTab("details"); }}>
+                <div style={s.itemIcon}>
+                  {sem.cover_image_url ? <img src={sem.cover_image_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : ""}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={s.itemTitle}>{sem.title}</div>
+                  <div style={s.itemMeta}>{formatDateShort(sem.scheduled_start)} · {regCount(sem)} registered</div>
+                </div>
+                <div style={s.pubBadge(sem.is_public)}>
+                  <span style={{width:6,height:6,borderRadius:"50%",background:sem.is_public?"#16a34a":"#a16207",display:"inline-block"}}/>
+                  {sem.is_public?"Public":"Private"}
+                </div>
+              </div>
+            ))
           }
         </div>
       </div>
@@ -832,6 +761,14 @@ export default function SeminarsPage() {
               </div>
               <span style={s.tag(statusColor(selected.status))}>{selected.status || "upcoming"}</span>
               <span style={s.tag(selected.is_public ? "green" : "yellow")}>{selected.is_public ? "Public" : "Private"}</span>
+              {/* Start Meeting button — only for webinar/hybrid seminars */}
+              {(selected.seminar_type === "webinar" || selected.seminar_type === "hybrid") && selected.status !== "cancelled" && selected.status !== "completed" && (
+                <button
+                  onClick={() => setJitsiRoom(selected)}
+                  style={{ padding: "7px 14px", background: "linear-gradient(135deg,#1A2E1A,#2D6A2D)", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <i className="bi bi-camera-video-fill"/> Start Meeting
+                </button>
+              )}
               <button style={s.btnDanger} onClick={deleteSeminar}><i className="bi bi-trash me-1"/> Delete</button>
             </div>
             <div style={s.tabBar}>
@@ -848,8 +785,10 @@ export default function SeminarsPage() {
         )}
       </div>
 
-      {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)}/>}
+      {confirm&&<ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
 
+      {/* ── Jitsi Meeting Modal ── */}
+      {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={()=>setJitsiRoom(null)}/>}
       {/* Create Modal */}
       {showAdd && (
         <div style={s.overlay}>
@@ -861,8 +800,8 @@ export default function SeminarsPage() {
             <div style={s.mBody}>
               {addError && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{addError}</div>}
               <div style={s.fg}>
-                <label style={s.label}>Title *</label>
-                <input style={s.input} value={addForm.title || ""} onChange={e => setAddForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Gender Sensitivity Seminar" autoFocus />
+                <label style={s.label}>Title * <span style={{fontWeight:400,color:"#aaa",textTransform:"none"}}>({(addForm.title||"").length}/150)</span></label>
+                <input style={{...s.input, borderColor: addError && !addForm.title?.trim() ? "#dc2626" : undefined}} value={addForm.title || ""} onChange={e => setAddForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Gender Sensitivity Seminar" autoFocus />
               </div>
               <div style={s.fg}>
                 <label style={s.label}>Type</label>
@@ -873,14 +812,12 @@ export default function SeminarsPage() {
                 </select>
               </div>
               <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-                <i className="bi bi-lightbulb me-1"/> Fill in the full details (date, link, venue) after creating. The seminar starts as <strong>Private</strong> — tick "Visible to students" in Details to publish it and notify users.
+                <i className="bi bi-lightbulb me-1"/> Fill in the full details (date, link, venue) after creating.
               </div>
             </div>
             <div style={s.mFooter}>
               <button style={s.btnSecondary} onClick={() => setShowAdd(false)}>Cancel</button>
-              <button style={{ ...s.btnPrimary, opacity: addSaving ? 0.7 : 1 }} onClick={createSeminar} disabled={addSaving}>
-                {addSaving ? "Creating…" : "Create Seminar"}
-              </button>
+              <button style={{ ...s.btnPrimary, opacity: addSaving ? 0.7 : 1 }} onClick={createSeminar} disabled={addSaving}>{addSaving ? "Creating…" : "Create Seminar"}</button>
             </div>
           </div>
         </div>

@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabase.js";
-import { ConfirmModal } from "./App.jsx";
+import { ConfirmModal, useToast } from "./App.jsx";
+import { V, FieldError } from "./lib/Validate.jsx";
+import { logActivity } from "./lib/activityLog.js";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -8,7 +10,6 @@ const G = {
   cream: "#F5F7F5", white: "#FFFFFF",
 };
 
-// ── Role config ───────────────────────────────────────────────────────────────
 const ROLE_CONFIG = {
   student:     { label: "Student",     bg: "#dbeafe", color: "#1d4ed8" },
   teacher:     { label: "Teacher",     bg: "#dcfce7", color: "#15803d" },
@@ -20,7 +21,6 @@ const ROLE_CONFIG = {
   super_admin: { label: "Super Admin", bg: "#fee2e2", color: "#dc2626" },
 };
 
-// Role UUID map — matches your Supabase roles table exactly
 const ROLE_ID_MAP = {
   student:     "0b4066e1-9430-467e-b224-c9ce3be0df5c",
   teacher:     "994750f0-9566-434a-95f2-f944826a1e1b",
@@ -31,17 +31,12 @@ const ROLE_ID_MAP = {
   super_admin: "f45418e4-f87f-43f2-b4a2-5a36f7f1894a",
 };
 
-// Roles assignable by a regular admin (not super_admin or admin)
 const ASSIGNABLE_ROLES = ["student", "teacher", "faculty", "guest", "speaker"];
 
 function RoleBadge({ role }) {
   const cfg = ROLE_CONFIG[role] || { label: role, bg: "#f3f4f6", color: "#555" };
   return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", padding: "2px 8px",
-      borderRadius: 10, fontSize: 11, fontWeight: 700,
-      background: cfg.bg, color: cfg.color,
-    }}>
+    <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: cfg.bg, color: cfg.color }}>
       {cfg.label}
     </span>
   );
@@ -55,14 +50,11 @@ function formatDate(iso) {
   });
 }
 
-// ── Alert/Info modal ──────────────────────────────────────────────────────────
 function AlertModal({ title, message, onClose }) {
   return (
     <div style={s.overlay}>
       <div style={{ ...s.modal, maxWidth: 400 }}>
-        <div style={s.mHeader}>
-          <span style={s.mTitle}>{title}</span>
-        </div>
+        <div style={s.mHeader}><span style={s.mTitle}>{title}</span></div>
         <div style={{ ...s.mBody, fontSize: 14, color: "#444", lineHeight: 1.6 }}>{message}</div>
         <div style={s.mFooter}>
           <button style={{ padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13 }} onClick={onClose}>OK</button>
@@ -97,9 +89,11 @@ const s = {
   secTitle:  { fontSize: 13, fontWeight: 700, color: G.dark, marginBottom: 10, marginTop: 20, display: "flex", alignItems: "center", gap: 8 },
   card:      { background: "#F5F7F5", borderRadius: 10, padding: "12px 16px", border: "1px solid #DDE8DD", marginBottom: 8 },
   emptyBox:  { background: "#fff", borderRadius: 14, border: `2px dashed ${G.pale}`, padding: "50px 20px", textAlign: "center" },
+  input:     { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  label:     { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
+  fg:        { marginBottom: 14 },
 };
 
-// ── Deactivation notifications ────────────────────────────────────────────────
 async function sendDeactivationNotification(userId, fullName) {
   try {
     await supabase.from("notifications").insert({
@@ -120,111 +114,154 @@ async function sendReactivationNotification(userId, fullName) {
   } catch (e) { console.error("sendReactivationNotification failed:", e); }
 }
 
-// ── Role Assignment Panel (inside detail modal) ───────────────────────────────
-function RoleAssignPanel({ user, currentRole, onRoleChanged }) {
-  const [selectedRole, setSelectedRole] = useState(currentRole || "student");
-  const [saving, setSaving]             = useState(false);
-  const [saved, setSaved]               = useState(false);
+// ── Edit Profile Modal — NEW ──────────────────────────────────────────────────
+function EditProfileModal({ user, onSaved, onClose }) {
+  const toast = useToast();
+  const [form, setForm] = useState({
+    full_name:  user.full_name  || "",
+    email:      user.email      || "",
+    student_id: user.student_id || "",
+    department: user.department || "",
+    year_level: user.year_level || "",
+  });
+  const [err,    setErr]    = useState({});
+  const [saving, setSaving] = useState(false);
 
-  // Sync if parent changes
-  useEffect(() => {
-    setSelectedRole(currentRole || "student");
-    setSaved(false);
-  }, [currentRole, user?.id]);
+  const setF = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErr(e => ({ ...e, [k]: null })); };
+
+  const save = async () => {
+    const errs = V.all({
+      full_name:  V.name(form.full_name, "Full name"),
+      email:      !form.email?.trim() ? "Email is required."
+                  : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())
+                    ? "Please enter a valid email address." : null,
+      student_id: form.student_id?.trim() && !/^[a-zA-Z0-9\-_]+$/.test(form.student_id.trim())
+                  ? "Student ID must be alphanumeric (letters, numbers, hyphens, underscores only)." : null,
+    });
+    if (errs) { setErr(errs); return; }
+    setSaving(true);
+    const payload = {
+      full_name:  form.full_name.trim(),
+      email:      form.email.trim(),
+      student_id: form.student_id?.trim() || null,
+      department: form.department?.trim() || null,
+      year_level: form.year_level ? parseInt(form.year_level, 10) : null,
+    };
+    const { error } = await supabase.from("profiles").update(payload).eq("id", user.id);
+    setSaving(false);
+    if (error) { toast(error.message, "error"); return; }
+    toast("Profile updated.", "success");
+    logActivity("user_profile_updated", { user_id: user.id, name: payload.full_name });
+    onSaved({ ...user, ...payload });
+  };
+
+  return (
+    <div style={{ ...s.overlay, zIndex: 1100 }}>
+      <div style={{ ...s.modal, maxWidth: 480 }}>
+        <div style={s.mHeader}>
+          <span style={s.mTitle}><i className="bi bi-pencil me-2"/>Edit Profile</span>
+          <button style={s.iconBtn()} onClick={onClose}><i className="bi bi-x-lg"/></button>
+        </div>
+        <div style={s.mBody}>
+          <div style={s.fg}>
+            <label style={s.label}>Full Name * <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>(no numbers)</span></label>
+            <input style={{ ...s.input, borderColor: err.full_name ? "#dc2626" : undefined }} value={form.full_name} onChange={e => setF("full_name", e.target.value)} placeholder="e.g. Maria Santos" />
+            <FieldError msg={err.full_name}/>
+          </div>
+          <div style={s.fg}>
+            <label style={s.label}>Email *</label>
+            <input style={{ ...s.input, borderColor: err.email ? "#dc2626" : undefined }} value={form.email} onChange={e => setF("email", e.target.value)} placeholder="e.g. maria@cvsu.edu.ph" />
+            <FieldError msg={err.email}/>
+          </div>
+          <div style={s.fg}>
+            <label style={s.label}>Student ID <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>(alphanumeric)</span></label>
+            <input style={{ ...s.input, borderColor: err.student_id ? "#dc2626" : undefined }} value={form.student_id} onChange={e => setF("student_id", e.target.value)} placeholder="e.g. 2021-00123" />
+            <FieldError msg={err.student_id}/>
+          </div>
+          <div style={s.fg}>
+            <label style={s.label}>Department</label>
+            <input style={s.input} value={form.department} onChange={e => setF("department", e.target.value)} placeholder="e.g. College of Engineering" />
+          </div>
+          <div style={s.fg}>
+            <label style={s.label}>Year Level</label>
+            <select style={{ ...s.input, appearance: "auto" }} value={form.year_level} onChange={e => setF("year_level", e.target.value)}>
+              <option value="">— Select —</option>
+              {[1,2,3,4,5].map(y => <option key={y} value={y}>Year {y}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={s.mFooter}>
+          <button style={{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 }} onClick={onClose}>Cancel</button>
+          <button style={{ padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>
+            {saving ? "Saving…" : "Save Changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Role Assignment Panel ─────────────────────────────────────────────────────
+function RoleAssignPanel({ user, currentRole, onRoleChanged }) {
+  const toast = useToast();
+  const [selectedRole, setSelectedRole] = useState(currentRole || "student");
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+
+  useEffect(() => { setSelectedRole(currentRole || "student"); setSaved(false); }, [currentRole, user?.id]);
 
   const isDirty = selectedRole !== (currentRole || "student");
 
   const handleSave = async () => {
     const newRoleId = ROLE_ID_MAP[selectedRole];
     if (!newRoleId) return;
-
     setSaving(true);
-    const { error } = await supabase
-      .from("user_roles")
-      .update({ role_id: newRoleId })
-      .eq("user_id", user.id);
-
-    if (error) {
-      console.error("Role update failed:", error);
-      setSaving(false);
-      return;
-    }
-
-    // Notify user of role change
+    const { error } = await supabase.from("user_roles").update({ role_id: newRoleId }).eq("user_id", user.id);
+    if (error) { toast("Failed to update role.", "error"); setSaving(false); return; }
     try {
       await supabase.from("notifications").insert({
-        user_id:        user.id,
-        type:           "role_changed",
-        title:          "Role Updated",
-        body:           `Hi ${user.full_name || "there"}, your role in BLOOM has been updated to ${ROLE_CONFIG[selectedRole]?.label || selectedRole}.`,
-        reference_type: "account",
-        reference_id:   user.id,
-        is_read:        false,
+        user_id: user.id, type: "role_changed", title: "Role Updated",
+        body: `Hi ${user.full_name || "there"}, your role in BLOOM has been updated to ${ROLE_CONFIG[selectedRole]?.label || selectedRole}.`,
+        reference_type: "account", reference_id: user.id, is_read: false,
       });
     } catch (e) { /* non-critical */ }
-
-    setSaving(false);
-    setSaved(true);
+    logActivity("user_role_changed", { user_id: user.id, name: user.full_name, from: currentRole, to: selectedRole });
+    toast(`Role updated to ${ROLE_CONFIG[selectedRole]?.label}.`, "success");
+    setSaving(false); setSaved(true);
     setTimeout(() => setSaved(false), 2500);
     onRoleChanged(user.id, selectedRole);
   };
 
   return (
-    <div style={{
-      background: "#f8faff", border: "1px solid #e0e7ff", borderRadius: 10,
-      padding: "14px 16px", marginBottom: 4,
-    }}>
+    <div style={{ background: "#f8faff", border: "1px solid #e0e7ff", borderRadius: 10, padding: "14px 16px", marginBottom: 4 }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: "#4338ca", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
         <i className="bi bi-person-badge"/> Assign Role
       </div>
-
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        {/* Role option buttons */}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flex: 1 }}>
           {ASSIGNABLE_ROLES.map(role => {
-            const cfg      = ROLE_CONFIG[role];
+            const cfg = ROLE_CONFIG[role];
             const isActive = selectedRole === role;
             return (
-              <button
-                key={role}
-                onClick={() => { setSelectedRole(role); setSaved(false); }}
-                style={{
-                  padding: "5px 12px", borderRadius: 20, fontSize: 12, fontWeight: 700,
-                  cursor: "pointer", transition: "all .15s",
+              <button key={role} onClick={() => { setSelectedRole(role); setSaved(false); }}
+                style={{ padding: "5px 12px", borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "all .15s",
                   border: isActive ? `2px solid ${cfg.color}` : "2px solid #e5e7eb",
-                  background: isActive ? cfg.bg : "#fff",
-                  color: isActive ? cfg.color : "#9ca3af",
-                  boxShadow: isActive ? `0 0 0 3px ${cfg.bg}` : "none",
-                }}>
+                  background: isActive ? cfg.bg : "#fff", color: isActive ? cfg.color : "#9ca3af",
+                  boxShadow: isActive ? `0 0 0 3px ${cfg.bg}` : "none" }}>
                 {cfg.label}
               </button>
             );
           })}
         </div>
-
-        {/* Save button */}
-        <button
-          onClick={handleSave}
-          disabled={!isDirty || saving}
-          style={{
-            padding: "7px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
-            cursor: isDirty && !saving ? "pointer" : "not-allowed",
-            border: "none", transition: "all .15s",
+        <button onClick={handleSave} disabled={!isDirty || saving}
+          style={{ padding: "7px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+            cursor: isDirty && !saving ? "pointer" : "not-allowed", border: "none", transition: "all .15s",
             background: saved ? "#dcfce7" : isDirty ? "#4338ca" : "#e5e7eb",
-            color:      saved ? "#16a34a" : isDirty ? "#fff"    : "#9ca3af",
-            display: "flex", alignItems: "center", gap: 6,
-            minWidth: 80,
-          }}>
-          {saving ? (
-            <><i className="bi bi-hourglass-split"/> Saving…</>
-          ) : saved ? (
-            <><i className="bi bi-check-circle-fill"/> Saved!</>
-          ) : (
-            <><i className="bi bi-floppy"/> Save</>
-          )}
+            color: saved ? "#16a34a" : isDirty ? "#fff" : "#9ca3af",
+            display: "flex", alignItems: "center", gap: 6, minWidth: 80 }}>
+          {saving ? <><i className="bi bi-hourglass-split"/> Saving…</> : saved ? <><i className="bi bi-check-circle-fill"/> Saved!</> : <><i className="bi bi-floppy"/> Save</>}
         </button>
       </div>
-
       {isDirty && !saving && !saved && (
         <div style={{ fontSize: 11, color: "#6366f1", marginTop: 8 }}>
           <i className="bi bi-arrow-right me-1"/>
@@ -237,48 +274,43 @@ function RoleAssignPanel({ user, currentRole, onRoleChanged }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function StudentsPage() {
-  const [users, setUsers]           = useState([]);
-  const [userRoles, setUserRoles]   = useState({});   // { userId: "student" | "teacher" | … }
-  const [admins, setAdmins]         = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [search, setSearch]         = useState("");
-  const [filter, setFilter]         = useState("all");
+  const toast = useToast();
+  const [users,      setUsers]      = useState([]);
+  const [userRoles,  setUserRoles]  = useState({});
+  const [admins,     setAdmins]     = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [search,     setSearch]     = useState("");
+  const [filter,     setFilter]     = useState("all");
   const [deptFilter, setDeptFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
-  const [selected, setSelected]     = useState(null);
-  const [detail, setDetail]         = useState(null);
+  const [selected,   setSelected]   = useState(null);
+  const [detail,     setDetail]     = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [mainTab, setMainTab]       = useState("users");
-  const [confirm, setConfirm]       = useState(null);
+  const [mainTab,    setMainTab]    = useState("users");
+  const [confirm,    setConfirm]    = useState(null);
   const [alertModal, setAlertModal] = useState(null);
-  const [inactivityDays]            = useState(30);
+  const [editUser,   setEditUser]   = useState(null);
+  const [inactivityDays] = useState(30);
 
-  // ── Load users + their roles ───────────────────────────────────────────────
   useEffect(() => {
     let active = true;
     (async () => {
       setLoading(true);
-
       const { data: allRoleRows, error: roleErr } = await supabase
-        .from("user_roles")
-        .select("user_id, roles(name)");
-
+        .from("user_roles").select("user_id, roles(name)");
       if (roleErr) console.error("[UsersPage] role fetch error:", roleErr);
 
-      // Build role map: userId → role name
       const roleMap = {};
       (allRoleRows || []).forEach(r => {
         if (!r.user_id) return;
-        const name = r.roles?.name || r.role_name || r.role || null;
+        const name = r.roles?.name || null;
         if (name) roleMap[r.user_id] = name;
       });
 
-      // IDs to exclude from users table (admins + super_admins)
       const excludeIds = (allRoleRows || [])
         .filter(r => r.roles?.name === "admin" || r.roles?.name === "super_admin")
         .map(r => r.user_id).filter(Boolean);
 
-      // Load user profiles
       let query = supabase
         .from("profiles")
         .select("*, student_badges(count), module_progress(count), seminar_registrations(count)")
@@ -289,36 +321,24 @@ export default function StudentsPage() {
       const { data, error } = await query;
       if (error) console.error("Users load error:", error.message);
 
-      // Load admins
       const adminIds = (allRoleRows || [])
-        .filter(r => r.roles?.name === "admin")
-        .map(r => r.user_id).filter(Boolean);
+        .filter(r => r.roles?.name === "admin").map(r => r.user_id).filter(Boolean);
       let adminProfiles = [];
       if (adminIds.length > 0) {
         const { data: ap } = await supabase.from("profiles").select("*").in("id", adminIds).order("full_name");
         adminProfiles = ap || [];
       }
 
-      if (active) {
-        setUsers(data || []);
-        setUserRoles(roleMap);
-        setAdmins(adminProfiles);
-        setLoading(false);
-      }
+      if (active) { setUsers(data || []); setUserRoles(roleMap); setAdmins(adminProfiles); setLoading(false); }
     })();
     return () => { active = false; };
   }, []);
 
-  // ── Callback when RoleAssignPanel saves ───────────────────────────────────
   const handleRoleChanged = (userId, newRole) => {
     setUserRoles(prev => ({ ...prev, [userId]: newRole }));
-    // Also update selected so the badge in header refreshes
-    if (selected?.id === userId) {
-      setSelected(u => ({ ...u, _roleRefresh: Date.now() }));
-    }
+    if (selected?.id === userId) setSelected(u => ({ ...u, _roleRefresh: Date.now() }));
   };
 
-  // ── Open detail modal ──────────────────────────────────────────────────────
   const openDetail = async (user) => {
     setSelected(user); setDetailLoading(true); setDetail(null);
     const [{ data: progress }, { data: badges }, { data: attempts }, { data: regs }] = await Promise.all([
@@ -331,7 +351,6 @@ export default function StudentsPage() {
     setDetailLoading(false);
   };
 
-  // ── Toggle active with notification ───────────────────────────────────────
   const toggleActive = (user) => {
     const newVal = !user.is_active;
     setConfirm({
@@ -345,8 +364,10 @@ export default function StudentsPage() {
         const updateData = { is_active: newVal };
         if (newVal === true) updateData.last_sign_in_at = new Date().toISOString();
         await supabase.from("profiles").update(updateData).eq("id", user.id);
-        if (newVal) await sendReactivationNotification(user.id, user.full_name);
-        else        await sendDeactivationNotification(user.id, user.full_name);
+        if (newVal) { await sendReactivationNotification(user.id, user.full_name); }
+        else        { await sendDeactivationNotification(user.id, user.full_name); }
+        logActivity(newVal ? "user_reactivated" : "user_deactivated", { user_id: user.id, name: user.full_name });
+        toast(newVal ? `${user.full_name} reactivated.` : `${user.full_name} deactivated.`, newVal ? "success" : "warning");
         setUsers(us => us.map(u => u.id === user.id ? { ...u, is_active: newVal } : u));
         if (selected?.id === user.id) setSelected(u => ({ ...u, is_active: newVal }));
         setConfirm(null);
@@ -354,12 +375,9 @@ export default function StudentsPage() {
     });
   };
 
-  // ── Check inactive users ───────────────────────────────────────────────────
   const checkInactiveUsers = async () => {
     const cutoff = new Date(Date.now() - inactivityDays * 86400000).toISOString();
-    const inactive = users.filter(u =>
-      u.is_active && u.last_sign_in_at && new Date(u.last_sign_in_at) < new Date(cutoff)
-    );
+    const inactive = users.filter(u => u.is_active && u.last_sign_in_at && new Date(u.last_sign_in_at) < new Date(cutoff));
     if (inactive.length === 0) {
       setAlertModal({ title: "No Inactive Users", message: `No users found who have been inactive for ${inactivityDays}+ days.` });
       return;
@@ -374,6 +392,8 @@ export default function StudentsPage() {
           await supabase.from("profiles").update({ is_active: false }).eq("id", u.id);
           await sendDeactivationNotification(u.id, u.full_name);
         }
+        logActivity("bulk_users_deactivated", { count: inactive.length });
+        toast(`${inactive.length} account(s) deactivated.`, "warning");
         setUsers(us => us.map(u => inactive.find(i => i.id === u.id) ? { ...u, is_active: false } : u));
         setConfirm(null);
         setAlertModal({ title: "Done", message: `${inactive.length} account(s) deactivated and users notified.` });
@@ -381,27 +401,27 @@ export default function StudentsPage() {
     });
   };
 
-  // ── Derived data ───────────────────────────────────────────────────────────
+  const handleProfileSaved = (updatedUser) => {
+    setUsers(us => us.map(u => u.id === updatedUser.id ? { ...u, ...updatedUser } : u));
+    if (selected?.id === updatedUser.id) setSelected(u => ({ ...u, ...updatedUser }));
+    setEditUser(null);
+  };
+
   const departments   = [...new Set(users.map(u => u.department).filter(Boolean))].sort();
   const totalActive   = users.filter(u => u.is_active !== false).length;
   const totalInactive = users.length - totalActive;
 
   const filtered = users.filter(u => {
     const q = search.toLowerCase();
-    const matchSearch = (u.full_name || "").toLowerCase().includes(q) ||
-      (u.student_id || "").toLowerCase().includes(q) ||
-      (u.email || "").toLowerCase().includes(q);
+    const matchSearch = (u.full_name || "").toLowerCase().includes(q) || (u.student_id || "").toLowerCase().includes(q) || (u.email || "").toLowerCase().includes(q);
     const matchFilter = filter === "all" ? true : filter === "active" ? u.is_active !== false : u.is_active === false;
     const matchDept   = deptFilter === "all" ? true : u.department === deptFilter;
     const matchRole   = roleFilter === "all" ? true : (userRoles[u.id] || "unknown") === roleFilter;
     return matchSearch && matchFilter && matchDept && matchRole;
   });
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={s.page}>
-
-      {/* Header */}
       <div style={s.header}>
         <div>
           <div style={s.title}><i className="bi bi-people me-1"/> User Management</div>
@@ -409,7 +429,6 @@ export default function StudentsPage() {
         </div>
       </div>
 
-      {/* Stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
           { label: "Total Users",  value: users.length,       color: G.base    },
@@ -424,13 +443,11 @@ export default function StudentsPage() {
         ))}
       </div>
 
-      {/* Main tabs */}
       <div style={{ display: "flex", gap: 0, borderBottom: `2px solid ${G.wash}`, marginBottom: 20 }}>
         {[["users", "Users", "bi-people"], ["admins", "Administrators", "bi-shield-lock"]].map(([v, l, ic]) => (
           <div key={v} onClick={() => { setMainTab(v); setSearch(""); setSelected(null); }}
             style={{ padding: "10px 22px", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-              color: mainTab === v ? G.dark : "#999",
-              borderBottom: mainTab === v ? `2px solid ${G.dark}` : "2px solid transparent", marginBottom: -2 }}>
+              color: mainTab === v ? G.dark : "#999", borderBottom: mainTab === v ? `2px solid ${G.dark}` : "2px solid transparent", marginBottom: -2 }}>
             <i className={`bi ${ic}`}/>{l}
             <span style={{ background: G.wash, color: G.base, borderRadius: 10, padding: "1px 8px", fontSize: 11, fontWeight: 700 }}>
               {v === "users" ? users.length : admins.length}
@@ -439,14 +456,8 @@ export default function StudentsPage() {
         ))}
       </div>
 
-      {/* Toolbar */}
       <div style={s.toolbar}>
-        <input
-          style={s.searchBar}
-          placeholder="Search by name, ID, or email…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
+        <input style={s.searchBar} placeholder="Search by name, ID, or email…" value={search} onChange={e => setSearch(e.target.value)} />
         <select style={s.select} value={filter} onChange={e => setFilter(e.target.value)}>
           <option value="all">All Users</option>
           <option value="active">Active Only</option>
@@ -487,38 +498,28 @@ export default function StudentsPage() {
             <table style={s.table}>
               <thead>
                 <tr>
-                  <th style={s.th}>User</th>
-                  <th style={s.th}>ID</th>
-                  <th style={s.th}>Role</th>
-                  <th style={s.th}>Department</th>
-                  <th style={s.th}>Year</th>
-                  <th style={s.th}>Modules</th>
-                  <th style={s.th}>Badges</th>
-                  <th style={s.th}>Seminars</th>
-                  <th style={s.th}>Status</th>
-                  <th style={s.th}>Actions</th>
+                  <th style={s.th}>User</th><th style={s.th}>ID</th><th style={s.th}>Role</th>
+                  <th style={s.th}>Department</th><th style={s.th}>Year</th>
+                  <th style={s.th}>Modules</th><th style={s.th}>Badges</th><th style={s.th}>Seminars</th>
+                  <th style={s.th}>Status</th><th style={s.th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map(user => {
                   const initials    = (user.full_name || "?").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
-                  const moduleCount = user.module_progress?.[0]?.count  || 0;
-                  const badgeCount  = user.student_badges?.[0]?.count   || 0;
+                  const moduleCount = user.module_progress?.[0]?.count       || 0;
+                  const badgeCount  = user.student_badges?.[0]?.count        || 0;
                   const semCount    = user.seminar_registrations?.[0]?.count || 0;
                   const isActive    = user.is_active !== false;
                   const role        = userRoles[user.id] || "unknown";
                   return (
-                    <tr key={user.id}
-                      style={{ cursor: "pointer", transition: "background .1s" }}
+                    <tr key={user.id} style={{ cursor: "pointer", transition: "background .1s" }}
                       onMouseEnter={e => e.currentTarget.style.background = G.cream}
                       onMouseLeave={e => e.currentTarget.style.background = ""}>
-
                       <td style={s.td} onClick={() => openDetail(user)}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <div style={s.avatar}>
-                            {user.avatar_url
-                              ? <img src={user.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt="" />
-                              : initials}
+                            {user.avatar_url ? <img src={user.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt="" /> : initials}
                           </div>
                           <div>
                             <div style={{ fontWeight: 600, color: G.dark }}>{user.full_name || "—"}</div>
@@ -526,31 +527,18 @@ export default function StudentsPage() {
                           </div>
                         </div>
                       </td>
-
                       <td style={s.td} onClick={() => openDetail(user)}>{user.student_id || "—"}</td>
                       <td style={s.td} onClick={() => openDetail(user)}><RoleBadge role={role} /></td>
                       <td style={s.td} onClick={() => openDetail(user)}>{user.department || "—"}</td>
                       <td style={s.td} onClick={() => openDetail(user)}>{user.year_level ? `Year ${user.year_level}` : "—"}</td>
-                      <td style={s.td} onClick={() => openDetail(user)}>
-                        <span style={{ fontWeight: 700, color: G.base }}><i className="bi bi-book me-1"/>{moduleCount}</span>
-                      </td>
-                      <td style={s.td} onClick={() => openDetail(user)}>
-                        <span style={{ fontWeight: 700, color: "#f59e0b" }}><i className="bi bi-award me-1"/>{badgeCount}</span>
-                      </td>
-                      <td style={s.td} onClick={() => openDetail(user)}>
-                        <span style={{ fontWeight: 700, color: "#7c3aed" }}><i className="bi bi-mortarboard me-1"/>{semCount}</span>
-                      </td>
-                      <td style={s.td} onClick={() => openDetail(user)}>
-                        <span style={s.tag(isActive ? "green" : "red")}>{isActive ? "Active" : "Inactive"}</span>
-                      </td>
+                      <td style={s.td} onClick={() => openDetail(user)}><span style={{ fontWeight: 700, color: G.base }}><i className="bi bi-book me-1"/>{moduleCount}</span></td>
+                      <td style={s.td} onClick={() => openDetail(user)}><span style={{ fontWeight: 700, color: "#f59e0b" }}><i className="bi bi-award me-1"/>{badgeCount}</span></td>
+                      <td style={s.td} onClick={() => openDetail(user)}><span style={{ fontWeight: 700, color: "#7c3aed" }}><i className="bi bi-mortarboard me-1"/>{semCount}</span></td>
+                      <td style={s.td} onClick={() => openDetail(user)}><span style={s.tag(isActive ? "green" : "red")}>{isActive ? "Active" : "Inactive"}</span></td>
                       <td style={s.td}>
                         <div style={{ display: "flex", gap: 6 }}>
-                          <button
-                            style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: G.dark }}
-                            onClick={() => openDetail(user)}>View</button>
-                          <button
-                            style={{ padding: "5px 10px", border: "none", borderRadius: 6, background: isActive ? "#fee2e2" : "#dcfce7", fontSize: 12, cursor: "pointer", fontWeight: 600, color: isActive ? "#dc2626" : "#16a34a" }}
-                            onClick={() => toggleActive(user)}>
+                          <button style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: G.dark }} onClick={() => openDetail(user)}>View</button>
+                          <button style={{ padding: "5px 10px", border: "none", borderRadius: 6, background: isActive ? "#fee2e2" : "#dcfce7", fontSize: 12, cursor: "pointer", fontWeight: 600, color: isActive ? "#dc2626" : "#16a34a" }} onClick={() => toggleActive(user)}>
                             {isActive ? "Deactivate" : "Activate"}
                           </button>
                         </div>
@@ -575,11 +563,8 @@ export default function StudentsPage() {
             <table style={s.table}>
               <thead>
                 <tr>
-                  <th style={s.th}>Administrator</th>
-                  <th style={s.th}>Email</th>
-                  <th style={s.th}>Role</th>
-                  <th style={s.th}>Status</th>
-                  <th style={s.th}>Last Active</th>
+                  <th style={s.th}>Administrator</th><th style={s.th}>Email</th>
+                  <th style={s.th}>Role</th><th style={s.th}>Status</th><th style={s.th}>Last Active</th>
                 </tr>
               </thead>
               <tbody>
@@ -601,8 +586,7 @@ export default function StudentsPage() {
                       <td style={s.td}>{a.email || "—"}</td>
                       <td style={s.td}><RoleBadge role={userRoles[a.id] || "admin"} /></td>
                       <td style={s.td}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700,
-                          background: a.is_active !== false ? "#dcfce7" : "#fee2e2", color: a.is_active !== false ? "#16a34a" : "#dc2626" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: a.is_active !== false ? "#dcfce7" : "#fee2e2", color: a.is_active !== false ? "#16a34a" : "#dc2626" }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.is_active !== false ? "#16a34a" : "#dc2626", display: "inline-block" }}/>
                           {a.is_active !== false ? "Active" : "Deactivated"}
                         </span>
@@ -647,7 +631,6 @@ export default function StudentsPage() {
             </div>
 
             <div style={s.mBody}>
-              {/* Deactivated warning banner */}
               {selected.is_active === false && (
                 <div style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#dc2626", marginBottom: 16, display: "flex", gap: 8, alignItems: "center" }}>
                   <i className="bi bi-slash-circle-fill"/>
@@ -655,18 +638,12 @@ export default function StudentsPage() {
                 </div>
               )}
 
-              {/* ── Role Assignment Panel ── */}
-              <RoleAssignPanel
-                user={selected}
-                currentRole={userRoles[selected.id] || "student"}
-                onRoleChanged={handleRoleChanged}
-              />
+              <RoleAssignPanel user={selected} currentRole={userRoles[selected.id] || "student"} onRoleChanged={handleRoleChanged} />
 
               {detailLoading ? (
                 <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading profile…</div>
               ) : detail && (
                 <>
-                  {/* Stats */}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
                     {[
                       { label: "Modules",  value: detail.progress.length, color: G.base    },
@@ -681,10 +658,8 @@ export default function StudentsPage() {
                     ))}
                   </div>
 
-                  {/* Module Progress */}
                   <div style={s.secTitle}><i className="bi bi-book me-1"/> Module Progress <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.progress.length})</span></div>
-                  {detail.progress.length === 0
-                    ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No modules started yet.</div>
+                  {detail.progress.length === 0 ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No modules started yet.</div>
                     : detail.progress.map(p => (
                       <div key={p.id} style={s.card}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -702,10 +677,8 @@ export default function StudentsPage() {
                     ))
                   }
 
-                  {/* Badges */}
                   <div style={s.secTitle}><i className="bi bi-award me-1"/> Badges Earned <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.badges.length})</span></div>
-                  {detail.badges.length === 0
-                    ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No badges earned yet.</div>
+                  {detail.badges.length === 0 ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No badges earned yet.</div>
                     : <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
                         {detail.badges.map(b => (
                           <div key={b.id} style={{ background: "#fef9c3", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#92400e", border: "1px solid #fde047", display: "flex", alignItems: "center", gap: 6 }}>
@@ -716,10 +689,8 @@ export default function StudentsPage() {
                       </div>
                   }
 
-                  {/* Assessment Results */}
                   <div style={s.secTitle}><i className="bi bi-clipboard-check me-1"/> Assessment Results <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.attempts.length})</span></div>
-                  {detail.attempts.length === 0
-                    ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No assessments taken yet.</div>
+                  {detail.attempts.length === 0 ? <div style={{ fontSize: 13, color: "#aaa", marginBottom: 12 }}>No assessments taken yet.</div>
                     : detail.attempts.map(a => (
                       <div key={a.id} style={s.card}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -731,10 +702,8 @@ export default function StudentsPage() {
                     ))
                   }
 
-                  {/* Seminar Registrations */}
                   <div style={s.secTitle}><i className="bi bi-mortarboard me-1"/> Seminar Registrations <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({detail.regs.length})</span></div>
-                  {detail.regs.length === 0
-                    ? <div style={{ fontSize: 13, color: "#aaa" }}>No seminar registrations yet.</div>
+                  {detail.regs.length === 0 ? <div style={{ fontSize: 13, color: "#aaa" }}>No seminar registrations yet.</div>
                     : detail.regs.map(r => (
                       <div key={r.id} style={s.card}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -753,6 +722,11 @@ export default function StudentsPage() {
 
             <div style={s.mFooter}>
               <button
+                style={{ padding: "9px 20px", background: G.wash, color: G.dark, border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}
+                onClick={() => setEditUser(selected)}>
+                <i className="bi bi-pencil"/>Edit Profile
+              </button>
+              <button
                 style={{ padding: "9px 20px", background: selected?.is_active !== false ? "#fee2e2" : "#dcfce7", color: selected?.is_active !== false ? "#dc2626" : "#16a34a", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 }}
                 onClick={() => toggleActive(selected)}>
                 {selected?.is_active !== false ? "Deactivate User" : "Activate User"}
@@ -765,24 +739,9 @@ export default function StudentsPage() {
         </div>
       )}
 
-      {/* Modals */}
-      {confirm && (
-        <ConfirmModal
-          title={confirm.title}
-          message={confirm.message}
-          confirmLabel={confirm.confirmLabel}
-          danger={confirm.danger}
-          onConfirm={confirm.onConfirm}
-          onCancel={() => setConfirm(null)}
-        />
-      )}
-      {alertModal && (
-        <AlertModal
-          title={alertModal.title}
-          message={alertModal.message}
-          onClose={() => setAlertModal(null)}
-        />
-      )}
+      {editUser && <EditProfileModal user={editUser} onSaved={handleProfileSaved} onClose={() => setEditUser(null)} />}
+      {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)} />}
+      {alertModal && <AlertModal title={alertModal.title} message={alertModal.message} onClose={() => setAlertModal(null)} />}
     </div>
   );
 }
