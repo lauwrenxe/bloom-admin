@@ -1019,7 +1019,7 @@ function FilesPanel({ module, onConfirm }) {
 
   useEffect(()=>{
     let active=true;
-    (async()=>{const{data}=await supabase.from("module_files").select("*").eq("module_id",module.id).order("sort_order");if(active)setFiles(data||[]);})();
+    (async()=>{const{data}=await supabase.from("module_files").select("*").eq("module_id",module.id).neq("file_url","__content__").order("sort_order");if(active)setFiles(data||[]);})();
     return()=>{ active=false; };
   },[module.id]);
 
@@ -1214,39 +1214,150 @@ function loadJsPDFContent() {
 
 function ContentPanel({ module }) {
   const toast = useToast();
-  const [subTab,    setSubTab]    = useState("document");
-  const [saving,    setSaving]    = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [loading,   setLoading]   = useState(true);
-  const quillRef  = useRef(null);
-  const quillInst = useRef(null);
+  const [subTab,      setSubTab]      = useState("document");
+  const [autoSaveStatus, setAutoSaveStatus] = useState("idle");
+  const [exporting,   setExporting]   = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [loading,     setLoading]     = useState(true);
+
+  // Upload to module state
+  const [uploading,      setUploading]      = useState(false);
+  const [showFilename,   setShowFilename]   = useState(false);
+  const [uploadFilename, setUploadFilename] = useState("");
+
+  // AI generation state
+  const [showAiModal,    setShowAiModal]    = useState(false);
+  const [aiTopic,        setAiTopic]        = useState("");
+  const [aiInstructions, setAiInstructions] = useState("");
+  const [aiGenerating,   setAiGenerating]   = useState(false);
+  const [aiError,        setAiError]        = useState("");
+  const [aiPreview,      setAiPreview]      = useState(null);
+  const quillRef    = useRef(null);
+  const quillInst   = useRef(null);
+  const autoSaveTimer = useRef(null);
+  const contentRowId  = useRef(null); // DB row id for the content record
   const [docContent,  setDocContent]  = useState("");
   const [slides,      setSlides]      = useState([{ id: 1, title: "", body: "" }]);
   const [activeSlide, setActiveSlide] = useState(0);
 
+  // Always-current refs — prevents stale closure bugs in Quill handler and timers
+  const docContentRef = useRef("");
+  const slidesRef2    = useRef([{ id: 1, title: "", body: "" }]);
+  docContentRef.current = docContent;
+  slidesRef2.current    = slides;
+
+  // ── Load saved content on mount ──────────────────────────────────────────
   useEffect(() => {
     let active = true;
     (async () => {
       setLoading(true);
-      const { data } = await supabase.from("module_files")
-        .select("*").eq("module_id", module.id).eq("file_type", "content").maybeSingle();
-      if (active && data?.file_name) {
+      // Fetch the content row — if multiple rows exist (shouldn't happen but
+      // could from a previous bug), take the most recently updated one.
+      const { data: rows } = await supabase
+        .from("module_files")
+        .select("*")
+        .eq("module_id", module.id)
+        .eq("file_type", "other").eq("file_url", "__content__")
+        .order("id", { ascending: false })
+        .limit(1);
+
+      const data = rows?.[0] || null;
+
+      // If there were duplicate rows, clean them up
+      if (rows && rows.length > 1) {
+        const idsToDelete = rows.slice(1).map(r => r.id);
+        await supabase.from("module_files").delete().in("id", idsToDelete);
+        console.log("Cleaned up", idsToDelete.length, "duplicate content rows");
+      }
+
+      if (active && data) {
+        contentRowId.current = data.id;
         try {
           const parsed = JSON.parse(data.file_name);
-          if (parsed.docContent) setDocContent(parsed.docContent);
-          if (parsed.slides?.length) setSlides(parsed.slides);
-        } catch { /* first save */ }
+          if (parsed.docContent) {
+            setDocContent(parsed.docContent);
+            docContentRef.current = parsed.docContent;
+          }
+          if (parsed.slides?.length) {
+            setSlides(parsed.slides);
+            slidesRef2.current = parsed.slides;
+          }
+        } catch (parseErr) { console.warn("Content parse error:", parseErr); }
       }
       if (active) setLoading(false);
     })();
     return () => { active = false; };
   }, [module.id]);
 
+  // ── Core auto-save function ───────────────────────────────────────────────
+  const persistContent = useRef(null);
+  persistContent.current = async (doc, sls) => {
+    setAutoSaveStatus("saving");
+    try {
+      const payload = JSON.stringify({ docContent: doc, slides: sls });
+
+      // Always look up the existing row fresh — avoids stale contentRowId
+      // and prevents duplicate rows if a previous INSERT didn't return the id.
+      const { data: existing } = await supabase
+        .from("module_files")
+        .select("id")
+        .eq("module_id", module.id)
+        .eq("file_type", "other").eq("file_url", "__content__")
+        .maybeSingle();
+
+      if (existing?.id) {
+        // Update existing row
+        contentRowId.current = existing.id;
+        await supabase.from("module_files")
+          .update({ file_name: payload })
+          .eq("id", existing.id);
+      } else {
+        // No row yet — insert one
+        const { data: { user } } = await supabase.auth.getUser();
+        const { data: inserted, error: insertErr } = await supabase
+          .from("module_files")
+          .insert({
+            module_id:   module.id,
+            file_name:   payload,
+            file_url:    "__content__",
+            file_type:   "other",
+            sort_order:  999,
+            uploaded_by: user?.id,
+          })
+          .select("id")
+          .single();
+        if (insertErr) throw insertErr;
+        if (inserted?.id) contentRowId.current = inserted.id;
+      }
+
+      setAutoSaveStatus("saved");
+      setTimeout(() => setAutoSaveStatus("idle"), 3000);
+    } catch (e) {
+      setAutoSaveStatus("error");
+      console.error("Auto-save failed:", e.message);
+      // Show error in toast so admin knows something went wrong
+      // (can't call toast here directly — use a ref workaround below)
+    }
+  };
+
+  // ── Schedule auto-save after 1.5s of inactivity ──────────────────────────
+  // Note: reads from refs at fire-time, not from closure — avoids stale values
+  const scheduleAutoSave = () => {
+    setAutoSaveStatus("pending");
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => {
+      persistContent.current(docContentRef.current, slidesRef2.current);
+    }, 1500);
+  };
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
+  }, []);
+
+  // ── Quill init/destroy on subTab switch ──────────────────────────────────
   useEffect(() => {
     if (subTab !== "document" || loading) return;
-    // Destroy any stale Quill instance before reinitialising.
-    // Without this, switching Document→Slides→Document leaves a dead instance
-    // attached to the DOM node and the editor becomes unresponsive.
     if (quillInst.current) {
       try { quillInst.current.off("text-change"); } catch (_) {}
       quillInst.current = null;
@@ -1264,15 +1375,19 @@ function ContentPanel({ module }) {
             ["bold", "italic", "underline", "strike"],
             [{ color: [] }, { background: [] }],
             [{ list: "ordered" }, { list: "bullet" }],
+            [{ indent: "-1" }, { indent: "+1" }],
             [{ align: [] }],
             ["link"],
             ["clean"],
           ],
         },
       });
-      if (docContent) quillInst.current.root.innerHTML = docContent;
+      if (docContentRef.current) quillInst.current.root.innerHTML = docContentRef.current;
       quillInst.current.on("text-change", () => {
-        setDocContent(quillInst.current.root.innerHTML);
+        const html = quillInst.current.root.innerHTML;
+        docContentRef.current = html;   // update ref immediately so timer sees latest
+        setDocContent(html);
+        scheduleAutoSave();
       });
     });
     return () => {
@@ -1285,28 +1400,319 @@ function ContentPanel({ module }) {
     };
   }, [subTab, loading]); // eslint-disable-line
 
-  const saveContent = async () => {
-    setSaving(true);
-    try {
-      const payload = JSON.stringify({ docContent, slides });
-      const { data: existing } = await supabase.from("module_files")
-        .select("id").eq("module_id", module.id).eq("file_type", "content").maybeSingle();
-      if (existing) {
-        await supabase.from("module_files").update({ file_name: payload }).eq("id", existing.id);
-      } else {
-        await supabase.from("module_files").insert({
-          module_id: module.id, file_name: payload,
-          file_url: "", file_type: "content", sort_order: 999,
-        });
-      }
-      toast("Content saved successfully.", "success");
-      logActivity("module_content_saved", { module_id: module.id, title: module.title });
-    } catch (e) { toast("Save failed: " + e.message, "error"); }
-    setSaving(false);
+  // ── Slides auto-save on change ────────────────────────────────────────────
+  const updateSlide = (i, k, v) => {
+    setSlides(s => {
+      const next = s.map((sl, j) => j === i ? { ...sl, [k]: v } : sl);
+      slidesRef2.current = next;   // update ref immediately
+      scheduleAutoSave();
+      return next;
+    });
   };
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const addSlide    = () => { setSlides(s => { const next = [...s, { id: Date.now(), title: "", body: "" }]; slidesRef2.current = next; scheduleAutoSave(); return next; }); setActiveSlide(slides.length); };
+  const deleteSlide = (i) => { if (slides.length <= 1) return; setSlides(s => { const next = s.filter((_, j) => j !== i); slidesRef2.current = next; scheduleAutoSave(); return next; }); setActiveSlide(Math.max(0, i - 1)); };
+  const moveSlide   = (i, dir) => { const arr = [...slides], t = i + dir; if (t < 0 || t >= arr.length) return; [arr[i], arr[t]] = [arr[t], arr[i]]; slidesRef2.current = arr; setSlides(arr); scheduleAutoSave(); setActiveSlide(t); };
+
+
+  // ── Upload content as PDF directly to module Files ──────────────────────
+  const uploadToModule = () => {
+    const hasContent = subTab === "document"
+      ? docContentRef.current && docContentRef.current.replace(/<[^>]*>/g, "").trim().length > 0
+      : slidesRef2.current.some(s => s.title.trim() || s.body.trim());
+    if (!hasContent) { toast("Nothing to upload — add some content first.", "error"); return; }
+    // Pre-fill filename with module title + mode
+    const safeName = (module.title || "Content").replace(/[^a-zA-Z0-9 ]/g, "").trim();
+    setUploadFilename(`${safeName} - ${subTab === "document" ? "Document" : "Slides"}`);
+    setShowFilename(true);
+  };
+
+  const confirmUpload = async () => {
+    if (!uploadFilename.trim()) { toast("Please enter a file name.", "error"); return; }
+    setShowFilename(false);
+    setUploading(true);
+
+    try {
+      // Load jsPDF
+      await loadJsPDFContent();
+      const { jsPDF } = window.jspdf;
+      const doc    = new jsPDF({ unit: "mm", format: "a4" });
+      const W      = doc.internal.pageSize.getWidth();
+      const H      = doc.internal.pageSize.getHeight();
+      const margin = 18;
+      let y        = 20;
+      const titleStr = module.title || "Content";
+
+      const addPageIfNeeded = (needed = 10) => {
+        if (y + needed > H - 16) { doc.addPage(); y = 20; }
+      };
+
+      // ── Cover / Title ──
+      doc.setFillColor(26, 46, 26);
+      doc.rect(0, 0, W, 28, "F");
+      doc.setFontSize(15); doc.setFont(undefined, "bold"); doc.setTextColor(255, 255, 255);
+      const titleLines = doc.splitTextToSize(titleStr, W - margin * 2);
+      doc.text(titleLines, margin, 12);
+      if (module.author) {
+        doc.setFontSize(9); doc.setFont(undefined, "normal"); doc.setTextColor(200, 230, 200);
+        doc.text(`Author: ${module.author}`, margin, 12 + titleLines.length * 6 + 2);
+      }
+      doc.setDrawColor(76, 175, 80); doc.setLineWidth(0.5);
+      doc.line(0, 28, W, 28);
+      y = 38;
+      doc.setTextColor(60, 60, 60);
+
+      if (subTab === "document") {
+        const tmp = document.createElement("div");
+        tmp.innerHTML = docContentRef.current;
+        tmp.querySelectorAll("h1,h2,h3,p,li,br").forEach(el => {
+          const tag  = el.tagName?.toLowerCase();
+          const text = el.innerText?.trim();
+          if (!text && tag !== "br") return;
+          if (tag === "br") { y += 4; return; }
+          if (tag === "h1") {
+            addPageIfNeeded(14);
+            doc.setFontSize(16); doc.setFont(undefined, "bold"); doc.setTextColor(26, 46, 26);
+            const ls = doc.splitTextToSize(text, W - margin * 2);
+            doc.text(ls, margin, y); y += ls.length * 7 + 4;
+          } else if (tag === "h2") {
+            addPageIfNeeded(12);
+            doc.setFontSize(13); doc.setFont(undefined, "bold"); doc.setTextColor(45, 106, 45);
+            const ls = doc.splitTextToSize(text, W - margin * 2);
+            doc.text(ls, margin, y); y += ls.length * 6 + 3;
+          } else if (tag === "h3") {
+            addPageIfNeeded(10);
+            doc.setFontSize(11); doc.setFont(undefined, "bold"); doc.setTextColor(58, 122, 58);
+            const ls = doc.splitTextToSize(text, W - margin * 2);
+            doc.text(ls, margin, y); y += ls.length * 5 + 2;
+          } else if (tag === "li") {
+            addPageIfNeeded(8);
+            doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(60, 60, 60);
+            const ls = doc.splitTextToSize("• " + text, W - margin * 2 - 4);
+            doc.text(ls, margin + 4, y); y += ls.length * 5 + 2;
+          } else {
+            addPageIfNeeded(8);
+            doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(60, 60, 60);
+            const ls = doc.splitTextToSize(text, W - margin * 2);
+            doc.text(ls, margin, y); y += ls.length * 5 + 3;
+          }
+        });
+      } else {
+        // Slides — each slide on its own page
+        slidesRef2.current.forEach((slide, i) => {
+          if (i > 0) { doc.addPage(); y = 38; }
+          // Slide badge
+          doc.setFillColor(45, 106, 45);
+          doc.roundedRect(margin, y - 5, 22, 7, 2, 2, "F");
+          doc.setFontSize(8); doc.setFont(undefined, "bold"); doc.setTextColor(255, 255, 255);
+          doc.text(`Slide ${i + 1}`, margin + 2, y); y += 10;
+          // Slide title
+          doc.setFontSize(20); doc.setFont(undefined, "bold"); doc.setTextColor(26, 46, 26);
+          const tl = doc.splitTextToSize(slide.title || `Slide ${i + 1}`, W - margin * 2);
+          doc.text(tl, margin, y); y += tl.length * 9 + 4;
+          // Divider
+          doc.setDrawColor(200, 230, 200); doc.setLineWidth(0.3);
+          doc.line(margin, y, W - margin, y); y += 8;
+          // Body
+          if (slide.body) {
+            doc.setFontSize(12); doc.setFont(undefined, "normal"); doc.setTextColor(60, 60, 60);
+            const bl = doc.splitTextToSize(slide.body, W - margin * 2);
+            doc.text(bl, margin, y);
+          }
+        });
+      }
+
+      // Convert to Blob
+      const pdfBlob  = doc.output("blob");
+      const fileName = `${uploadFilename.trim().replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 80)}.pdf`;
+      const filePath = `${module.id}/${Date.now()}_${fileName}`;
+
+      // Upload to Supabase Storage
+      const { error: upErr } = await supabase.storage
+        .from("module-files")
+        .upload(filePath, pdfBlob, { contentType: "application/pdf", upsert: false });
+      if (upErr) throw upErr;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from("module-files")
+        .getPublicUrl(filePath);
+
+      // Register in module_files table
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from("module_files").insert({
+        module_id:    module.id,
+        file_name:    fileName,
+        file_url:     publicUrl,
+        file_type:    "pdf",
+        file_size_kb: Math.round(pdfBlob.size / 1024),
+        sort_order:   999,
+        uploaded_by:  user?.id,
+      });
+
+      logActivity("module_content_uploaded", { module_id: module.id, title: module.title, mode: subTab });
+      toast(`${subTab === "document" ? "Document" : "Slides"} uploaded as PDF to module Files.`, "success");
+
+      // Clear the editor after successful upload
+      const emptySlides = [{ id: Date.now(), title: "", body: "" }];
+      docContentRef.current = "";
+      slidesRef2.current    = emptySlides;
+      setDocContent("");
+      setSlides(emptySlides);
+      setActiveSlide(0);
+      if (quillInst.current) quillInst.current.root.innerHTML = "";
+      // Also clear the saved content row so it doesn't reload old content
+      if (contentRowId.current) {
+        await supabase.from("module_files")
+          .update({ file_name: JSON.stringify({ docContent: "", slides: emptySlides }) })
+          .eq("id", contentRowId.current);
+      }
+      setAutoSaveStatus("idle");
+    } catch (e) {
+      toast("Upload failed: " + e.message, "error");
+    }
+    setUploading(false);
+  };
+
+  // ── Filename modal for upload ─────────────────────────────────────────────
+
+  // ── AI content generation via Groq ───────────────────────────────────────
+  const generateAiContent = async () => {
+    if (!aiTopic.trim()) { setAiError("Please enter a topic."); return; }
+    setAiGenerating(true); setAiError(""); setAiPreview(null);
+    try {
+      const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+      if (!apiKey) throw new Error("Groq API key not found. Add VITE_GROQ_API_KEY to your .env file.");
+
+      if (subTab === "document") {
+        const prompt = `You are an educational content writer for BLOOM GAD, a Gender and Development e-learning platform at Cavite State University (CvSU).
+
+Write a well-structured educational document about: "${aiTopic}"
+Module context: "${module.title}"
+${aiInstructions ? `Additional instructions: ${aiInstructions}` : ""}
+
+Requirements:
+- Use proper HTML formatting with <h1>, <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em> tags
+- Include an introduction, main content sections, and a conclusion
+- Make it relevant to Gender and Development (GAD) advocacy
+- Keep language clear and accessible for university students
+- Length: 400-700 words
+
+Return ONLY the HTML content, no markdown, no explanation, no code blocks.`;
+
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: "llama-3.1-8b-instant",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.7, max_tokens: 2000,
+          }),
+        });
+        if (!res.ok) throw new Error(`Groq API error: ${res.status}`);
+        const data = await res.json();
+        const html = data.choices?.[0]?.message?.content?.trim() || "";
+        if (!html) throw new Error("AI returned empty content. Please try again.");
+        setAiPreview({ type: "document", docContent: html });
+
+      } else {
+        // Slides mode
+        const slideCount = 5;
+        const prompt = `You are an educational content writer for BLOOM GAD, a Gender and Development e-learning platform at Cavite State University (CvSU).
+
+Create ${slideCount} presentation slides about: "${aiTopic}"
+Module context: "${module.title}"
+${aiInstructions ? `Additional instructions: ${aiInstructions}` : ""}
+
+Requirements:
+- Make it relevant to Gender and Development (GAD) advocacy
+- Keep language clear and accessible for university students
+- Each slide should have a clear title and concise body content (2-4 sentences or bullet points)
+
+Return ONLY a valid JSON array, no markdown, no explanation, no code blocks. Format:
+[
+  {"title": "Slide Title", "body": "Slide content here"},
+  ...
+]`;
+
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: "llama-3.1-8b-instant",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.7, max_tokens: 2000,
+          }),
+        });
+        if (!res.ok) throw new Error(`Groq API error: ${res.status}`);
+        const data = await res.json();
+        let raw = data.choices?.[0]?.message?.content?.trim() || "";
+        // Strip markdown code fences if present
+        raw = raw.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("AI returned invalid slide format. Please try again.");
+        const slides = parsed.map((s, i) => ({ id: Date.now() + i, title: s.title || "", body: s.body || "" }));
+        setAiPreview({ type: "slides", slides });
+      }
+    } catch (e) {
+      setAiError(e.message || "Generation failed. Please try again.");
+    }
+    setAiGenerating(false);
+  };
+
+  const confirmAiContent = () => {
+    if (!aiPreview) return;
+    if (aiPreview.type === "document") {
+      docContentRef.current = aiPreview.docContent;
+      setDocContent(aiPreview.docContent);
+      // Update Quill editor if it's live
+      if (quillInst.current) quillInst.current.root.innerHTML = aiPreview.docContent;
+      scheduleAutoSave();
+    } else {
+      slidesRef2.current = aiPreview.slides;
+      setSlides(aiPreview.slides);
+      setActiveSlide(0);
+      scheduleAutoSave();
+    }
+    setShowAiModal(false);
+    setAiPreview(null);
+    setAiTopic("");
+    setAiInstructions("");
+    toast("AI content inserted and auto-saving…", "success");
+  };
+
+  // ── HTML → plain text helper ──────────────────────────────────────────────
+  const htmlToText = (html) => {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    return tmp.innerText || tmp.textContent || "";
+  };
+
+  // ── HTML → Markdown helper ────────────────────────────────────────────────
+  const htmlToMarkdown = (html) => {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    let md = "";
+    const walk = (node) => {
+      if (node.nodeType === 3) { md += node.textContent; return; }
+      const tag = node.tagName?.toLowerCase();
+      if (tag === "h1") { md += "\n# "; node.childNodes.forEach(walk); md += "\n"; }
+      else if (tag === "h2") { md += "\n## "; node.childNodes.forEach(walk); md += "\n"; }
+      else if (tag === "h3") { md += "\n### "; node.childNodes.forEach(walk); md += "\n"; }
+      else if (tag === "strong" || tag === "b") { md += "**"; node.childNodes.forEach(walk); md += "**"; }
+      else if (tag === "em" || tag === "i") { md += "_"; node.childNodes.forEach(walk); md += "_"; }
+      else if (tag === "p") { node.childNodes.forEach(walk); md += "\n\n"; }
+      else if (tag === "li") { md += "- "; node.childNodes.forEach(walk); md += "\n"; }
+      else if (tag === "br") { md += "\n"; }
+      else { node.childNodes.forEach(walk); }
+    };
+    tmp.childNodes.forEach(walk);
+    return md.trim();
+  };
+
+  // ── Export: PDF ───────────────────────────────────────────────────────────
   const exportPDF = async () => {
-    setExporting(true);
+    setExporting(true); setShowExportMenu(false);
     try {
       await loadJsPDFContent();
       const { jsPDF } = window.jspdf;
@@ -1314,88 +1720,272 @@ function ContentPanel({ module }) {
       const W = doc.internal.pageSize.getWidth();
       const margin = 18;
       let y = 20;
-
-      // Title
       doc.setFontSize(22); doc.setFont(undefined, "bold"); doc.setTextColor(26, 46, 26);
       const titleLines = doc.splitTextToSize(module.title, W - margin * 2);
       doc.text(titleLines, margin, y); y += titleLines.length * 9 + 4;
-      if (module.author) {
-        doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(100);
-        doc.text(`Author: ${module.author}`, margin, y); y += 6;
-      }
-      doc.setDrawColor(45, 106, 45); doc.setLineWidth(0.5);
-      doc.line(margin, y, W - margin, y); y += 10;
-
+      if (module.author) { doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(100); doc.text(`Author: ${module.author}`, margin, y); y += 6; }
+      doc.setDrawColor(45, 106, 45); doc.setLineWidth(0.5); doc.line(margin, y, W - margin, y); y += 10;
       if (subTab === "document") {
-        const tmp = document.createElement("div");
-        tmp.innerHTML = docContent;
-        const blocks = tmp.querySelectorAll("h1,h2,h3,p,li");
-        blocks.forEach(el => {
-          const tag = el.tagName.toLowerCase();
-          const text = el.innerText?.trim();
-          if (!text) return;
+        const tmp = document.createElement("div"); tmp.innerHTML = docContent;
+        tmp.querySelectorAll("h1,h2,h3,p,li").forEach(el => {
+          const tag = el.tagName.toLowerCase(); const text = el.innerText?.trim(); if (!text) return;
           if (tag === "h1") { doc.setFontSize(16); doc.setFont(undefined, "bold"); doc.setTextColor(26,46,26); }
           else if (tag === "h2") { doc.setFontSize(14); doc.setFont(undefined, "bold"); doc.setTextColor(45,106,45); }
           else if (tag === "h3") { doc.setFontSize(12); doc.setFont(undefined, "bold"); doc.setTextColor(58,122,58); }
           else { doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(60,60,60); }
           const lines = doc.splitTextToSize((tag==="li"?"• ":"")+text, W - margin*2);
           if (y + lines.length*6 > doc.internal.pageSize.getHeight()-20) { doc.addPage(); y=20; }
-          doc.text(lines, margin, y);
-          y += lines.length*6 + (tag.startsWith("h")?4:3);
+          doc.text(lines, margin, y); y += lines.length*6 + (tag.startsWith("h")?4:3);
         });
       } else {
         slides.forEach((slide, i) => {
           if (i > 0) { doc.addPage(); y = 20; }
-          doc.setFillColor(45,106,45);
-          doc.roundedRect(margin, y-5, 28, 8, 2, 2, "F");
-          doc.setFontSize(9); doc.setFont(undefined,"bold"); doc.setTextColor(255,255,255);
-          doc.text(`Slide ${i+1}`, margin+2, y); y += 10;
+          doc.setFillColor(45,106,45); doc.roundedRect(margin, y-5, 28, 8, 2, 2, "F");
+          doc.setFontSize(9); doc.setFont(undefined,"bold"); doc.setTextColor(255,255,255); doc.text(`Slide ${i+1}`, margin+2, y); y += 10;
           doc.setFontSize(18); doc.setFont(undefined,"bold"); doc.setTextColor(26,46,26);
-          const tl = doc.splitTextToSize(slide.title||`Slide ${i+1}`, W-margin*2);
-          doc.text(tl, margin, y); y += tl.length*8+5;
-          doc.setDrawColor(200,230,200); doc.setLineWidth(0.3);
-          doc.line(margin, y, W-margin, y); y += 8;
+          const tl = doc.splitTextToSize(slide.title||`Slide ${i+1}`, W-margin*2); doc.text(tl, margin, y); y += tl.length*8+5;
+          doc.setDrawColor(200,230,200); doc.setLineWidth(0.3); doc.line(margin, y, W-margin, y); y += 8;
           doc.setFontSize(12); doc.setFont(undefined,"normal"); doc.setTextColor(60,60,60);
-          const bl = doc.splitTextToSize(slide.body||"", W-margin*2);
-          doc.text(bl, margin, y);
+          const bl = doc.splitTextToSize(slide.body||"", W-margin*2); doc.text(bl, margin, y);
         });
       }
       doc.save(`${module.title.replace(/\s+/g,"-").toLowerCase()}-content.pdf`);
-      toast("PDF exported successfully.", "success");
-    } catch(e) { toast("Export failed: "+e.message, "error"); }
+      toast("PDF exported.", "success");
+    } catch(e) { toast("PDF export failed: "+e.message, "error"); }
     setExporting(false);
   };
 
-  const addSlide    = () => { setSlides(s=>[...s,{id:Date.now(),title:"",body:""}]); setActiveSlide(slides.length); };
-  const deleteSlide = (i) => { if(slides.length<=1) return; setSlides(s=>s.filter((_,j)=>j!==i)); setActiveSlide(Math.max(0,i-1)); };
-  const updateSlide = (i,k,v) => setSlides(s=>s.map((sl,j)=>j===i?{...sl,[k]:v}:sl));
-  const moveSlide   = (i,dir) => { const arr=[...slides],t=i+dir; if(t<0||t>=arr.length)return; [arr[i],arr[t]]=[arr[t],arr[i]]; setSlides(arr); setActiveSlide(t); };
+  // ── Export: Word (.docx) ──────────────────────────────────────────────────
+  const exportDocx = async () => {
+    setExporting(true); setShowExportMenu(false);
+    try {
+      if (!window.docx) {
+        await new Promise((res, rej) => {
+          const sc = document.createElement("script");
+          sc.src = "https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.js";
+          sc.onload = res; sc.onerror = rej;
+          document.head.appendChild(sc);
+        });
+      }
+      const { Document, Packer, Paragraph, TextRun, HeadingLevel } = window.docx;
+      const paras = [];
+
+      // Title
+      paras.push(new Paragraph({ text: module.title, heading: HeadingLevel.TITLE }));
+      if (module.author) paras.push(new Paragraph({ children: [new TextRun({ text: `Author: ${module.author}`, italics: true, color: "888888" })] }));
+      paras.push(new Paragraph({ text: "" }));
+
+      if (subTab === "document") {
+        const tmp = document.createElement("div"); tmp.innerHTML = docContent;
+        tmp.querySelectorAll("h1,h2,h3,p,li,br").forEach(el => {
+          const tag = el.tagName.toLowerCase(); const text = el.innerText?.trim();
+          if (tag === "h1") paras.push(new Paragraph({ text: text||"", heading: HeadingLevel.HEADING_1 }));
+          else if (tag === "h2") paras.push(new Paragraph({ text: text||"", heading: HeadingLevel.HEADING_2 }));
+          else if (tag === "h3") paras.push(new Paragraph({ text: text||"", heading: HeadingLevel.HEADING_3 }));
+          else if (tag === "li") paras.push(new Paragraph({ text: text||"", bullet: { level: 0 } }));
+          else if (text) paras.push(new Paragraph({ children: [new TextRun(text)] }));
+          else paras.push(new Paragraph({ text: "" }));
+        });
+      } else {
+        slides.forEach((slide, i) => {
+          paras.push(new Paragraph({ text: `Slide ${i+1}: ${slide.title||""}`, heading: HeadingLevel.HEADING_1 }));
+          if (slide.body) paras.push(new Paragraph({ children: [new TextRun(slide.body)] }));
+          paras.push(new Paragraph({ text: "" }));
+        });
+      }
+
+      const doc2 = new Document({ sections: [{ children: paras }] });
+      const blob = await Packer.toBlob(doc2);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url;
+      a.download = `${module.title.replace(/\s+/g,"-").toLowerCase()}-content.docx`;
+      a.click(); URL.revokeObjectURL(url);
+      toast("Word document exported.", "success");
+    } catch(e) { toast("Word export failed: "+e.message, "error"); }
+    setExporting(false);
+  };
+
+  // ── Export: PowerPoint (.pptx) ────────────────────────────────────────────
+  const exportPptx = async () => {
+    setExporting(true); setShowExportMenu(false);
+    try {
+      if (!window.PptxGenJS) {
+        await new Promise((res, rej) => {
+          const sc = document.createElement("script");
+          sc.src = "https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js";
+          sc.onload = res; sc.onerror = rej;
+          document.head.appendChild(sc);
+        });
+      }
+      const pptx = new window.PptxGenJS();
+      pptx.layout = "LAYOUT_WIDE";
+
+      const addSlideToPresentation = (titleText, bodyText, slideNum) => {
+        const sl = pptx.addSlide();
+        // Green gradient background
+        sl.background = { fill: "1A2E1A" };
+        // Slide number badge
+        sl.addText(`Slide ${slideNum}`, { x: 0.3, y: 0.2, w: 1, h: 0.3, fontSize: 9, color: "C8E6C9", bold: true });
+        // Title
+        sl.addText(titleText || `Slide ${slideNum}`, { x: 0.5, y: 0.6, w: 9, h: 1.2, fontSize: 28, bold: true, color: "FFFFFF", fontFace: "Inter" });
+        // Divider
+        sl.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.9, w: 9, h: 0.02, fill: { color: "4CAF50" } });
+        // Body
+        if (bodyText) sl.addText(bodyText, { x: 0.5, y: 2.1, w: 9, h: 4, fontSize: 14, color: "C8E6C9", fontFace: "Inter", valign: "top", wrap: true });
+      };
+
+      if (subTab === "slides") {
+        slides.forEach((slide, i) => addSlideToPresentation(slide.title, slide.body, i + 1));
+      } else {
+        // Document mode: each heading becomes a slide
+        const tmp = document.createElement("div"); tmp.innerHTML = docContent;
+        const blocks = Array.from(tmp.querySelectorAll("h1,h2,h3,p,li"));
+        let currentTitle = module.title, currentBody = [], slideNum = 1;
+        blocks.forEach(el => {
+          const tag = el.tagName.toLowerCase(); const text = el.innerText?.trim(); if (!text) return;
+          if (tag.startsWith("h")) {
+            if (currentBody.length) { addSlideToPresentation(currentTitle, currentBody.join("\n"), slideNum++); currentBody = []; }
+            currentTitle = text;
+          } else { currentBody.push((tag==="li"?"• ":"")+text); }
+        });
+        if (currentTitle || currentBody.length) addSlideToPresentation(currentTitle, currentBody.join("\n"), slideNum);
+      }
+
+      await pptx.writeFile({ fileName: `${module.title.replace(/\s+/g,"-").toLowerCase()}-content.pptx` });
+      toast("PowerPoint exported.", "success");
+    } catch(e) { toast("PowerPoint export failed: "+e.message, "error"); }
+    setExporting(false);
+  };
+
+  // ── Export: Plain Text (.txt) ─────────────────────────────────────────────
+  const exportTxt = () => {
+    setShowExportMenu(false);
+    try {
+      let text = `${module.title}\n${"=".repeat(module.title.length)}\n\n`;
+      if (module.author) text += `Author: ${module.author}\n\n`;
+      if (subTab === "document") {
+        text += htmlToText(docContent);
+      } else {
+        slides.forEach((slide, i) => {
+          text += `Slide ${i+1}: ${slide.title||""}\n${"-".repeat(40)}\n${slide.body||""}\n\n`;
+        });
+      }
+      const blob = new Blob([text], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url;
+      a.download = `${module.title.replace(/\s+/g,"-").toLowerCase()}-content.txt`;
+      a.click(); URL.revokeObjectURL(url);
+      toast("Text file exported.", "success");
+    } catch(e) { toast("Text export failed: "+e.message, "error"); }
+  };
+
+  // ── Export: Markdown (.md) ────────────────────────────────────────────────
+  const exportMarkdown = () => {
+    setShowExportMenu(false);
+    try {
+      let md = `# ${module.title}\n\n`;
+      if (module.author) md += `_Author: ${module.author}_\n\n---\n\n`;
+      if (subTab === "document") {
+        md += htmlToMarkdown(docContent);
+      } else {
+        slides.forEach((slide, i) => {
+          md += `## Slide ${i+1}: ${slide.title||""}\n\n${slide.body||""}\n\n---\n\n`;
+        });
+      }
+      const blob = new Blob([md], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url;
+      a.download = `${module.title.replace(/\s+/g,"-").toLowerCase()}-content.md`;
+      a.click(); URL.revokeObjectURL(url);
+      toast("Markdown file exported.", "success");
+    } catch(e) { toast("Markdown export failed: "+e.message, "error"); }
+  };
+
+  // ── Auto-save status indicator ────────────────────────────────────────────
+  const SaveIndicator = () => {
+    if (autoSaveStatus === "idle") return null;
+    const cfg = {
+      pending: { icon: "bi-clock",            color: "#aaa",     text: "Unsaved changes…" },
+      saving:  { icon: "bi-hourglass-split",  color: G.base,     text: "Saving…" },
+      saved:   { icon: "bi-check-circle-fill",color: "#16a34a",  text: "Saved" },
+      error:   { icon: "bi-exclamation-circle-fill", color: "#dc2626", text: "Auto-save failed" },
+    }[autoSaveStatus];
+    return (
+      <div style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:cfg.color }}>
+        <i className={`bi ${cfg.icon}`}/>{cfg.text}
+      </div>
+    );
+  };
 
   if (loading) return <div style={{padding:40,textAlign:"center",color:"#aaa"}}>Loading content…</div>;
+
+  const EXPORT_OPTIONS = [
+    { label:"PDF",        icon:"bi-file-earmark-pdf",      action: exportPDF,      color:"#dc2626" },
+    { label:"Word (.docx)",icon:"bi-file-earmark-word",    action: exportDocx,     color:"#1d4ed8" },
+    { label:"PowerPoint", icon:"bi-file-earmark-slides",   action: exportPptx,     color:"#c2410c" },
+    { label:"Text (.txt)",icon:"bi-file-earmark-text",     action: exportTxt,      color:"#555" },
+    { label:"Markdown",   icon:"bi-markdown",              action: exportMarkdown, color:"#7c3aed" },
+  ];
 
   return (
     <div>
       {/* Header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
-        <div style={{display:"flex",gap:4,background:G.wash,borderRadius:8,padding:4}}>
-          {[{id:"document",icon:"bi-file-earmark-richtext",label:"Document"},{id:"slides",icon:"bi-easel",label:"Slides"}].map(t=>(
-            <button key={t.id} onClick={()=>setSubTab(t.id)}
-              style={{padding:"7px 16px",borderRadius:6,border:"none",cursor:"pointer",fontWeight:600,fontSize:12,
-                background:subTab===t.id?"#fff":"transparent",color:subTab===t.id?G.dark:"#888",
-                boxShadow:subTab===t.id?"0 1px 4px rgba(0,0,0,.1)":"none"}}>
-              <i className={`bi ${t.icon} me-1`}/>{t.label}
-            </button>
-          ))}
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{display:"flex",gap:4,background:G.wash,borderRadius:8,padding:4}}>
+            {[{id:"document",icon:"bi-file-earmark-richtext",label:"Document"},{id:"slides",icon:"bi-easel",label:"Slides"}].map(t=>(
+              <button key={t.id} onClick={()=>setSubTab(t.id)}
+                style={{padding:"7px 16px",borderRadius:6,border:"none",cursor:"pointer",fontWeight:600,fontSize:12,
+                  background:subTab===t.id?"#fff":"transparent",color:subTab===t.id?G.dark:"#888",
+                  boxShadow:subTab===t.id?"0 1px 4px rgba(0,0,0,.1)":"none"}}>
+                <i className={`bi ${t.icon} me-1`}/>{t.label}
+              </button>
+            ))}
+          </div>
+          <SaveIndicator/>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={exportPDF} disabled={exporting}
+
+        {/* AI Generate button */}
+        <button
+          onClick={() => { setShowAiModal(true); setAiPreview(null); setAiError(""); }}
+          style={{...s.btnPrimary, display:"inline-flex", alignItems:"center", gap:6, background:"linear-gradient(135deg,#7c3aed,#4f46e5)"}}>
+          <i className="bi bi-stars"/>Generate with AI
+        </button>
+
+        {/* Upload to module button */}
+        <button
+          onClick={uploadToModule}
+          disabled={uploading}
+          title="Upload current content directly to this module's Files"
+          style={{...s.btnSecondary, opacity:uploading?0.6:1, display:"inline-flex", alignItems:"center", gap:6}}>
+          {uploading
+            ? <><span className="spinner-border spinner-border-sm"/>Uploading…</>
+            : <><i className="bi bi-cloud-upload"/>Upload to Module</>}
+        </button>
+
+        {/* Export dropdown */}
+        <div style={{position:"relative"}}>
+          <button
+            onClick={()=>setShowExportMenu(v=>!v)}
+            disabled={exporting}
             style={{...s.btnSecondary,opacity:exporting?0.6:1,display:"inline-flex",alignItems:"center",gap:6}}>
-            <i className="bi bi-file-earmark-pdf"/>{exporting?"Exporting…":"Export PDF"}
+            <i className="bi bi-box-arrow-up"/>{exporting?"Exporting…":"Export"}
+            <i className={`bi bi-chevron-${showExportMenu?"up":"down"}`} style={{fontSize:10}}/>
           </button>
-          <button onClick={saveContent} disabled={saving}
-            style={{...s.btnPrimary,opacity:saving?0.6:1,display:"inline-flex",alignItems:"center",gap:6}}>
-            <i className="bi bi-floppy"/>{saving?"Saving…":"Save Content"}
-          </button>
+          {showExportMenu && (
+            <div style={{position:"absolute",right:0,top:"calc(100% + 6px)",background:"#fff",border:"1px solid #DDE8DD",borderRadius:8,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:100,minWidth:200,overflow:"hidden"}}>
+              {EXPORT_OPTIONS.map(opt=>(
+                <button key={opt.label} onClick={opt.action}
+                  style={{width:"100%",padding:"10px 16px",background:"none",border:"none",cursor:"pointer",fontSize:13,
+                    display:"flex",alignItems:"center",gap:10,color:G.dark,textAlign:"left"}}
+                  onMouseEnter={e=>e.currentTarget.style.background=G.wash}
+                  onMouseLeave={e=>e.currentTarget.style.background="none"}>
+                  <i className={`bi ${opt.icon}`} style={{color:opt.color,fontSize:15,width:18}}/>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1418,7 +2008,6 @@ function ContentPanel({ module }) {
       {/* ── SLIDES ── */}
       {subTab==="slides"&&(
         <div style={{display:"flex",gap:16}}>
-          {/* Slide list */}
           <div style={{width:180,flexShrink:0}}>
             <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>
               Slides ({slides.length})
@@ -1443,7 +2032,6 @@ function ContentPanel({ module }) {
             </div>
           </div>
 
-          {/* Slide editor */}
           <div style={{flex:1,background:"#fff",borderRadius:10,border:"1px solid #DDE8DD",overflow:"hidden"}}>
             <div style={{padding:"10px 16px",borderBottom:"1px solid #DDE8DD",background:"#F9FBF9",
               display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -1470,7 +2058,6 @@ function ContentPanel({ module }) {
                   value={slides[activeSlide]?.body||""} onChange={e=>updateSlide(activeSlide,"body",e.target.value)}
                   placeholder="Write the content for this slide…"/>
               </div>
-              {/* Live preview */}
               <div style={{background:"linear-gradient(135deg,#1A2E1A,#2D6A2D)",borderRadius:10,padding:"24px 28px",color:"#fff"}}>
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:1,color:"rgba(255,255,255,.5)",marginBottom:8,textTransform:"uppercase"}}>
                   Preview · Slide {activeSlide+1}
@@ -1487,10 +2074,165 @@ function ContentPanel({ module }) {
         </div>
       )}
 
-      <div style={{marginTop:12,fontSize:12,color:"#888"}}>
-        <i className="bi bi-info-circle me-1"/>
-        Content is saved to this module. Use <strong>Export PDF</strong> to download a printable version.
+      <div style={{marginTop:12,fontSize:12,color:"#888",display:"flex",alignItems:"center",gap:6}}>
+        <i className="bi bi-info-circle"/>
+        Changes are saved automatically as you type.
       </div>
+
+      {/* Filename Modal */}
+      {showFilename && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:16}}>
+          <div style={{background:"#fff",borderRadius:12,width:"100%",maxWidth:420,boxShadow:"0 24px 64px rgba(0,0,0,0.22)"}}>
+            <div style={{padding:"18px 24px 14px",borderBottom:"1px solid #DDE8DD"}}>
+              <div style={{fontWeight:700,color:G.dark,fontSize:15,display:"flex",alignItems:"center",gap:8}}>
+                <i className="bi bi-file-earmark-pdf" style={{color:"#dc2626"}}/>Name your PDF file
+              </div>
+              <div style={{fontSize:12,color:"#888",marginTop:3}}>This will be the file name students see in the module.</div>
+            </div>
+            <div style={{padding:"20px 24px"}}>
+              <label style={{...s.label}}>File Name *</label>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <input
+                  style={{...s.input,flex:1}}
+                  value={uploadFilename}
+                  onChange={e=>setUploadFilename(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&confirmUpload()}
+                  placeholder="e.g. Gender Sensitivity - Document"
+                  autoFocus
+                />
+                <span style={{fontSize:13,color:"#888",whiteSpace:"nowrap",fontWeight:600}}>.pdf</span>
+              </div>
+              <div style={{fontSize:11,color:"#aaa",marginTop:6}}>
+                <i className="bi bi-info-circle me-1"/>Special characters will be removed automatically.
+              </div>
+            </div>
+            <div style={{padding:"14px 24px",borderTop:"1px solid #DDE8DD",display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <button onClick={()=>setShowFilename(false)}
+                style={{...s.btnSecondary}}>Cancel</button>
+              <button onClick={confirmUpload} disabled={!uploadFilename.trim()}
+                style={{...s.btnPrimary,opacity:!uploadFilename.trim()?0.5:1,display:"inline-flex",alignItems:"center",gap:6}}>
+                <i className="bi bi-cloud-upload"/>Upload PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Generation Modal */}
+      {showAiModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:16}}>
+          <div style={{background:"#fff",borderRadius:14,width:"100%",maxWidth:640,maxHeight:"92vh",overflow:"auto",boxShadow:"0 24px 64px rgba(0,0,0,0.22)"}}>
+            {/* Modal Header */}
+            <div style={{padding:"18px 24px 14px",borderBottom:"1px solid #DDE8DD",display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(135deg,#7c3aed,#4f46e5)",borderRadius:"14px 14px 0 0"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:36,height:36,borderRadius:8,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <i className="bi bi-stars" style={{color:"#fff",fontSize:18}}/>
+                </div>
+                <div>
+                  <div style={{fontWeight:800,color:"#fff",fontSize:15}}>Generate with AI</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.7)"}}>
+                    {subTab === "document" ? "Generate a full document" : "Generate presentation slides"} · Powered by Groq
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => { setShowAiModal(false); setAiPreview(null); }}
+                style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:6,color:"#fff",cursor:"pointer",fontSize:18,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+            </div>
+
+            <div style={{padding:"20px 24px"}}>
+              {/* Input form — only shown before preview */}
+              {!aiPreview && (
+                <>
+                  <div style={{...s.fg}}>
+                    <label style={{...s.label}}>Topic *</label>
+                    <input style={{...s.input}} value={aiTopic} onChange={e=>setAiTopic(e.target.value)}
+                      placeholder={`e.g. "Gender Equality in the Workplace"`} autoFocus/>
+                  </div>
+                  <div style={{...s.fg}}>
+                    <label style={{...s.label}}>Additional Instructions <span style={{fontWeight:400,textTransform:"none",color:"#aaa"}}>(optional)</span></label>
+                    <textarea style={{...s.textarea,minHeight:80}} value={aiInstructions} onChange={e=>setAiInstructions(e.target.value)}
+                      placeholder={subTab==="document"
+                        ? "e.g. Focus on legal frameworks, include examples from the Philippines, write in a formal tone"
+                        : "e.g. Make 6 slides, include statistics, target a university audience"}/>
+                  </div>
+                  {aiError && (
+                    <div style={{background:"#fee2e2",color:"#dc2626",borderRadius:8,padding:"10px 14px",fontSize:13,marginBottom:14}}>
+                      <i className="bi bi-exclamation-circle me-2"/>{aiError}
+                    </div>
+                  )}
+                  <div style={{background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#7c3aed",marginBottom:16}}>
+                    <i className="bi bi-info-circle me-1"/>
+                    AI will generate content in the context of <strong>{module.title}</strong> and Gender &amp; Development advocacy at CvSU.
+                  </div>
+                </>
+              )}
+
+              {/* Preview */}
+              {aiPreview && (
+                <div>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                    <div style={{fontWeight:700,color:G.dark,fontSize:14,display:"flex",alignItems:"center",gap:6}}>
+                      <i className="bi bi-eye" style={{color:"#7c3aed"}}/>Preview
+                    </div>
+                    <button onClick={()=>{setAiPreview(null);}}
+                      style={{fontSize:12,color:"#7c3aed",background:"none",border:"none",cursor:"pointer",fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
+                      <i className="bi bi-arrow-left"/>Edit prompt
+                    </button>
+                  </div>
+
+                  {aiPreview.type === "document" ? (
+                    <div style={{background:"#f9fafb",borderRadius:8,border:"1px solid #e5e7eb",padding:"16px 20px",maxHeight:340,overflowY:"auto",fontSize:14,lineHeight:1.7,color:G.dark}}
+                      dangerouslySetInnerHTML={{__html: aiPreview.docContent}}/>
+                  ) : (
+                    <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:340,overflowY:"auto"}}>
+                      {aiPreview.slides.map((sl,i) => (
+                        <div key={sl.id} style={{background:"#f9fafb",borderRadius:8,border:"1px solid #e5e7eb",padding:"12px 16px"}}>
+                          <div style={{fontSize:11,fontWeight:700,color:"#7c3aed",marginBottom:4}}>Slide {i+1}</div>
+                          <div style={{fontWeight:700,color:G.dark,marginBottom:4}}>{sl.title}</div>
+                          <div style={{fontSize:13,color:"#555",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{sl.body}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#15803d",marginTop:12}}>
+                    <i className="bi bi-check-circle me-1"/>
+                    Review the content above. Click <strong>Insert Content</strong> to add it to your {subTab === "document" ? "document" : "slides"}, or go back to regenerate.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div style={{padding:"14px 24px",borderTop:"1px solid #DDE8DD",display:"flex",gap:8,justifyContent:"flex-end",background:"#fafafa",borderRadius:"0 0 14px 14px"}}>
+              <button onClick={() => { setShowAiModal(false); setAiPreview(null); }}
+                style={{...s.btnSecondary}}>Cancel</button>
+              {!aiPreview ? (
+                <button onClick={generateAiContent} disabled={aiGenerating || !aiTopic.trim()}
+                  style={{padding:"9px 20px",background:"linear-gradient(135deg,#7c3aed,#4f46e5)",color:"#fff",border:"none",borderRadius:6,cursor:aiGenerating||!aiTopic.trim()?"not-allowed":"pointer",fontWeight:700,fontSize:13,opacity:aiGenerating||!aiTopic.trim()?0.6:1,display:"flex",alignItems:"center",gap:6}}>
+                  {aiGenerating
+                    ? <><span className="spinner-border spinner-border-sm"/>Generating…</>
+                    : <><i className="bi bi-stars"/>Generate</>}
+                </button>
+              ) : (
+                <>
+                  <button onClick={generateAiContent} disabled={aiGenerating}
+                    style={{padding:"9px 20px",background:G.wash,color:G.dark,border:"none",borderRadius:6,cursor:"pointer",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:6}}>
+                    <i className="bi bi-arrow-clockwise"/>Regenerate
+                  </button>
+                  <button onClick={confirmAiContent}
+                    style={{padding:"9px 20px",background:"linear-gradient(135deg,#7c3aed,#4f46e5)",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:6}}>
+                    <i className="bi bi-check-lg"/>Insert Content
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close export menu when clicking outside */}
+      {showExportMenu && <div style={{position:"fixed",inset:0,zIndex:99}} onClick={()=>setShowExportMenu(false)}/>}
     </div>
   );
 }
@@ -1514,7 +2256,7 @@ export default function ModulesPage() {
   const [confirm,    setConfirm]    = useState(null); // {title,message,onConfirm,danger?}
 
   const loadModules = async () => {
-    const{data}=await supabase.from("modules").select("*, categories(name), module_files(count), assessments(id,is_published,title), author, published_date, tags").order("created_at",{ascending:false});
+    const{data}=await supabase.from("modules").select("*, categories(name), module_files(id,file_url), assessments(id,is_published,title), author, published_date, tags").order("created_at",{ascending:false});
     setModules(data||[]); return data||[];
   };
 
@@ -1523,7 +2265,7 @@ export default function ModulesPage() {
     (async()=>{
       setLoading(true);
       const[{data:mods},{data:cats}]=await Promise.all([
-        supabase.from("modules").select("*, categories(name), module_files(count), assessments(id,is_published,title)").order("created_at",{ascending:false}),
+        supabase.from("modules").select("*, categories(name), module_files(id,file_url), assessments(id,is_published,title)").order("created_at",{ascending:false}),
         supabase.from("categories").select("*").order("name"),
       ]);
       if(active){setModules(mods||[]);setCategories(cats||[]);if(mods?.length)setSelected(mods[0]);setLoading(false);}
@@ -1541,14 +2283,14 @@ export default function ModulesPage() {
       tags:           Array.isArray(form.tags) ? form.tags : [],
     };
     if (editMod) {
-      const { data, error } = await supabase.from("modules").update(clean).eq("id", editMod.id).select("*, categories(name), module_files(count), assessments(id,is_published,title)").single();
+      const { data, error } = await supabase.from("modules").update(clean).eq("id", editMod.id).select("*, categories(name), module_files(id,file_url), assessments(id,is_published,title)").single();
       if (error) { toast("Save error: " + error.message, "error"); return; }
       setModules(ms => ms.map(m => m.id === editMod.id ? data : m));
       if (selected?.id === editMod.id) setSelected(data);
       toast("Module updated successfully.", "success");
       logActivity("module_updated", { module_id: data.id, title: data.title });
     } else {
-      const { data, error } = await supabase.from("modules").insert({ ...clean, created_by: user?.id }).select("*, categories(name), module_files(count), assessments(id,is_published,title)").single();
+      const { data, error } = await supabase.from("modules").insert({ ...clean, created_by: user?.id }).select("*, categories(name), module_files(id,file_url), assessments(id,is_published,title)").single();
       if (error) { toast("Create error: " + error.message, "error"); return; }
       setModules(ms => [data, ...ms]); setSelected(data);
       toast("Module created successfully.", "success");
@@ -1624,7 +2366,7 @@ export default function ModulesPage() {
   const uniqueCategories = [...new Set(modules.map(m=>m.categories?.name).filter(Boolean))].sort();
   const uniqueTags       = [...new Set(modules.flatMap(m=>Array.isArray(m.tags)?m.tags:[]))].sort();
   const activeFilters    = [filterAuthor,filterCategory,filterTag,filterDateFrom,filterDateTo].filter(Boolean).length;
-  const fileCount = (m) => m?.module_files?.[0]?.count||0;
+  const fileCount = (m) => (m?.module_files||[]).filter(f => f.file_url !== "__content__").length;
   const hasAssess = (m) => (m?.assessments?.length||0)>0;
   const assessPub = (m) => m?.assessments?.[0]?.is_published;
 

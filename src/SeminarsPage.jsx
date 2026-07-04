@@ -28,6 +28,35 @@ function formatDateShort(iso) {
   });
 }
 
+// Roles eligible to be targeted for a seminar's audience
+const TARGET_ROLE_OPTIONS = [
+  { value: "student", label: "Students",  icon: "bi-mortarboard"   },
+  { value: "teacher",  label: "Teachers",  icon: "bi-person-video3" },
+  { value: "faculty",  label: "Faculty",   icon: "bi-person-badge"  },
+  { value: "guest",    label: "Guests",    icon: "bi-person"        },
+  { value: "speaker",  label: "Speakers",  icon: "bi-mic"           },
+];
+
+async function insertSeminarNotification(userId, seminarTitle, seminarId) {
+  try {
+    await supabase.from("notifications").insert({
+      user_id: userId, type: "new_seminar", title: "New Seminar Available",
+      body: `"${seminarTitle}" has been published. Check it out and register!`,
+      reference_type: "seminar", reference_id: seminarId, is_read: false,
+    });
+  } catch (e) { console.error("insertSeminarNotification failed:", e); }
+}
+
+async function sendRegistrationRemovedNotification(userId, seminarTitle) {
+  try {
+    await supabase.from("notifications").insert({
+      user_id: userId, type: "registration_removed", title: "Registration Removed",
+      body: `Your registration for "${seminarTitle}" was removed because the seminar's eligibility criteria changed.`,
+      reference_type: "seminar", reference_id: null, is_read: false,
+    });
+  } catch (e) { console.error("sendRegistrationRemovedNotification failed:", e); }
+}
+
 const s = {
   page:         { display: "flex", height: "100vh", fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", background: "#F5F7F5", overflow: "hidden" },
   sidebar:      { width: 290, minWidth: 290, background: G.dark, display: "flex", flexDirection: "column", overflow: "hidden" },
@@ -81,13 +110,47 @@ const s = {
 // ── Details Tab ───────────────────────────────────────────────────
 function DetailsTab({ seminar, onUpdate }) {
   const toast = useToast();
-  const [form, setForm]       = useState({ ...seminar });
+  const [form, setForm]       = useState({
+    ...seminar,
+    target_audience:    seminar.target_audience    || "all",
+    target_departments: seminar.target_departments  || [],
+    target_roles:       seminar.target_roles?.length ? seminar.target_roles : ["student"],
+  });
   const [saving, setSaving]   = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError]     = useState("");
   const [err,   setErr]       = useState({});
+  const [departments, setDepartments] = useState([]);
   const coverRef              = useRef();
   const setF = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErr(e => ({ ...e, [k]: null })); };
+
+  // Load distinct departments from profiles for the targeting dropdown
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { data } = await supabase.from("profiles").select("department").not("department", "is", null);
+      if (!active) return;
+      const unique = [...new Set((data || []).map(p => p.department).filter(Boolean))].sort();
+      setDepartments(unique);
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const toggleDept = (dept) => {
+    setForm(f => {
+      const has = f.target_departments.includes(dept);
+      return { ...f, target_departments: has ? f.target_departments.filter(d => d !== dept) : [...f.target_departments, dept] };
+    });
+  };
+
+  const toggleRole = (role) => {
+    setForm(f => {
+      const has = f.target_roles.includes(role);
+      // Prevent removing the last role — at least one must stay selected
+      if (has && f.target_roles.length === 1) return f;
+      return { ...f, target_roles: has ? f.target_roles.filter(r => r !== role) : [...f.target_roles, role] };
+    });
+  };
 
   const uploadCover = async (file) => {
     setUploading(true);
@@ -100,18 +163,8 @@ function DetailsTab({ seminar, onUpdate }) {
   };
 
   const save = async () => {
-    // ── Field-level validation ──
     const errors = V.all({
       title: V.title(form.title, "Title"),
-      max_participants: form.max_participants
-        ? (isNaN(Number(form.max_participants)) || Number(form.max_participants) < 1
-            ? "Max participants must be a number of at least 1."
-            : Number(form.max_participants) > 10000
-              ? "Max participants cannot exceed 10,000."
-              : !Number.isInteger(Number(form.max_participants))
-                ? "Max participants must be a whole number."
-                : null)
-        : null,
       venue: form.venue && form.venue.trim().length > 200
         ? "Venue must not exceed 200 characters."
         : null,
@@ -120,15 +173,10 @@ function DetailsTab({ seminar, onUpdate }) {
 
     setSaving(true); setError(""); setErr({});
 
-    // Fix dates — convert local datetime-local input to UTC ISO string
     let scheduledStart = null;
     let scheduledEnd   = null;
-    if (form.scheduled_start) {
-      scheduledStart = new Date(form.scheduled_start).toISOString();
-    }
-    if (form.scheduled_end) {
-      scheduledEnd = new Date(form.scheduled_end).toISOString();
-    }
+    if (form.scheduled_start) scheduledStart = new Date(form.scheduled_start).toISOString();
+    if (form.scheduled_end)   scheduledEnd   = new Date(form.scheduled_end).toISOString();
     if (scheduledStart && scheduledEnd && new Date(scheduledEnd) <= new Date(scheduledStart)) {
       setError("End date/time must be after start date/time."); setSaving(false); return;
     }
@@ -137,27 +185,99 @@ function DetailsTab({ seminar, onUpdate }) {
       scheduledEnd = d.toISOString();
     }
 
-    // Fix webinar_platform — strip to null if empty
-    const platform = form.webinar_platform?.trim() || null;
-
     const payload = {
-      title: form.title.trim(), description: form.description?.trim() || null,
-      seminar_type: form.seminar_type || "webinar", status: form.status || "upcoming",
-      cover_image_url: form.cover_image_url || null,
-      webinar_link: form.webinar_link?.trim() || null,
-      webinar_platform: platform,
-      venue: form.venue?.trim() || null,
-      scheduled_start: scheduledStart,
-      scheduled_end:   scheduledEnd,
-      max_participants: form.max_participants ? Number(form.max_participants) : null,
-      is_public: form.is_public ?? true,
+      title:               form.title.trim(),
+      description:         form.description?.trim() || null,
+      seminar_type:        form.seminar_type || "webinar",
+      status:               form.status || "upcoming",
+      cover_image_url:      form.cover_image_url || null,
+      venue:                form.venue?.trim() || null,
+      scheduled_start:      scheduledStart,
+      scheduled_end:        scheduledEnd,
+      is_public:            form.is_public ?? true,
+      target_audience:      form.target_audience || "all",
+      target_departments:   form.target_audience === "specific" ? form.target_departments : [],
+      target_roles:         form.target_audience === "specific" ? form.target_roles : [],
     };
+
     const wasPublic = !!seminar.is_public;
     const nowPublic = !!payload.is_public;
 
-    const { error: err } = await supabase.from("seminars").update(payload).eq("id", seminar.id);
+    const { error: saveErr } = await supabase.from("seminars").update(payload).eq("id", seminar.id);
+    if (saveErr) { setSaving(false); setError(saveErr.message); return; }
+
+    // ── Eligibility recalculation ──────────────────────────────────────
+    // If targeting became more restrictive, remove registrations that no
+    // longer qualify and notify those students.
+    const targetingChanged =
+      seminar.target_audience !== payload.target_audience ||
+      JSON.stringify((seminar.target_departments||[]).slice().sort()) !== JSON.stringify(payload.target_departments.slice().sort()) ||
+      JSON.stringify((seminar.target_roles||[]).slice().sort())       !== JSON.stringify(payload.target_roles.slice().sort());
+
+    if (targetingChanged && payload.target_audience === "specific") {
+      const { data: activeRegs } = await supabase
+        .from("seminar_registrations")
+        .select("id, user_id, profiles(full_name, department, email)")
+        .eq("seminar_id", seminar.id)
+        .neq("status", "cancelled");
+
+      // Determine each registrant's role from user_roles table
+      const userIds = (activeRegs || []).map(r => r.user_id);
+      let roleMap = {};
+      if (userIds.length > 0) {
+        const { data: roleRows } = await supabase
+          .from("user_roles").select("user_id, roles(name)").in("user_id", userIds);
+        (roleRows || []).forEach(rr => { roleMap[rr.user_id] = rr.roles?.name; });
+      }
+
+      const ineligible = (activeRegs || []).filter(r => {
+        const role = roleMap[r.user_id] || "student";
+        const dept = r.profiles?.department;
+        const roleOk = payload.target_roles.includes(role);
+        const deptOk = role === "guest" || role === "speaker"
+          ? true // guests/speakers aren't department-gated
+          : payload.target_departments.length === 0 || payload.target_departments.includes(dept);
+        return !(roleOk && deptOk);
+      });
+
+      if (ineligible.length > 0) {
+        await supabase.from("seminar_registrations")
+          .update({ status: "cancelled", removed_reason: "eligibility_changed" })
+          .in("id", ineligible.map(r => r.id));
+        for (const reg of ineligible) {
+          await sendRegistrationRemovedNotification(reg.user_id, payload.title);
+        }
+        toast(`${ineligible.length} registration(s) removed — no longer eligible under new targeting.`, "warning");
+      }
+    }
+
+    // ── Notify newly eligible students when seminar becomes public ──────
+    if (!wasPublic && nowPublic) {
+      let recipientsQuery = supabase.from("profiles").select("id, department").eq("is_active", true);
+      const { data: allProfiles } = await recipientsQuery;
+      let recipientIds = (allProfiles || []).map(p => p.id);
+
+      if (payload.target_audience === "specific") {
+        const { data: roleRows } = await supabase.from("user_roles").select("user_id, roles(name)");
+        const roleByUser = {};
+        (roleRows || []).forEach(rr => { roleByUser[rr.user_id] = rr.roles?.name; });
+        recipientIds = (allProfiles || [])
+          .filter(p => {
+            const role = roleByUser[p.id] || "student";
+            const roleOk = payload.target_roles.includes(role);
+            const deptOk = role === "guest" || role === "speaker"
+              ? true
+              : payload.target_departments.length === 0 || payload.target_departments.includes(p.department);
+            return roleOk && deptOk;
+          })
+          .map(p => p.id);
+      }
+      for (const uid of recipientIds) {
+        await insertSeminarNotification(uid, payload.title, seminar.id);
+      }
+    }
+
     setSaving(false);
-    if (err) { setError(err.message); return; }
     toast("Seminar saved successfully!", "success");
 
     if (wasPublic !== nowPublic) {
@@ -177,16 +297,18 @@ function DetailsTab({ seminar, onUpdate }) {
       <div style={s.coverBox} onClick={() => !uploading && coverRef.current?.click()}>
         {form.cover_image_url
           ? <img src={form.cover_image_url} alt="cover" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          : uploading ? <><div style={{ fontSize: 28 }}>⏳</div><div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Uploading…</div></>
-          : <><div style={{ fontSize: 36 }}><i className="bi bi-image me-1"/>️</div><div style={{ fontSize: 13, color: "#aaa", marginTop: 6 }}>Click to upload cover image</div></>
+          : uploading
+            ? <><div style={{ fontSize: 28 }}>⏳</div><div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Uploading…</div></>
+            : <><i className="bi bi-image" style={{ fontSize: 36, color: G.pale }}/><div style={{ fontSize: 13, color: "#aaa", marginTop: 6 }}>Click to upload cover image</div></>
         }
-        <input ref={coverRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => { if (e.target.files[0]) uploadCover(e.target.files[0]); e.target.value = ""; }} />
+        <input ref={coverRef} type="file" accept="image/*" style={{ display: "none" }}
+          onChange={e => { if (e.target.files[0]) uploadCover(e.target.files[0]); e.target.value = ""; }} />
       </div>
 
       <div style={s.card}>
         <div style={s.fg}>
           <label style={s.label}>Title *</label>
-          <input style={{...s.input, borderColor: err.title ? "#dc2626" : undefined}} value={form.title || ""} onChange={e => setF("title", e.target.value)} />
+          <input style={{ ...s.input, borderColor: err.title ? "#dc2626" : undefined }} value={form.title || ""} onChange={e => setF("title", e.target.value)} />
           <FieldError msg={err.title}/>
         </div>
         <div style={s.fg}>
@@ -211,11 +333,6 @@ function DetailsTab({ seminar, onUpdate }) {
               <option value="cancelled">Cancelled</option>
             </select>
           </div>
-          <div style={{ ...s.fg, flex: 1, minWidth: 130 }}>
-            <label style={s.label}>Max Participants</label>
-            <input style={{...s.input, borderColor: err.max_participants ? "#dc2626" : undefined}} type="number" min={1} value={form.max_participants || ""} onChange={e => setF("max_participants", e.target.value)} placeholder="Unlimited" />
-            <FieldError msg={err.max_participants}/>
-          </div>
         </div>
         <div style={s.row}>
           <div style={{ ...s.fg, flex: 1 }}>
@@ -231,31 +348,102 @@ function DetailsTab({ seminar, onUpdate }) {
               onChange={e => setF("scheduled_end", e.target.value)} />
           </div>
         </div>
-        {(form.seminar_type === "webinar" || form.seminar_type === "hybrid") && (
-          <div style={s.row}>
-            <div style={{ ...s.fg, flex: 2 }}>
-              <label style={s.label}>Webinar Link</label>
-              <input style={s.input} value={form.webinar_link || ""} onChange={e => setF("webinar_link", e.target.value)} placeholder="https://zoom.us/j/..." />
-            </div>
-            <div style={{ ...s.fg, flex: 1 }}>
-              <label style={s.label}>Platform</label>
-              <select style={s.select} value={form.webinar_platform || ""} onChange={e => setF("webinar_platform", e.target.value)}>
-                <option value="">— Select —</option>
-                <option value="zoom">Zoom</option>
-                <option value="gmeet">Google Meet</option>
-                <option value="teams">MS Teams</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-          </div>
-        )}
         {(form.seminar_type === "in_person" || form.seminar_type === "hybrid") && (
           <div style={s.fg}>
             <label style={s.label}>Venue</label>
-            <input style={{...s.input, borderColor: err.venue ? "#dc2626" : undefined}} value={form.venue || ""} onChange={e => setF("venue", e.target.value)} placeholder="e.g. CvSU Main Campus, Room 101" />
+            <input style={{ ...s.input, borderColor: err.venue ? "#dc2626" : undefined }} value={form.venue || ""} onChange={e => setF("venue", e.target.value)} placeholder="e.g. CvSU Main Campus, Room 101" />
             <FieldError msg={err.venue}/>
           </div>
         )}
+
+        {/* ── Target Audience ── */}
+        <div style={{ ...s.fg, background: G.wash, borderRadius: 10, padding: "16px 18px", border: `1px solid ${G.pale}` }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: G.dark, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="bi bi-people-fill" style={{ color: G.base }}/>Target Audience
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: form.target_audience === "specific" ? 14 : 0 }}>
+            <button onClick={() => setF("target_audience", "all")}
+              style={{ flex: 1, padding: "9px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 12,
+                border: `2px solid ${form.target_audience === "all" ? G.base : "#DDE8DD"}`,
+                background: form.target_audience === "all" ? "#fff" : "transparent",
+                color: form.target_audience === "all" ? G.dark : "#888",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <i className="bi bi-globe2"/>All Users
+            </button>
+            <button onClick={() => setF("target_audience", "specific")}
+              style={{ flex: 1, padding: "9px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 12,
+                border: `2px solid ${form.target_audience === "specific" ? G.base : "#DDE8DD"}`,
+                background: form.target_audience === "specific" ? "#fff" : "transparent",
+                color: form.target_audience === "specific" ? G.dark : "#888",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <i className="bi bi-funnel-fill"/>Specific Audience
+            </button>
+          </div>
+
+          {form.target_audience === "specific" && (
+            <>
+              {/* Role selection */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Eligible Roles
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {TARGET_ROLE_OPTIONS.map(r => {
+                    const active = form.target_roles.includes(r.value);
+                    return (
+                      <button key={r.value} onClick={() => toggleRole(r.value)}
+                        style={{ padding: "6px 12px", borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                          border: `1.5px solid ${active ? G.base : "#DDE8DD"}`,
+                          background: active ? G.base : "#fff", color: active ? "#fff" : "#888",
+                          display: "flex", alignItems: "center", gap: 5 }}>
+                        <i className={`bi ${r.icon}`}/>{r.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Department selection — only relevant for student/teacher/faculty */}
+              {form.target_roles.some(r => ["student","teacher","faculty"].includes(r)) && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    Eligible Departments <span style={{ fontWeight: 400, textTransform: "none" }}>(leave empty = all departments)</span>
+                  </div>
+                  {departments.length === 0 ? (
+                    <div style={{ fontSize: 12, color: "#aaa", fontStyle: "italic" }}>No departments found in student records yet.</div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxHeight: 140, overflowY: "auto" }}>
+                      {departments.map(dept => {
+                        const active = form.target_departments.includes(dept);
+                        return (
+                          <button key={dept} onClick={() => toggleDept(dept)}
+                            style={{ padding: "6px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                              border: `1.5px solid ${active ? G.base : "#DDE8DD"}`,
+                              background: active ? G.wash : "#fff", color: active ? G.dark : "#888" }}>
+                            {active && <i className="bi bi-check-lg me-1"/>}{dept}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {form.target_departments.length > 0 && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: G.base, fontWeight: 600 }}>
+                      <i className="bi bi-info-circle me-1"/>
+                      Only students from {form.target_departments.length} selected department{form.target_departments.length !== 1 ? "s" : ""} will see this seminar.
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {form.target_audience === "all" && (
+            <div style={{ fontSize: 12, color: "#888" }}>
+              <i className="bi bi-info-circle me-1"/>This seminar is visible to all active users regardless of role or department.
+            </div>
+          )}
+        </div>
+
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, fontWeight: 600, color: G.dark }}>
             <input type="checkbox" checked={!!form.is_public} onChange={e => setF("is_public", e.target.checked)} style={{ width: 16, height: 16, accentColor: G.base }} />
@@ -264,6 +452,180 @@ function DetailsTab({ seminar, onUpdate }) {
           <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Seminar"}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Attendees Tab — eligible audience + registration status ────────
+function AttendeesTab({ seminar }) {
+  const [eligible, setEligible] = useState([]);
+  const [regMap,   setRegMap]   = useState({}); // userId -> registration row
+  const [loading,  setLoading]  = useState(true);
+  const [search,   setSearch]   = useState("");
+  const [filter,   setFilter]   = useState("all"); // all | registered | not_registered
+
+  const load = async () => {
+    setLoading(true);
+
+    // Determine eligible profiles based on seminar targeting
+    let profilesQuery = supabase.from("profiles").select("id, full_name, email, department, year_level, student_id").eq("is_active", true);
+    const { data: allProfiles } = await profilesQuery;
+
+    let eligibleProfiles = allProfiles || [];
+
+    if (seminar.target_audience === "specific") {
+      const { data: roleRows } = await supabase.from("user_roles").select("user_id, roles(name)");
+      const roleByUser = {};
+      (roleRows || []).forEach(rr => { roleByUser[rr.user_id] = rr.roles?.name; });
+
+      const targetRoles = seminar.target_roles?.length ? seminar.target_roles : ["student"];
+      const targetDepts = seminar.target_departments || [];
+
+      eligibleProfiles = (allProfiles || []).filter(p => {
+        const role = roleByUser[p.id] || "student";
+        const roleOk = targetRoles.includes(role);
+        const deptOk = role === "guest" || role === "speaker"
+          ? true
+          : targetDepts.length === 0 || targetDepts.includes(p.department);
+        return roleOk && deptOk;
+      });
+    }
+
+    // Load registrations for this seminar to cross-reference
+    const { data: regs } = await supabase
+      .from("seminar_registrations")
+      .select("*")
+      .eq("seminar_id", seminar.id);
+
+    const map = {};
+    (regs || []).forEach(r => { map[r.user_id] = r; });
+
+    setEligible(eligibleProfiles);
+    setRegMap(map);
+    setLoading(false);
+  };
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [seminar.id, seminar.target_audience, JSON.stringify(seminar.target_departments), JSON.stringify(seminar.target_roles)]);
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading eligible attendees…</div>;
+
+  const registeredCount = eligible.filter(p => regMap[p.id] && regMap[p.id].status !== "cancelled").length;
+  const notRegisteredCount = eligible.length - registeredCount;
+
+  const filtered = eligible.filter(p => {
+    const reg = regMap[p.id];
+    const isRegistered = reg && reg.status !== "cancelled";
+    const matchSearch = !search ||
+      (p.full_name || "").toLowerCase().includes(search.toLowerCase()) ||
+      (p.email || "").toLowerCase().includes(search.toLowerCase());
+    const matchFilter = filter === "all" ? true : filter === "registered" ? isRegistered : !isRegistered;
+    return matchSearch && matchFilter;
+  });
+
+  return (
+    <div>
+      {/* Targeting summary banner */}
+      <div style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18, display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <i className="bi bi-people-fill" style={{ color: G.base, fontSize: 16, marginTop: 1 }}/>
+        <div style={{ fontSize: 13, color: G.dark }}>
+          {seminar.target_audience === "specific" ? (
+            <>
+              <strong>Targeted audience:</strong>{" "}
+              {(seminar.target_roles?.length ? seminar.target_roles : ["student"]).map(r => TARGET_ROLE_OPTIONS.find(o=>o.value===r)?.label || r).join(", ")}
+              {seminar.target_departments?.length > 0 && (
+                <> from <strong>{seminar.target_departments.join(", ")}</strong></>
+              )}
+              {(!seminar.target_departments || seminar.target_departments.length === 0) && (
+                <> from <strong>all departments</strong></>
+              )}
+            </>
+          ) : (
+            <><strong>Open to all users</strong> — no role or department restrictions.</>
+          )}
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+        <div style={s.statCard(G.base)}>
+          <div style={{ ...s.statNum, color: G.base, fontSize: 22 }}>{eligible.length}</div>
+          <div style={s.statLabel}>Eligible</div>
+        </div>
+        <div style={s.statCard("#16a34a")}>
+          <div style={{ ...s.statNum, color: "#16a34a", fontSize: 22 }}>{registeredCount}</div>
+          <div style={s.statLabel}>Registered</div>
+        </div>
+        <div style={s.statCard("#a16207")}>
+          <div style={{ ...s.statNum, color: "#a16207", fontSize: 22 }}>{notRegisteredCount}</div>
+          <div style={s.statLabel}>Not Yet Registered</div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or email…"
+          style={{ ...s.input, maxWidth: 280 }} />
+        {[["all","All"],["registered","Registered"],["not_registered","Not Registered"]].map(([v,l]) => (
+          <button key={v} onClick={() => setFilter(v)}
+            style={{ padding: "6px 14px", borderRadius: 20, border: `1.5px solid ${filter===v?G.base:"#DDE8DD"}`, background: filter===v?G.wash:"#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: filter===v?G.dark:"#888" }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {eligible.length === 0 ? (
+        <div style={s.emptyBox}>
+          <i className="bi bi-person-x d-block mb-2" style={{ fontSize: 40, color: G.pale }}/>
+          <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No eligible users found</div>
+          <div style={{ fontSize: 13, color: "#aaa" }}>
+            {seminar.target_audience === "specific"
+              ? "No active users match the current targeting criteria. Adjust the target audience in the Details tab."
+              : "No active users exist in the system yet."}
+          </div>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "40px 0", color: "#aaa" }}>No results match your search/filter.</div>
+      ) : (
+        <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #DDE8DD", overflow: "hidden" }}>
+          <table style={s.table}>
+            <thead>
+              <tr>
+                <th style={s.th}>Name</th>
+                <th style={s.th}>Department</th>
+                <th style={s.th}>Email</th>
+                <th style={s.th}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(p => {
+                const reg = regMap[p.id];
+                const isRegistered = reg && reg.status !== "cancelled";
+                const wasRemoved = reg && reg.status === "cancelled" && reg.removed_reason === "eligibility_changed";
+                return (
+                  <tr key={p.id}>
+                    <td style={s.td}>
+                      <div style={{ fontWeight: 600, color: G.dark }}>{p.full_name || "—"}</div>
+                      <div style={{ fontSize: 11, color: "#aaa" }}>{p.student_id || "—"}</div>
+                    </td>
+                    <td style={s.td}>{p.department || "—"}{p.year_level ? ` · Yr ${p.year_level}` : ""}</td>
+                    <td style={s.td}>{p.email}</td>
+                    <td style={s.td}>
+                      {isRegistered ? (
+                        <span style={s.tag("green")}><i className="bi bi-check-circle-fill me-1"/>Registered</span>
+                      ) : wasRemoved ? (
+                        <span style={s.tag("red")}><i className="bi bi-x-circle-fill me-1"/>Removed (ineligible)</span>
+                      ) : (
+                        <span style={s.tag("yellow")}>Not Registered</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -277,12 +639,8 @@ const SEMINAR_ROLES = [
   { value: "staff",         label: "Staff",         color: "blue"   },
 ];
 
-function roleColor(role) {
-  return SEMINAR_ROLES.find(r => r.value === role)?.color || "blue";
-}
-function roleLabel(role) {
-  return SEMINAR_ROLES.find(r => r.value === role)?.label || role || "Student";
-}
+function roleColor(role) { return SEMINAR_ROLES.find(r => r.value === role)?.color || "blue"; }
+function roleLabel(role) { return SEMINAR_ROLES.find(r => r.value === role)?.label || role || "Student"; }
 
 function RegistrationsTab({ seminar }) {
   const [regs, setRegs]         = useState([]);
@@ -312,7 +670,7 @@ function RegistrationsTab({ seminar }) {
 
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
 
-  const active = regs.filter(r => r.status !== "cancelled");
+  const active   = regs.filter(r => r.status !== "cancelled");
   const filtered = regs.filter(r => {
     const matchSearch = !search || (r.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) || (r.profiles?.email || "").toLowerCase().includes(search.toLowerCase());
     const matchRole   = roleFilter === "all" || (r.role || "student") === roleFilter;
@@ -329,10 +687,9 @@ function RegistrationsTab({ seminar }) {
       {/* Stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
-          { label: "Total", value: regs.length, color: G.base },
-          { label: "Active", value: active.length, color: "#16a34a" },
+          { label: "Total",     value: regs.length,                                    color: G.base    },
+          { label: "Active",    value: active.length,                                  color: "#16a34a" },
           { label: "Cancelled", value: regs.filter(r => r.status === "cancelled").length, color: "#dc2626" },
-          { label: "Capacity", value: seminar.max_participants ? `${active.length}/${seminar.max_participants}` : "Unlimited", color: "#2563eb" },
         ].map(stat => (
           <div key={stat.label} style={s.statCard(stat.color)}>
             <div style={{ ...s.statNum, color: stat.color, fontSize: 22 }}>{stat.value}</div>
@@ -391,10 +748,8 @@ function RegistrationsTab({ seminar }) {
                       <div style={{ fontSize: 11, color: "#aaa" }}>{r.profiles?.student_id} · {r.profiles?.email}</div>
                     </td>
                     <td style={s.td}>{r.profiles?.department || "—"} · Yr {r.profiles?.year_level || "—"}</td>
-                    <td style={{...s.td, fontSize:12}}>{formatDate(r.registered_at)}</td>
-                    <td style={s.td}>
-                      <span style={s.tag(roleColor(currentRole))}>{roleLabel(currentRole)}</span>
-                    </td>
+                    <td style={{ ...s.td, fontSize: 12 }}>{formatDate(r.registered_at)}</td>
+                    <td style={s.td}><span style={s.tag(roleColor(currentRole))}>{roleLabel(currentRole)}</span></td>
                     <td style={s.td}>
                       <select value={currentRole} onChange={e => updateRole(r.id, e.target.value)}
                         style={{ padding: "6px 10px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12, outline: "none", cursor: "pointer", background: "#fff" }}>
@@ -416,12 +771,12 @@ function RegistrationsTab({ seminar }) {
 
 // ── Evaluation Fields ─────────────────────────────────────────────
 const EVAL_FIELDS = [
-  { key: "q_content",      label: "Content Quality",          desc: "Relevance and accuracy of the seminar content" },
-  { key: "q_speaker",      label: "Speaker Effectiveness",    desc: "Clarity, knowledge, and delivery of the speaker(s)" },
-  { key: "q_organization", label: "Event Organization",       desc: "Logistics, time management, and flow of the event" },
-  { key: "q_relevance",    label: "Relevance to GAD",         desc: "How relevant was this activity to gender and development?" },
-  { key: "q_materials",    label: "Materials & Resources",    desc: "Quality of presentation materials and handouts" },
-  { key: "q_overall",      label: "Overall Satisfaction",     desc: "Your overall experience with this seminar" },
+  { key: "q_content",      label: "Content Quality",       desc: "Relevance and accuracy of the seminar content" },
+  { key: "q_speaker",      label: "Speaker Effectiveness", desc: "Clarity, knowledge, and delivery of the speaker(s)" },
+  { key: "q_organization", label: "Event Organization",    desc: "Logistics, time management, and flow of the event" },
+  { key: "q_relevance",    label: "Relevance to GAD",      desc: "How relevant was this activity to gender and development?" },
+  { key: "q_materials",    label: "Materials & Resources", desc: "Quality of presentation materials and handouts" },
+  { key: "q_overall",      label: "Overall Satisfaction",  desc: "Your overall experience with this seminar" },
 ];
 
 function StarRating({ value }) {
@@ -430,17 +785,17 @@ function StarRating({ value }) {
     <span>
       {[1,2,3,4,5].map(i => (
         <i key={i} className={`bi bi-star${i<=stars?"-fill":""}`}
-          style={{ color: i<=stars?"#f59e0b":"#e5e7eb", fontSize:14, marginRight:2 }} />
+          style={{ color: i<=stars?"#f59e0b":"#e5e7eb", fontSize: 14, marginRight: 2 }} />
       ))}
-      <span style={{ fontSize:12, color:"#888", marginLeft:4 }}>({value?.toFixed(1)||"—"})</span>
+      <span style={{ fontSize: 12, color: "#888", marginLeft: 4 }}>({value?.toFixed(1)||"—"})</span>
     </span>
   );
 }
 
 function EvaluationsTab({ seminar }) {
-  const [evals, setEvals]         = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [selected, setSelected]   = useState(null);
+  const [evals, setEvals]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [selected, setSelected] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -458,7 +813,7 @@ function EvaluationsTab({ seminar }) {
 
   const avg = (key) => {
     const vals = evals.map(e => e[key]).filter(v => v != null);
-    return vals.length ? (vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(1) : "—";
+    return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : "—";
   };
   const overallAvg = evals.length > 0
     ? (EVAL_FIELDS.map(f => parseFloat(avg(f.key))||0).reduce((a,b)=>a+b,0)/EVAL_FIELDS.length).toFixed(1)
@@ -468,15 +823,14 @@ function EvaluationsTab({ seminar }) {
 
   return (
     <div>
-      {/* Summary stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <div style={s.statCard(G.base)}>
           <div style={{ ...s.statNum, color: G.base }}>{evals.length}</div>
           <div style={s.statLabel}>Responses</div>
         </div>
         <div style={s.statCard("#f59e0b")}>
-          <div style={{ ...s.statNum, color: "#f59e0b", fontSize:22 }}>
-            <i className="bi bi-star-fill me-1" style={{ fontSize:18 }}/>{overallAvg}
+          <div style={{ ...s.statNum, color: "#f59e0b", fontSize: 22 }}>
+            <i className="bi bi-star-fill me-1" style={{ fontSize: 18 }}/>{overallAvg}
           </div>
           <div style={s.statLabel}>Overall Average</div>
         </div>
@@ -484,13 +838,12 @@ function EvaluationsTab({ seminar }) {
 
       {evals.length === 0 ? (
         <div style={s.emptyBox}>
-          <i className="bi bi-clipboard-data d-block mb-2" style={{ fontSize:40, color:G.pale }}/>
+          <i className="bi bi-clipboard-data d-block mb-2" style={{ fontSize: 40, color: G.pale }}/>
           <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No evaluations submitted yet</div>
           <div style={{ fontSize: 13, color: "#aaa" }}>Evaluation forms submitted by participants will appear here.</div>
         </div>
       ) : (
         <>
-          {/* Per-question averages card */}
           <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #DDE8DD", padding: "20px 24px", marginBottom: 20 }}>
             <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 14 }}>
               <i className="bi bi-bar-chart-line me-2" style={{ color: G.base }}/>Evaluation Summary
@@ -515,7 +868,6 @@ function EvaluationsTab({ seminar }) {
             </div>
           </div>
 
-          {/* Individual responses */}
           <div style={{ fontWeight: 700, color: G.dark, fontSize: 14, marginBottom: 12 }}>
             <i className="bi bi-person-lines-fill me-2" style={{ color: G.base }}/>Individual Responses
           </div>
@@ -534,7 +886,7 @@ function EvaluationsTab({ seminar }) {
                   </div>
                 </div>
                 {selected?.id === e.id && (
-                  <div style={{ padding: "16px" }}>
+                  <div style={{ padding: 16 }}>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 12, marginBottom: 12 }}>
                       {EVAL_FIELDS.map(f => (
                         <div key={f.key} style={{ background: "#F5F7F5", borderRadius: 8, padding: "10px 12px" }}>
@@ -561,17 +913,11 @@ function EvaluationsTab({ seminar }) {
 }
 
 // ── Jitsi Meeting Modal ───────────────────────────────────────────
-// Wrapped in memo + only re-renders if seminar.id changes (not the whole object).
-// This is critical: if the parent SeminarsPage re-renders (realtime updates,
-// tab switches, reload after save) and passes a NEW seminar object reference
-// with the SAME id, React must NOT remount the iframe — that drops the
-// WebRTC connection and kicks everyone out of the meeting.
 const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClose }) {
   const roomName = `bloom-gad-${seminar.id}`;
   const jitsiUrl = `https://meet.jit.si/${roomName}`;
   const [copied, setCopied] = useState(false);
 
-  // Build the iframe src ONCE per room — never recompute on re-render
   const iframeSrc = useRef(
     `${jitsiUrl}#userInfo.displayName="GADRC Admin (Moderator)"&config.startWithVideoMuted=false&config.startWithAudioMuted=false&interfaceConfig.SHOW_JITSI_WATERMARK=false&interfaceConfig.TOOLBAR_BUTTONS=["microphone","camera","closedcaptions","desktop","fullscreen","fodeviceselection","hangup","chat","recording","livestreaming","raisehand","videoquality","filmstrip","tileview","participants-pane","shortcuts","mute-everyone","security"]`
   ).current;
@@ -584,9 +930,7 @@ const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClo
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 2000, display: "flex", flexDirection: "column" }}>
-      {/* Header bar */}
       <div style={{ background: "#1A2E1A", padding: "12px 20px", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-        {/* Left: title */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
           <div style={{ width: 36, height: 36, borderRadius: 8, background: "rgba(255,255,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <i className="bi bi-camera-video-fill" style={{ color: "#4CAF50", fontSize: 16 }}/>
@@ -600,28 +944,20 @@ const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClo
             </div>
           </div>
         </div>
-
-        {/* Copy join link */}
         <button onClick={copyLink}
           style={{ padding: "7px 14px", background: copied ? "#16a34a" : "rgba(255,255,255,0.12)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, transition: "background .2s" }}>
           <i className={`bi bi-${copied ? "check-circle-fill" : "link-45deg"}`}/>
           {copied ? "Copied!" : "Copy Join Link"}
         </button>
-
-        {/* Open in new tab */}
         <a href={jitsiUrl} target="_blank" rel="noreferrer"
           style={{ padding: "7px 14px", background: "rgba(255,255,255,0.12)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
           <i className="bi bi-box-arrow-up-right"/> Open in Tab
         </a>
-
-        {/* Close */}
         <button onClick={onClose}
           style={{ padding: "7px 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
           <i className="bi bi-x-circle"/> End & Close
         </button>
       </div>
-
-      {/* Info bar */}
       <div style={{ background: "#0f1f0f", padding: "8px 20px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
           <i className="bi bi-info-circle"/>
@@ -631,9 +967,6 @@ const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClo
           {jitsiUrl}
         </code>
       </div>
-
-      {/* Jitsi iframe — key is the room name so React never remounts it
-          unless the meeting itself actually changes */}
       <iframe
         key={roomName}
         src={iframeSrc}
@@ -647,16 +980,16 @@ const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClo
 
 // ── Main Page ─────────────────────────────────────────────────────
 export default function SeminarsPage() {
-  const [seminars, setSeminars] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [tab, setTab]           = useState("details");
-  const [loading, setLoading]   = useState(true);
-  const [search, setSearch]     = useState("");
-  const [showAdd, setShowAdd]   = useState(false);
-  const [addForm, setAddForm]   = useState({});
+  const [seminars, setSeminars]   = useState([]);
+  const [selected, setSelected]   = useState(null);
+  const [tab, setTab]             = useState("details");
+  const [loading, setLoading]     = useState(true);
+  const [search, setSearch]       = useState("");
+  const [showAdd, setShowAdd]     = useState(false);
+  const [addForm, setAddForm]     = useState({});
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError]   = useState("");
-  const [confirm, setConfirm] = useState(null);
+  const [confirm, setConfirm]     = useState(null);
   const [jitsiRoom, setJitsiRoom] = useState(null);
 
   useEffect(() => {
@@ -680,7 +1013,7 @@ export default function SeminarsPage() {
 
   const createSeminar = async () => {
     if (!addForm.title?.trim()) { setAddError("Title is required — must be at least 3 characters."); return; }
-    if (addForm.title.trim().length < 3) { setAddError("Title must be at least 3 characters."); return; }
+    if (addForm.title.trim().length < 3)   { setAddError("Title must be at least 3 characters."); return; }
     if (addForm.title.trim().length > 150) { setAddError("Title must not exceed 150 characters."); return; }
     setAddSaving(true); setAddError("");
     const { data: { user } } = await supabase.auth.getUser();
@@ -688,6 +1021,7 @@ export default function SeminarsPage() {
       title: addForm.title.trim(),
       seminar_type: addForm.seminar_type || "webinar",
       status: "upcoming", is_public: true, created_by: user?.id,
+      target_audience: "all", target_departments: [], target_roles: [],
     }).select("*, seminar_registrations(count)").single();
     setAddSaving(false);
     if (err) { setAddError(err.message); return; }
@@ -698,18 +1032,23 @@ export default function SeminarsPage() {
   };
 
   const deleteSeminar = async () => {
-    setConfirm({ title:"Delete Seminar", message:`Delete "${selected?.title}"? All registrations and evaluations will be removed.`, confirmLabel:"Delete", danger:true,
+    setConfirm({
+      title: "Delete Seminar",
+      message: `Delete "${selected?.title}"? All registrations and evaluations will be removed.`,
+      confirmLabel: "Delete", danger: true,
       onConfirm: async () => {
         await supabase.from("seminars").delete().eq("id", selected.id);
         logActivity("seminar_deleted", { seminar_id: selected.id, title: selected.title });
-    const rest = seminars.filter(s => s.id !== selected.id);
-    setSeminars(rest); setSelected(rest[0] || null);
-      setConfirm(null); }});
+        const rest = seminars.filter(s => s.id !== selected.id);
+        setSeminars(rest); setSelected(rest[0] || null);
+        setConfirm(null);
+      }
+    });
   };
 
   const statusColor = (s) => s === "ongoing" ? "green" : s === "completed" ? "blue" : s === "cancelled" ? "red" : "yellow";
-  const regCount = (s) => s?.seminar_registrations?.[0]?.count || 0;
-  const filtered = seminars.filter(s => (s.title || "").toLowerCase().includes(search.toLowerCase()));
+  const regCount    = (s) => s?.seminar_registrations?.[0]?.count || 0;
+  const filtered    = seminars.filter(s => (s.title || "").toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div style={s.page}>
@@ -719,26 +1058,30 @@ export default function SeminarsPage() {
           <div style={s.sidebarTitle}><i className="bi bi-mortarboard me-1"/> Seminars</div>
           <div style={s.sidebarSub}>{seminars.length} total</div>
         </div>
-        <button style={s.addBtn} onClick={() => { setAddForm({ seminar_type: "webinar" }); setAddError(""); setShowAdd(true); }}>＋ New Seminar</button>
+        <button style={s.addBtn} onClick={() => { setAddForm({ seminar_type: "webinar" }); setAddError(""); setShowAdd(true); }}>
+          ＋ New Seminar
+        </button>
         <input style={s.searchInput} placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} />
         <div style={s.list}>
-          {loading ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>Loading…</div>
-            : filtered.length === 0 ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>No seminars found</div>
-            : filtered.map(sem => (
-              <div key={sem.id} style={s.item(selected?.id === sem.id)} onClick={() => { setSelected(sem); setTab("details"); }}>
-                <div style={s.itemIcon}>
-                  {sem.cover_image_url ? <img src={sem.cover_image_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : ""}
+          {loading
+            ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>Loading…</div>
+            : filtered.length === 0
+              ? <div style={{ padding: "20px 16px", color: G.pale, fontSize: 13 }}>No seminars found</div>
+              : filtered.map(sem => (
+                <div key={sem.id} style={s.item(selected?.id === sem.id)} onClick={() => { setSelected(sem); setTab("details"); }}>
+                  <div style={s.itemIcon}>
+                    {sem.cover_image_url && <img src={sem.cover_image_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt="" />}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={s.itemTitle}>{sem.title}</div>
+                    <div style={s.itemMeta}>{formatDateShort(sem.scheduled_start)} · {regCount(sem)} registered</div>
+                  </div>
+                  <div style={s.pubBadge(sem.is_public)}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: sem.is_public ? "#16a34a" : "#a16207", display: "inline-block" }}/>
+                    {sem.is_public ? "Public" : "Private"}
+                  </div>
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={s.itemTitle}>{sem.title}</div>
-                  <div style={s.itemMeta}>{formatDateShort(sem.scheduled_start)} · {regCount(sem)} registered</div>
-                </div>
-                <div style={s.pubBadge(sem.is_public)}>
-                  <span style={{width:6,height:6,borderRadius:"50%",background:sem.is_public?"#16a34a":"#a16207",display:"inline-block"}}/>
-                  {sem.is_public?"Public":"Private"}
-                </div>
-              </div>
-            ))
+              ))
           }
         </div>
       </div>
@@ -747,7 +1090,7 @@ export default function SeminarsPage() {
       <div style={s.main}>
         {!selected ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", flex: 1, gap: 12, color: "#aaa" }}>
-            <span style={{ fontSize: 52 }}><i className="bi bi-mortarboard me-1"/></span>
+            <i className="bi bi-mortarboard" style={{ fontSize: 52, color: G.pale }}/>
             <span style={{ fontWeight: 700, color: G.dark, fontSize: 16 }}>Select a seminar or create a new one</span>
           </div>
         ) : (
@@ -761,10 +1104,8 @@ export default function SeminarsPage() {
               </div>
               <span style={s.tag(statusColor(selected.status))}>{selected.status || "upcoming"}</span>
               <span style={s.tag(selected.is_public ? "green" : "yellow")}>{selected.is_public ? "Public" : "Private"}</span>
-              {/* Start Meeting button — only for webinar/hybrid seminars */}
               {(selected.seminar_type === "webinar" || selected.seminar_type === "hybrid") && selected.status !== "cancelled" && selected.status !== "completed" && (
-                <button
-                  onClick={() => setJitsiRoom(selected)}
+                <button onClick={() => setJitsiRoom(selected)}
                   style={{ padding: "7px 14px", background: "linear-gradient(135deg,#1A2E1A,#2D6A2D)", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <i className="bi bi-camera-video-fill"/> Start Meeting
                 </button>
@@ -772,12 +1113,13 @@ export default function SeminarsPage() {
               <button style={s.btnDanger} onClick={deleteSeminar}><i className="bi bi-trash me-1"/> Delete</button>
             </div>
             <div style={s.tabBar}>
-              {[["details", "Details"], ["registrations", "Registrations"], ["evaluations", "Evaluations"]].map(([v, l]) => (
+              {[["details", "Details"], ["attendees", "Attendees"], ["registrations", "Registrations"], ["evaluations", "Evaluations"]].map(([v, l]) => (
                 <div key={v} style={s.tab(tab === v)} onClick={() => setTab(v)}>{l}</div>
               ))}
             </div>
             <div style={s.content}>
               {tab === "details"       && <DetailsTab       key={selected.id + "_d"} seminar={selected} onUpdate={reload} />}
+              {tab === "attendees"     && <AttendeesTab     key={selected.id + "_a"} seminar={selected} />}
               {tab === "registrations" && <RegistrationsTab key={selected.id + "_r"} seminar={selected} />}
               {tab === "evaluations"   && <EvaluationsTab   key={selected.id + "_e"} seminar={selected} />}
             </div>
@@ -785,10 +1127,10 @@ export default function SeminarsPage() {
         )}
       </div>
 
-      {confirm&&<ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
+      {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)}/>}
 
-      {/* ── Jitsi Meeting Modal ── */}
-      {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={()=>setJitsiRoom(null)}/>}
+      {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={() => setJitsiRoom(null)}/>}
+
       {/* Create Modal */}
       {showAdd && (
         <div style={s.overlay}>
@@ -800,8 +1142,10 @@ export default function SeminarsPage() {
             <div style={s.mBody}>
               {addError && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{addError}</div>}
               <div style={s.fg}>
-                <label style={s.label}>Title * <span style={{fontWeight:400,color:"#aaa",textTransform:"none"}}>({(addForm.title||"").length}/150)</span></label>
-                <input style={{...s.input, borderColor: addError && !addForm.title?.trim() ? "#dc2626" : undefined}} value={addForm.title || ""} onChange={e => setAddForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Gender Sensitivity Seminar" autoFocus />
+                <label style={s.label}>Title * <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>({(addForm.title||"").length}/150)</span></label>
+                <input style={{ ...s.input, borderColor: addError && !addForm.title?.trim() ? "#dc2626" : undefined }}
+                  value={addForm.title || ""} onChange={e => setAddForm(f => ({ ...f, title: e.target.value }))}
+                  placeholder="e.g. Gender Sensitivity Seminar" autoFocus />
               </div>
               <div style={s.fg}>
                 <label style={s.label}>Type</label>
@@ -812,12 +1156,14 @@ export default function SeminarsPage() {
                 </select>
               </div>
               <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
-                <i className="bi bi-lightbulb me-1"/> Fill in the full details (date, link, venue) after creating.
+                <i className="bi bi-lightbulb me-1"/> Fill in the full details (date, venue) after creating.
               </div>
             </div>
             <div style={s.mFooter}>
               <button style={s.btnSecondary} onClick={() => setShowAdd(false)}>Cancel</button>
-              <button style={{ ...s.btnPrimary, opacity: addSaving ? 0.7 : 1 }} onClick={createSeminar} disabled={addSaving}>{addSaving ? "Creating…" : "Create Seminar"}</button>
+              <button style={{ ...s.btnPrimary, opacity: addSaving ? 0.7 : 1 }} onClick={createSeminar} disabled={addSaving}>
+                {addSaving ? "Creating…" : "Create Seminar"}
+              </button>
             </div>
           </div>
         </div>
