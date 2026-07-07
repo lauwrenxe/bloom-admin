@@ -234,9 +234,7 @@ function DetailsTab({ seminar, onUpdate }) {
         const role = roleMap[r.user_id] || "student";
         const dept = r.profiles?.department;
         const roleOk = payload.target_roles.includes(role);
-        const deptOk = role === "guest" || role === "speaker"
-          ? true // guests/speakers aren't department-gated
-          : payload.target_departments.length === 0 || payload.target_departments.includes(dept);
+        const deptOk = payload.target_departments.length === 0 || payload.target_departments.includes(dept);
         return !(roleOk && deptOk);
       });
 
@@ -265,9 +263,7 @@ function DetailsTab({ seminar, onUpdate }) {
           .filter(p => {
             const role = roleByUser[p.id] || "student";
             const roleOk = payload.target_roles.includes(role);
-            const deptOk = role === "guest" || role === "speaker"
-              ? true
-              : payload.target_departments.length === 0 || payload.target_departments.includes(p.department);
+            const deptOk = payload.target_departments.length === 0 || payload.target_departments.includes(p.department);
             return roleOk && deptOk;
           })
           .map(p => p.id);
@@ -403,9 +399,8 @@ function DetailsTab({ seminar, onUpdate }) {
                 </div>
               </div>
 
-              {/* Department selection — only relevant for student/teacher/faculty */}
-              {form.target_roles.some(r => ["student","teacher","faculty"].includes(r)) && (
-                <div>
+              {/* Department selection applies uniformly to all selected roles, with no exceptions */}
+              <div>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
                     Eligible Departments <span style={{ fontWeight: 400, textTransform: "none" }}>(leave empty = all departments)</span>
                   </div>
@@ -429,11 +424,10 @@ function DetailsTab({ seminar, onUpdate }) {
                   {form.target_departments.length > 0 && (
                     <div style={{ marginTop: 8, fontSize: 11, color: G.base, fontWeight: 600 }}>
                       <i className="bi bi-info-circle me-1"/>
-                      Only students from {form.target_departments.length} selected department{form.target_departments.length !== 1 ? "s" : ""} will see this seminar.
+                      Only users from {form.target_departments.length} selected department{form.target_departments.length !== 1 ? "s" : ""} will see this seminar.
                     </div>
                   )}
                 </div>
-              )}
             </>
           )}
 
@@ -484,9 +478,11 @@ function AttendeesTab({ seminar }) {
       eligibleProfiles = (allProfiles || []).filter(p => {
         const role = roleByUser[p.id] || "student";
         const roleOk = targetRoles.includes(role);
-        const deptOk = role === "guest" || role === "speaker"
-          ? true
-          : targetDepts.length === 0 || targetDepts.includes(p.department);
+        // Department filter applies to everyone uniformly. If no departments
+        // were selected, that means "all departments" — otherwise the
+        // person's department must be in the selected list, no exceptions
+        // for any particular role.
+        const deptOk = targetDepts.length === 0 || targetDepts.includes(p.department);
         return roleOk && deptOk;
       });
     }
@@ -1105,7 +1101,13 @@ export default function SeminarsPage() {
               <span style={s.tag(statusColor(selected.status))}>{selected.status || "upcoming"}</span>
               <span style={s.tag(selected.is_public ? "green" : "yellow")}>{selected.is_public ? "Public" : "Private"}</span>
               {(selected.seminar_type === "webinar" || selected.seminar_type === "hybrid") && selected.status !== "cancelled" && selected.status !== "completed" && (
-                <button onClick={() => setJitsiRoom(selected)}
+                <button onClick={async () => {
+                    // Set status to ongoing so students can join
+                    await supabase.from("seminars").update({ status: "ongoing" }).eq("id", selected.id);
+                    setSeminars(ss => ss.map(s => s.id === selected.id ? { ...s, status: "ongoing" } : s));
+                    setSelected(s => ({ ...s, status: "ongoing" }));
+                    setJitsiRoom(selected);
+                  }}
                   style={{ padding: "7px 14px", background: "linear-gradient(135deg,#1A2E1A,#2D6A2D)", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <i className="bi bi-camera-video-fill"/> Start Meeting
                 </button>
@@ -1129,7 +1131,13 @@ export default function SeminarsPage() {
 
       {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)}/>}
 
-      {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={() => setJitsiRoom(null)}/>}
+      {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={async () => {
+        // Set status to completed when meeting ends
+        await supabase.from("seminars").update({ status: "completed" }).eq("id", jitsiRoom.id);
+        setSeminars(ss => ss.map(s => s.id === jitsiRoom.id ? { ...s, status: "completed" } : s));
+        setSelected(s => s?.id === jitsiRoom.id ? { ...s, status: "completed" } : s);
+        setJitsiRoom(null);
+      }}/>}
 
       {/* Create Modal */}
       {showAdd && (
