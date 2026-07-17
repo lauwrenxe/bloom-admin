@@ -5,6 +5,30 @@ import { useToast } from "./App.jsx";
 import { V, FieldError } from "./lib/Validate.jsx";
 import { logActivity } from "./lib/activityLog.js";
 
+
+// ── Publish notification helper ───────────────────────────────────────────────
+async function sendPublishNotifications(title, notifType, referenceId) {
+  try {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("is_active", true);
+    if (!profiles?.length) return;
+    const notifs = profiles.map(p => ({
+      user_id:        p.id,
+      type:           notifType,
+      title:          notifType === "new_module" ? "New Module Available" : "New Announcement",
+      body:           `"${title}" has been published. Check it out now!`,
+      reference_type: notifType === "new_module" ? "module" : "announcement",
+      reference_id:   referenceId,
+      is_read:        false,
+    }));
+    for (let i = 0; i < notifs.length; i += 50) {
+      await supabase.from("notifications").insert(notifs.slice(i, i + 50));
+    }
+  } catch (e) { console.error("sendPublishNotifications failed:", e); }
+}
+
 const G = {
   dark:  "#2d4a18", mid:   "#3a5a20", base:  "#5a7a3a",
   light: "#8ab060", pale:  "#b5cc8e", wash:  "#e8f2d8",
@@ -214,8 +238,14 @@ export default function AnnouncementsPage() {
       .update({ published_at: newVal })
       .eq("id", a.id);
     if (!err) {
-      toast(newVal ? "Announcement published." : "Announcement unpublished.", "success");
-      logActivity(newVal ? "announcement_published" : "announcement_unpublished", { id: a.id, title: a.title });
+      if (newVal) {
+        toast("Announcement published — students notified.", "success");
+        logActivity("announcement_published", { id: a.id, title: a.title });
+        sendPublishNotifications(a.title, "announcement", a.id);
+      } else {
+        toast("Announcement unpublished.", "success");
+        logActivity("announcement_unpublished", { id: a.id, title: a.title });
+      }
       fetchData();
     } else {
       toast("Failed to update announcement.", "error");

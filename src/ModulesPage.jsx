@@ -5,6 +5,30 @@ import { logActivity } from "./lib/activityLog.js";
 import { useToast } from "./App.jsx";
 import { ConfirmModal } from "./App.jsx";
 
+
+// ── Publish notification helper ───────────────────────────────────────────────
+async function sendPublishNotifications(title, notifType, referenceId) {
+  try {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("is_active", true);
+    if (!profiles?.length) return;
+    const notifs = profiles.map(p => ({
+      user_id:        p.id,
+      type:           notifType,
+      title:          notifType === "new_module" ? "New Module Available" : "New Announcement",
+      body:           `"${title}" has been published. Check it out now!`,
+      reference_type: notifType === "new_module" ? "module" : "announcement",
+      reference_id:   referenceId,
+      is_read:        false,
+    }));
+    for (let i = 0; i < notifs.length; i += 50) {
+      await supabase.from("notifications").insert(notifs.slice(i, i + 50));
+    }
+  } catch (e) { console.error("sendPublishNotifications failed:", e); }
+}
+
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
   light: "#4CAF50", pale:  "#C8E6C9", wash:  "#E8F5E9",
@@ -2311,6 +2335,7 @@ export default function ModulesPage() {
           if(selected?.id===mod.id)setSelected(updated);
           setConfirm(null);
           logActivity("module_published", { module_id: mod.id, title: mod.title });
+          sendPublishNotifications(mod.title, "new_module", mod.id);
         }
       });
     } else {

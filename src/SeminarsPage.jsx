@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback, startTransition } from "react";
 import { supabase } from "./lib/supabase.js";
 import { logActivity } from "./lib/activityLog.js";
 import { useToast } from "./App.jsx";
@@ -974,8 +974,339 @@ const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClo
   );
 }, (prevProps, nextProps) => prevProps.seminar.id === nextProps.seminar.id);
 
+
+// ── Attendance Report Tab ─────────────────────────────────────────────────────
+function AttendanceReportTab({ seminar, onUpdate }) {
+  const toast = useToast();
+  const [logs,        setLogs]        = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [search,      setSearch]      = useState("");
+  const [filter,      setFilter]      = useState("all"); // all | present | partial | absent | eligible
+  const [marking,     setMarking]     = useState(false);
+  const [exporting,   setExporting]   = useState(false);
+  const [editingId,   setEditingId]   = useState(null);
+  const [editStatus,  setEditStatus]  = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("seminar_attendance_logs")
+      .select("*, profiles(full_name, student_id, department, email, year_level)")
+      .eq("seminar_id", seminar.id)
+      .order("join_time", { ascending: true });
+    startTransition(() => {
+      if (!error) setLogs(data || []);
+      setLoading(false);
+    });
+  }, [seminar.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const totalMins = seminar.meeting_duration_minutes || 0;
+
+  const isEligible = (log) => {
+    if (!totalMins) return log.duration_minutes >= 1;
+    return log.duration_minutes >= totalMins;
+  };
+
+  const fmtTime = (iso) => {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleString("en-PH", {
+      timeZone: "Asia/Manila", month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: true,
+    });
+  };
+
+  const fmtDuration = (mins) => {
+    if (mins == null) return "—";
+    if (mins < 60) return `${mins}m`;
+    return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  };
+
+  const statusColor = (st) => ({
+    present: "green", partial: "yellow", joined: "blue", absent: "red",
+  }[st] || "");
+
+  // ── Auto-mark eligible on meeting end ──────────────────────────────────────
+  const autoMarkEligible = async () => {
+    setMarking(true);
+    let marked = 0;
+    for (const log of logs) {
+      const eligible = isEligible(log);
+      if (eligible !== log.is_eligible) {
+        await supabase.from("seminar_attendance_logs")
+          .update({ is_eligible: eligible, attendance_status: eligible ? "present" : log.attendance_status })
+          .eq("id", log.id);
+        // Also update seminar_attendance table for certificate gating
+        if (eligible) {
+          await supabase.from("seminar_attendance").upsert({
+            seminar_id: seminar.id, user_id: log.user_id,
+            checked_in_at: log.join_time,
+          }, { onConflict: "seminar_id,user_id" });
+          marked++;
+        }
+      }
+    }
+    toast(`${marked} participant(s) marked as eligible for certificates.`, "success");
+    logActivity("seminar_attendance_marked", { seminar_id: seminar.id, count: marked });
+    load();
+    setMarking(false);
+  };
+
+  // ── Manual override ────────────────────────────────────────────────────────
+  const saveOverride = async (log) => {
+    await supabase.from("seminar_attendance_logs")
+      .update({ attendance_status: editStatus, is_eligible: editStatus === "present" })
+      .eq("id", log.id);
+    if (editStatus === "present") {
+      await supabase.from("seminar_attendance").upsert({
+        seminar_id: seminar.id, user_id: log.user_id,
+        checked_in_at: log.join_time || new Date().toISOString(),
+      }, { onConflict: "seminar_id,user_id" });
+    } else {
+      await supabase.from("seminar_attendance").delete()
+        .eq("seminar_id", seminar.id).eq("user_id", log.user_id);
+    }
+    toast("Attendance updated.", "success");
+    logActivity("seminar_attendance_override", { seminar_id: seminar.id, user_id: log.user_id, status: editStatus });
+    setEditingId(null);
+    load();
+  };
+
+  // ── Export PDF ─────────────────────────────────────────────────────────────
+  const exportPDF = async () => {
+    setExporting(true);
+    try {
+      if (!window.jspdf) {
+        await new Promise((res, rej) => {
+          const s1 = document.createElement("script");
+          s1.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
+          s1.onload = res; s1.onerror = rej; document.head.appendChild(s1);
+        });
+        await new Promise((res, rej) => {
+          const s2 = document.createElement("script");
+          s2.src = "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js";
+          s2.onload = res; s2.onerror = rej; document.head.appendChild(s2);
+        });
+      }
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      doc.setFontSize(16); doc.setFont(undefined, "bold"); doc.setTextColor(26,46,26);
+      doc.text("Seminar Attendance Report", 14, 16);
+      doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(80);
+      doc.text(seminar.title, 14, 23);
+      doc.setFontSize(9); doc.setTextColor(130);
+      doc.text(`Generated: ${new Date().toLocaleString("en-PH")} · ${filteredLogs.length} participants`, 14, 29);
+      doc.autoTable({
+        startY: 34,
+        head: [["Name", "Student ID", "Department", "Join Time", "Leave Time", "Duration", "Status", "Eligible"]],
+        body: filteredLogs.map(l => [
+          l.profiles?.full_name || "—",
+          l.profiles?.student_id || "—",
+          l.profiles?.department || "—",
+          fmtTime(l.join_time),
+          fmtTime(l.leave_time),
+          fmtDuration(l.duration_minutes),
+          l.attendance_status || "—",
+          l.is_eligible ? "Yes" : "No",
+        ]),
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [26, 46, 26] },
+        columnStyles: { 7: { halign: "center" } },
+      });
+      doc.save(`attendance-report-${seminar.title.replace(/\s+/g, "-").toLowerCase()}.pdf`);
+      toast("PDF exported.", "success");
+    } catch (e) { toast("Export failed: " + e.message, "error"); }
+    setExporting(false);
+  };
+
+  // ── Export Excel ───────────────────────────────────────────────────────────
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      if (!window.XLSX) {
+        await new Promise((res, rej) => {
+          const sc = document.createElement("script");
+          sc.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+          sc.onload = res; sc.onerror = rej; document.head.appendChild(sc);
+        });
+      }
+      const rows = filteredLogs.map(l => ({
+        "Name":         l.profiles?.full_name   || "—",
+        "Student ID":   l.profiles?.student_id  || "—",
+        "Department":   l.profiles?.department  || "—",
+        "Year Level":   l.profiles?.year_level  ? `Year ${l.profiles.year_level}` : "—",
+        "Email":        l.profiles?.email       || "—",
+        "Join Time":    fmtTime(l.join_time),
+        "Leave Time":   fmtTime(l.leave_time),
+        "Duration":     fmtDuration(l.duration_minutes),
+        "Status":       l.attendance_status     || "—",
+        "Certificate Eligible": l.is_eligible ? "Yes" : "No",
+      }));
+      const ws = window.XLSX.utils.json_to_sheet(rows);
+      const wb = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(wb, ws, "Attendance");
+      window.XLSX.writeFile(wb, `attendance-report-${seminar.title.replace(/\s+/g, "-").toLowerCase()}.xlsx`);
+      toast("Excel exported.", "success");
+    } catch (e) { toast("Export failed: " + e.message, "error"); }
+    setExporting(false);
+  };
+
+  const filteredLogs = logs.filter(l => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || (l.profiles?.full_name || "").toLowerCase().includes(q)
+      || (l.profiles?.student_id || "").toLowerCase().includes(q)
+      || (l.profiles?.department || "").toLowerCase().includes(q);
+    const matchFilter = filter === "all" ? true
+      : filter === "eligible" ? l.is_eligible
+      : l.attendance_status === filter;
+    return matchSearch && matchFilter;
+  });
+
+  const stats = {
+    total:   logs.length,
+    present: logs.filter(l => l.attendance_status === "present").length,
+    partial: logs.filter(l => l.attendance_status === "partial").length,
+    absent:  logs.filter(l => l.attendance_status === "absent").length,
+    eligible:logs.filter(l => l.is_eligible).length,
+  };
+
+  return (
+    <div>
+      {/* Info banner */}
+      <div style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18, fontSize: 13, color: G.dark, display: "flex", alignItems: "center", gap: 10 }}>
+        <i className="bi bi-info-circle-fill" style={{ color: G.base, flexShrink: 0 }}/>
+        <div>
+          Attendance is logged automatically when students join and leave the Jitsi meeting.
+          {totalMins > 0
+            ? <> Participants must attend the <strong>full {totalMins} minutes</strong> to be eligible for a certificate.</>
+            : <> Click <strong>Auto-Mark Eligible</strong> after the meeting ends to set certificate eligibility.</>}
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+        {[
+          { label: "Total",    value: stats.total,   color: G.base    },
+          { label: "Present",  value: stats.present, color: "#16a34a" },
+          { label: "Partial",  value: stats.partial, color: "#a16207" },
+          { label: "Absent",   value: stats.absent,  color: "#dc2626" },
+          { label: "Eligible", value: stats.eligible,color: "#7c3aed" },
+        ].map(st => (
+          <div key={st.label} style={s.statCard(st.color)}>
+            <div style={{ fontSize: 22, fontWeight: 900, color: st.color }}>{st.value}</div>
+            <div style={s.statLabel}>{st.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <input style={{ ...s.input, width: 240 }} placeholder="Search by name, ID, department…"
+          value={search} onChange={e => setSearch(e.target.value)} />
+        <select style={{ ...s.select, width: 180 }} value={filter} onChange={e => setFilter(e.target.value)}>
+          <option value="all">All ({logs.length})</option>
+          <option value="present">Present ({stats.present})</option>
+          <option value="partial">Partial ({stats.partial})</option>
+          <option value="absent">Absent ({stats.absent})</option>
+          <option value="eligible">Eligible ({stats.eligible})</option>
+        </select>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button onClick={autoMarkEligible} disabled={marking || logs.length === 0}
+            style={{ padding: "8px 14px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", gap: 6, opacity: marking ? 0.7 : 1 }}>
+            <i className="bi bi-patch-check"/>{marking ? "Marking…" : "Auto-Mark Eligible"}
+          </button>
+          <button onClick={exportPDF} disabled={exporting || filteredLogs.length === 0}
+            style={{ padding: "8px 14px", background: G.wash, color: G.dark, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="bi bi-file-earmark-pdf" style={{ color: "#dc2626" }}/>PDF
+          </button>
+          <button onClick={exportExcel} disabled={exporting || filteredLogs.length === 0}
+            style={{ padding: "8px 14px", background: G.wash, color: G.dark, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="bi bi-file-earmark-excel" style={{ color: "#16a34a" }}/>Excel
+          </button>
+        </div>
+      </div>
+
+      {loading ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading attendance records…</div>
+        : logs.length === 0 ? (
+          <div style={s.emptyBox}>
+            <i className="bi bi-person-check d-block mb-2" style={{ fontSize: 40, color: G.pale }}/>
+            <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No attendance records yet</div>
+            <div style={{ fontSize: 13, color: "#aaa" }}>Records appear automatically when participants join the Jitsi meeting.</div>
+          </div>
+        ) : filteredLogs.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "40px 0", color: "#aaa" }}>No records match your search/filter.</div>
+        ) : (
+          <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #DDE8DD", overflow: "hidden" }}>
+            <table style={s.table}>
+              <thead>
+                <tr>
+                  <th style={s.th}>Participant</th>
+                  <th style={s.th}>Department</th>
+                  <th style={s.th}>Join Time</th>
+                  <th style={s.th}>Leave Time</th>
+                  <th style={s.th}>Duration</th>
+                  <th style={s.th}>Status</th>
+                  <th style={s.th}>Eligible</th>
+                  <th style={s.th}>Override</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLogs.map(l => (
+                  <tr key={l.id}>
+                    <td style={s.td}>
+                      <div style={{ fontWeight: 600 }}>{l.profiles?.full_name || "—"}</div>
+                      <div style={{ fontSize: 11, color: "#aaa" }}>{l.profiles?.student_id || l.profiles?.email}</div>
+                    </td>
+                    <td style={s.td}>{l.profiles?.department || "—"}{l.profiles?.year_level ? ` · Yr ${l.profiles.year_level}` : ""}</td>
+                    <td style={{ ...s.td, fontSize: 12 }}>{fmtTime(l.join_time)}</td>
+                    <td style={{ ...s.td, fontSize: 12 }}>{fmtTime(l.leave_time)}</td>
+                    <td style={s.td}><span style={{ fontWeight: 700, color: G.base }}>{fmtDuration(l.duration_minutes)}</span></td>
+                    <td style={s.td}>
+                      <span style={s.tag(statusColor(l.attendance_status))}>
+                        {l.attendance_status || "joined"}
+                      </span>
+                    </td>
+                    <td style={s.td}>
+                      {l.is_eligible
+                        ? <span style={s.tag("green")}><i className="bi bi-patch-check-fill me-1"/>Yes</span>
+                        : <span style={s.tag("red")}>No</span>}
+                    </td>
+                    <td style={s.td}>
+                      {editingId === l.id ? (
+                        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <select value={editStatus} onChange={e => setEditStatus(e.target.value)}
+                            style={{ padding: "4px 8px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12 }}>
+                            <option value="present">Present</option>
+                            <option value="partial">Partial</option>
+                            <option value="absent">Absent</option>
+                          </select>
+                          <button onClick={() => saveOverride(l)}
+                            style={{ padding: "4px 8px", background: G.dark, color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11, fontWeight: 700 }}>Save</button>
+                          <button onClick={() => setEditingId(null)}
+                            style={{ padding: "4px 8px", background: G.wash, color: G.dark, border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>Cancel</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => { setEditingId(l.id); setEditStatus(l.attendance_status || "present"); }}
+                          style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: G.dark, display: "flex", alignItems: "center", gap: 4 }}>
+                          <i className="bi bi-pencil" style={{ fontSize: 11 }}/>Override
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────
 export default function SeminarsPage() {
+  const toast = useToast();
   const [seminars, setSeminars]   = useState([]);
   const [selected, setSelected]   = useState(null);
   const [tab, setTab]             = useState("details");
@@ -1115,15 +1446,16 @@ export default function SeminarsPage() {
               <button style={s.btnDanger} onClick={deleteSeminar}><i className="bi bi-trash me-1"/> Delete</button>
             </div>
             <div style={s.tabBar}>
-              {[["details", "Details"], ["attendees", "Attendees"], ["registrations", "Registrations"], ["evaluations", "Evaluations"]].map(([v, l]) => (
+              {[["details", "Details"], ["attendees", "Attendees"], ["registrations", "Registrations"], ["attendance", "Attendance Report"], ["evaluations", "Evaluations"]].map(([v, l]) => (
                 <div key={v} style={s.tab(tab === v)} onClick={() => setTab(v)}>{l}</div>
               ))}
             </div>
             <div style={s.content}>
-              {tab === "details"       && <DetailsTab       key={selected.id + "_d"} seminar={selected} onUpdate={reload} />}
-              {tab === "attendees"     && <AttendeesTab     key={selected.id + "_a"} seminar={selected} />}
-              {tab === "registrations" && <RegistrationsTab key={selected.id + "_r"} seminar={selected} />}
-              {tab === "evaluations"   && <EvaluationsTab   key={selected.id + "_e"} seminar={selected} />}
+              {tab === "details"     && <DetailsTab           key={selected.id + "_d"} seminar={selected} onUpdate={reload} />}
+              {tab === "attendees"   && <AttendeesTab         key={selected.id + "_a"} seminar={selected} />}
+              {tab === "registrations" && <RegistrationsTab   key={selected.id + "_r"} seminar={selected} />}
+              {tab === "attendance"  && <AttendanceReportTab  key={selected.id + "_ar"} seminar={selected} onUpdate={reload} />}
+              {tab === "evaluations" && <EvaluationsTab       key={selected.id + "_e"} seminar={selected} />}
             </div>
           </>
         )}
@@ -1132,10 +1464,56 @@ export default function SeminarsPage() {
       {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)}/>}
 
       {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={async () => {
-        // Set status to completed when meeting ends
-        await supabase.from("seminars").update({ status: "completed" }).eq("id", jitsiRoom.id);
-        setSeminars(ss => ss.map(s => s.id === jitsiRoom.id ? { ...s, status: "completed" } : s));
-        setSelected(s => s?.id === jitsiRoom.id ? { ...s, status: "completed" } : s);
+        const endTime    = new Date();
+        const startTime  = jitsiRoom.scheduled_start ? new Date(jitsiRoom.scheduled_start) : null;
+        const durationMins = startTime ? Math.round((endTime - startTime) / 60000) : null;
+
+        // Update seminar status + store meeting duration
+        await supabase.from("seminars").update({
+          status: "completed",
+          meeting_duration_minutes: durationMins,
+        }).eq("id", jitsiRoom.id);
+        setSeminars(ss => ss.map(s => s.id === jitsiRoom.id ? { ...s, status: "completed", meeting_duration_minutes: durationMins } : s));
+        setSelected(s => s?.id === jitsiRoom.id ? { ...s, status: "completed", meeting_duration_minutes: durationMins } : s);
+
+        // Auto-mark attendance eligibility for all logged participants
+        const { data: attendanceLogs } = await supabase
+          .from("seminar_attendance_logs")
+          .select("id, user_id, duration_minutes, join_time, leave_time")
+          .eq("seminar_id", jitsiRoom.id);
+
+        const meetingEndTime = endTime.toISOString();
+        let marked = 0;
+        for (const log of (attendanceLogs || [])) {
+          // If student has no leave_time, they were still in when admin ended —
+          // use the meeting end time as their leave time
+          let duration = log.duration_minutes;
+          let leaveTime = log.leave_time;
+          if (!leaveTime && log.join_time) {
+            leaveTime = meetingEndTime;
+            duration  = Math.round((endTime - new Date(log.join_time)) / 60000);
+            await supabase.from("seminar_attendance_logs")
+              .update({ leave_time: leaveTime, duration_minutes: duration })
+              .eq("id", log.id);
+          }
+          const eligible = durationMins
+            ? duration >= durationMins
+            : duration >= 1;
+          await supabase.from("seminar_attendance_logs")
+            .update({ is_eligible: eligible, attendance_status: eligible ? "present" : "partial" })
+            .eq("id", log.id);
+          if (eligible) {
+            await supabase.from("seminar_attendance").upsert({
+              seminar_id: jitsiRoom.id, user_id: log.user_id,
+              checked_in_at: log.join_time,
+            }, { onConflict: "seminar_id,user_id" });
+            marked++;
+          }
+        }
+        if (marked > 0) {
+          toast(`Meeting ended — ${marked} participant(s) auto-marked as eligible for certificates.`, "success");
+        }
+        logActivity("seminar_meeting_ended", { seminar_id: jitsiRoom.id, duration_mins: durationMins, eligible: marked });
         setJitsiRoom(null);
       }}/>}
 
