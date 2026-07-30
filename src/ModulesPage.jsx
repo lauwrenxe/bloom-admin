@@ -905,7 +905,7 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
                 </div>
                 <div>
                   <div style={{fontWeight:800,color:"#fff",fontSize:15}}>Generate Questions with AI</div>
-                  <div style={{fontSize:11,color:"rgba(255,255,255,0.65)"}}>Powered by Groq — BLOOM GAD</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.65)"}}>BLOOM GAD</div>
                 </div>
               </div>
               <button style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",borderRadius:6,color:"#fff",cursor:"pointer",fontSize:16,width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowAI(false)}>×</button>
@@ -2155,7 +2155,7 @@ Return ONLY a valid JSON array, no markdown, no explanation, no code blocks. For
                 <div>
                   <div style={{fontWeight:800,color:"#fff",fontSize:15}}>Generate with AI</div>
                   <div style={{fontSize:11,color:"rgba(255,255,255,0.7)"}}>
-                    {subTab === "document" ? "Generate a full document" : "Generate presentation slides"} · Powered by Groq
+                    {subTab === "document" ? "Generate a full document" : "Generate presentation slides"}
                   </div>
                 </div>
               </div>
