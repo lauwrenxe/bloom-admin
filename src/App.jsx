@@ -11,6 +11,7 @@ import StudentsPage      from "./StudentsPage.jsx";
 import AnnouncementsPage from "./AnnouncementsPage.jsx";
 import AdminProfilePage  from "./AdminProfilePage.jsx";
 import SuperAdminPage    from "./SuperAdminPage.jsx";
+import campusBg from "./assets/cvsu.jpg";
 
 // Separate client for super admin to avoid auth lock conflicts
 const supabaseSA = createClient(
@@ -24,6 +25,11 @@ const BOOTSTRAP_CSS = "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/boo
 const BOOTSTRAP_JS  = "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js";
 const BI_CSS        = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css";
 const INTER_CSS     = "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap";
+
+/* ─── Mobile app download (QR code on the public landing page) ── */
+// Direct-download link for the APK hosted on Google Drive
+const APP_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id=12sh24fi6BaDj73cm1ClYEYb4RuP-JROm";
+const QR_CODE_SRC = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=6&data=${encodeURIComponent(APP_DOWNLOAD_URL)}`;
 
 function loadCSS(href) {
   if (document.querySelector(`link[href="${href}"]`)) return;
@@ -191,6 +197,29 @@ const GLOBAL_CSS = `
     from { opacity: 0; transform: scale(.94); }
     to   { opacity: 1; transform: scale(1); }
   }
+
+  /* ── Landing page ── */
+  .landing-hero {
+    min-height: 100vh; width: 100%; position: relative;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px; background-size: cover; background-position: center;
+  }
+  .landing-hero::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(160deg, rgba(10,26,10,.78) 0%, rgba(15,45,15,.62) 45%, rgba(10,26,10,.82) 100%);
+  }
+  .landing-hero > * { position: relative; z-index: 1; }
+  .landing-admin-trigger {
+    position: fixed; bottom: 18px; right: 18px; z-index: 2;
+    width: 34px; height: 34px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.08); border: none;
+    color: rgba(255,255,255,.32); font-size: 14px; cursor: pointer;
+    transition: background .15s, color .15s, transform .15s;
+  }
+  .landing-admin-trigger:hover {
+    background: rgba(255,255,255,.18); color: rgba(255,255,255,.7); transform: scale(1.06);
+  }
 `;
 
 /* ─── NAV CONFIG ─────────────────────────────────────────────── */
@@ -346,8 +375,75 @@ function DeactivationModal({ onOk }) {
   );
 }
 
-/* ─── LOGIN (embedded in App.jsx for admin-only portal) ──────── */
-function LoginPage({ onLogin }) {
+/* ─── PUBLIC LANDING PAGE ──────────────────────────────────────
+   Public-facing page: app description + QR download.
+   A subtle, unlabeled button in the corner is the only way in
+   to the admin login — nothing on this page advertises it. ── */
+function LandingPage({ onAdminClick }) {
+  return (
+    <div className="landing-hero" style={{ backgroundImage:`url(${campusBg})` }}>
+
+      <div style={{ width:"100%", maxWidth:460 }}>
+
+        {/* Brand header */}
+        <div className="text-center mb-4">
+          <div className="d-inline-flex align-items-center justify-content-center mb-3"
+            style={{ width:64, height:64, borderRadius:16, background:"linear-gradient(135deg,#4CAF50,#2D6A2D)", boxShadow:"0 6px 18px rgba(0,0,0,.35)" }}>
+            <i className="bi bi-flower2 text-white" style={{ fontSize:30 }}/>
+          </div>
+          <h3 className="fw-bold mb-1 text-white">BLOOM GAD</h3>
+          <div style={{ fontSize:13, color:"rgba(255,255,255,.75)" }}>Gender and Development Resource Center · CvSU</div>
+        </div>
+
+        {/* Description card */}
+        <div className="card border-0 shadow-sm mb-3" style={{ borderRadius:16 }}>
+          <div className="card-body p-4">
+            <p style={{ fontSize:13.5, color:"#374151", lineHeight:1.75, margin:0 }}>
+              BLOOM GAD is CvSU's Gender and Development learning platform. Students can complete
+              GAD modules, join seminars, earn certificates, and stay up to date with announcements
+              and events — all in one place.
+            </p>
+          </div>
+        </div>
+
+        {/* QR download card */}
+        <div className="card border-0 shadow-sm" style={{ borderRadius:16 }}>
+          <div className="card-body p-4 d-flex align-items-center gap-3">
+            <img
+              src={QR_CODE_SRC}
+              alt="Scan to download the BLOOM GAD mobile app"
+              width={92}
+              height={92}
+              style={{ borderRadius:10, border:"1px solid #DDE8DD", flexShrink:0 }}
+            />
+            <div>
+              <div className="fw-semibold mb-1" style={{ fontSize:14, color:"#1A2E1A" }}>
+                Get the BLOOM GAD app
+              </div>
+              <div className="text-muted" style={{ fontSize:12.5, lineHeight:1.6 }}>
+                Scan this QR code with your phone camera to download the app and access your
+                modules, seminars, and certificates on the go.
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      {/* Hidden-in-plain-sight admin entry point */}
+      <button
+        onClick={onAdminClick}
+        className="landing-admin-trigger"
+        aria-label="Staff access"
+      >
+        <i className="bi bi-shield-lock"/>
+      </button>
+    </div>
+  );
+}
+
+/* ─── ADMIN LOGIN (reached only via the landing page's hidden button) ── */
+function LoginPage({ onLogin, onBack }) {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [error,    setError]    = useState("");
@@ -398,50 +494,61 @@ function LoginPage({ onLogin }) {
   return (
     <div className="min-vh-100 d-flex align-items-center justify-content-center"
       style={{ background:"linear-gradient(135deg,#F1F8F1 0%,#E8F5E9 50%,#D7EED7 100%)" }}>
-      <div className="card border-0 shadow-lg overflow-hidden" style={{ width:420, borderRadius:14 }}>
-        <div className="p-4 d-flex align-items-center gap-3"
-          style={{ background:"linear-gradient(135deg,#2D6A2D,#1A2E1A)" }}>
-          <div className="icon-box bg-white bg-opacity-10 text-white" style={{ width:48,height:48,borderRadius:12,fontSize:22 }}>
-            <i className="bi bi-flower2"/>
-          </div>
-          <div>
-            <div className="fw-bold text-white" style={{ fontSize:18 }}>BLOOM GAD</div>
-            <div style={{ fontSize:12,color:"rgba(255,255,255,.6)" }}>GADRC CvSU Admin Portal</div>
-          </div>
-        </div>
-        <div className="card-body p-4">
-          <h5 className="fw-bold mb-1" style={{ color:"#1A2E1A" }}>Sign in</h5>
-          <p className="text-muted mb-4" style={{ fontSize:13 }}>Use your GADRC admin credentials</p>
-          <div className="mb-3">
-            <label className="form-label fw-semibold" style={{ fontSize:12 }}>Email address</label>
-            <input className={`form-control ${emailErr?"is-invalid":""}`} type="email"
-              value={email} onChange={e=>{setEmail(e.target.value);if(e.target.value)setEmailErr(false);}}
-              placeholder="admin@cvsu.edu.ph" onKeyDown={e=>e.key==="Enter"&&submit()}/>
-            {emailErr&&<div className="invalid-feedback">This field is required</div>}
-          </div>
-          <div className="mb-3">
-            <label className="form-label fw-semibold" style={{ fontSize:12 }}>Password</label>
-            <input className={`form-control ${passErr?"is-invalid":""}`} type="password"
-              value={password} onChange={e=>{setPassword(e.target.value);if(e.target.value)setPassErr(false);}}
-              placeholder="Enter your password" onKeyDown={e=>e.key==="Enter"&&submit()}/>
-            {passErr&&<div className="invalid-feedback">This field is required</div>}
-          </div>
-          {error && (
-            <div className="alert alert-danger d-flex align-items-center gap-2 py-2" style={{ fontSize:13,borderRadius:8 }}>
-              <i className="bi bi-exclamation-triangle-fill"/>{error}
+      <div className="d-flex flex-column align-items-center" style={{ width:420, gap:16 }}>
+
+        <div className="card border-0 shadow-lg overflow-hidden w-100" style={{ borderRadius:14 }}>
+          <div className="p-4 d-flex align-items-center gap-3"
+            style={{ background:"linear-gradient(135deg,#2D6A2D,#1A2E1A)" }}>
+            <div className="icon-box bg-white bg-opacity-10 text-white" style={{ width:48,height:48,borderRadius:12,fontSize:22 }}>
+              <i className="bi bi-flower2"/>
             </div>
-          )}
-          <button className="btn btn-primary w-100 d-flex align-items-center justify-content-center gap-2"
-            onClick={submit} disabled={loading} style={{ padding:"10px" }}>
-            {loading
-              ? <><span className="spinner-border spinner-border-sm"/>Signing in…</>
-              : <>Sign in <i className="bi bi-arrow-right"/></>
-            }
-          </button>
-          <p className="text-center text-muted mt-3 mb-0" style={{ fontSize:11 }}>
-            Admin access only · Contact GADRC IT for support
-          </p>
+            <div>
+              <div className="fw-bold text-white" style={{ fontSize:18 }}>BLOOM GAD</div>
+              <div style={{ fontSize:12,color:"rgba(255,255,255,.6)" }}>GADRC CvSU Admin Portal</div>
+            </div>
+          </div>
+          <div className="card-body p-4">
+            <h5 className="fw-bold mb-1" style={{ color:"#1A2E1A" }}>Sign in</h5>
+            <p className="text-muted mb-4" style={{ fontSize:13 }}>Use your GADRC admin credentials</p>
+            <div className="mb-3">
+              <label className="form-label fw-semibold" style={{ fontSize:12 }}>Email address</label>
+              <input className={`form-control ${emailErr?"is-invalid":""}`} type="email"
+                value={email} onChange={e=>{setEmail(e.target.value);if(e.target.value)setEmailErr(false);}}
+                placeholder="admin@cvsu.edu.ph" onKeyDown={e=>e.key==="Enter"&&submit()}/>
+              {emailErr&&<div className="invalid-feedback">This field is required</div>}
+            </div>
+            <div className="mb-3">
+              <label className="form-label fw-semibold" style={{ fontSize:12 }}>Password</label>
+              <input className={`form-control ${passErr?"is-invalid":""}`} type="password"
+                value={password} onChange={e=>{setPassword(e.target.value);if(e.target.value)setPassErr(false);}}
+                placeholder="Enter your password" onKeyDown={e=>e.key==="Enter"&&submit()}/>
+              {passErr&&<div className="invalid-feedback">This field is required</div>}
+            </div>
+            {error && (
+              <div className="alert alert-danger d-flex align-items-center gap-2 py-2" style={{ fontSize:13,borderRadius:8 }}>
+                <i className="bi bi-exclamation-triangle-fill"/>{error}
+              </div>
+            )}
+            <button className="btn btn-primary w-100 d-flex align-items-center justify-content-center gap-2"
+              onClick={submit} disabled={loading} style={{ padding:"10px" }}>
+              {loading
+                ? <><span className="spinner-border spinner-border-sm"/>Signing in…</>
+                : <>Sign in <i className="bi bi-arrow-right"/></>
+              }
+            </button>
+            <p className="text-center text-muted mt-3 mb-0" style={{ fontSize:11 }}>
+              Admin access only · Contact GADRC IT for support
+            </p>
+          </div>
         </div>
+
+        {onBack && (
+          <button onClick={onBack} className="btn btn-sm border-0"
+            style={{ color:"#5A7D5A", fontSize:12, background:"transparent" }}>
+            <i className="bi bi-arrow-left me-1"/>Back to site
+          </button>
+        )}
+
       </div>
     </div>
   );
@@ -798,6 +905,7 @@ export default function App() {
   const [checking,          setChecking]          = useState(true);
   const [userRole,          setUserRole]          = useState(null);
   const [showDeactivated,   setShowDeactivated]   = useState(false);
+  const [showAdminLogin,    setShowAdminLogin]    = useState(false); // gate: landing page vs admin login form
   const [isSuperAdminRoute, setIsSuperAdminRoute] = useState(
     window.location.pathname === "/super-admin" || window.location.hash === "#super-admin"
   );
@@ -865,6 +973,7 @@ export default function App() {
     if (userRole === "super_admin") await supabaseSA.auth.signOut();
     else await supabase.auth.signOut();
     setLoggedIn(false); setUser(null); setUserRole(null);
+    setShowAdminLogin(false); // back to the public landing page
   }, [userRole]);
 
   if (checking) return (
@@ -887,6 +996,7 @@ export default function App() {
     if (userRole === "super_admin") await supabaseSA.auth.signOut();
     else await supabase.auth.signOut();
     setLoggedIn(false); setUser(null); setUserRole(null);
+    setShowAdminLogin(false); // back to the public landing page
   };
 
   return (
@@ -904,7 +1014,12 @@ export default function App() {
         ? <SuperAdminLoginPage onLogin={(u, role) => { setUser(u); setUserRole(role); setLoggedIn(true); }}/>
         : loggedIn && userRole === "admin"
         ? <AdminShell onLogout={handleLogout} user={user} onDeactivated={handleDeactivated}/>
-        : <LoginPage onLogin={(u, role) => { setUser(u); setUserRole(role); setLoggedIn(true); }}/>
+        : showAdminLogin
+        ? <LoginPage
+            onBack={()=>setShowAdminLogin(false)}
+            onLogin={(u, role) => { setUser(u); setUserRole(role); setLoggedIn(true); }}
+          />
+        : <LandingPage onAdminClick={()=>setShowAdminLogin(true)}/>
       }
     </ToastProvider>
   );

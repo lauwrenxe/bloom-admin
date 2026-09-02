@@ -5,6 +5,13 @@ import { BloomLogo, Input } from "../components/ui";
 import { checkSessionTimeout, clearSessionMeta } from "./sessionUtils.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  MOBILE APP DOWNLOAD
+// ─────────────────────────────────────────────────────────────────────────────
+// Direct-download link for the APK hosted on Google Drive
+const APP_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id=12sh24fi6BaDj73cm1ClYEYb4RuP-JROm";
+const QR_CODE_SRC = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=8&data=${encodeURIComponent(APP_DOWNLOAD_URL)}`;
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  RATE LIMITER
 // ─────────────────────────────────────────────────────────────────────────────
 const RL_KEY          = "bloom_admin_rl";
@@ -193,6 +200,51 @@ function Divider({ label }) {
         </span>
       )}
       <div style={{ flex: 1, height: 1, background: C.border }} />
+    </div>
+  );
+}
+
+// ── Mobile app download card (QR + short blurb) ───────────────────────────
+function MobileAppCard() {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 16,
+      background: "rgba(255,255,255,.08)",
+      border: "1px solid rgba(255,255,255,.12)",
+      borderRadius: 14, padding: "16px 18px",
+      backdropFilter: "blur(4px)",
+      animation: "fadeUp .7s .2s ease both",
+    }}>
+      <div style={{
+        width: 76, height: 76, borderRadius: 10,
+        background: "#fff", flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 4,
+        boxShadow: "0 2px 8px rgba(0,0,0,.12)",
+      }}>
+        <img
+          src={QR_CODE_SRC}
+          alt="Scan to download the BLOOM GAD mobile app"
+          width={68}
+          height={68}
+          style={{ display: "block", width: "100%", height: "100%" }}
+        />
+      </div>
+      <div>
+        <div style={{
+          fontSize: 12, fontWeight: 700, color: "#fff",
+          letterSpacing: ".2px", marginBottom: 4,
+        }}>
+          Get the BLOOM GAD app
+        </div>
+        <p style={{
+          fontSize: 12, color: "rgba(255,255,255,.65)",
+          lineHeight: 1.6, margin: 0, maxWidth: 220,
+        }}>
+          Scan the QR code to download the mobile app for students — access modules,
+          seminars, and certificates on the go.
+        </p>
+      </div>
     </div>
   );
 }
@@ -456,13 +508,17 @@ export default function LoginPage({ onLogin }) {
             ))}
           </div>
 
-          {/* Bottom — footnote */}
-          <div style={{
-            fontSize: 11, color: "rgba(255,255,255,.35)",
-            letterSpacing: ".3px",
-            animation: "fadeIn .8s .3s ease both",
-          }}>
-            © {new Date().getFullYear()} Cavite State University · GADRC
+          {/* Mobile app QR card + footnote */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <MobileAppCard />
+
+            <div style={{
+              fontSize: 11, color: "rgba(255,255,255,.35)",
+              letterSpacing: ".3px",
+              animation: "fadeIn .8s .3s ease both",
+            }}>
+              © {new Date().getFullYear()} Cavite State University · GADRC
+            </div>
           </div>
         </div>
 
