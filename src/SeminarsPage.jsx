@@ -911,12 +911,12 @@ function EvaluationsTab({ seminar }) {
 // ── Jitsi Meeting Modal ───────────────────────────────────────────
 const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClose }) {
   const roomName = `bloom-gad-${seminar.id}`;
-  const jitsiUrl = `https://meet.jit.si/${roomName}`;
+  const jitsiUrl = `https://meet.bloomgad.xyz/${roomName}`;
   const [copied, setCopied] = useState(false);
 
-  const iframeSrc = useRef(
-    `${jitsiUrl}#userInfo.displayName="GADRC Admin (Moderator)"&config.startWithVideoMuted=false&config.startWithAudioMuted=false&interfaceConfig.SHOW_JITSI_WATERMARK=false&interfaceConfig.TOOLBAR_BUTTONS=["microphone","camera","closedcaptions","desktop","fullscreen","fodeviceselection","hangup","chat","recording","livestreaming","raisehand","videoquality","filmstrip","tileview","participants-pane","shortcuts","mute-everyone","security"]`
-  ).current;
+ const iframeSrc = useRef(
+  `${jitsiUrl}#userInfo.displayName="GADRC Admin (Moderator)"&config.startWithVideoMuted=true&config.startWithAudioMuted=true&interfaceConfig...`
+).current;
 
   const copyLink = () => {
     navigator.clipboard.writeText(jitsiUrl);
