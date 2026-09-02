@@ -936,7 +936,7 @@ const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClo
               {seminar.title}
             </div>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
-              Live on meet.jit.si · Room: {roomName}
+              Live on meet.bloomgad.xyz · Room: {roomName}
             </div>
           </div>
         </div>
