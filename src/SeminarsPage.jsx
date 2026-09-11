@@ -30,11 +30,11 @@ function formatDateShort(iso) {
 
 // Roles eligible to be targeted for a seminar's audience
 const TARGET_ROLE_OPTIONS = [
-  { value: "student", label: "Students",  icon: "bi-mortarboard"   },
-  { value: "teacher",  label: "Teachers",  icon: "bi-person-video3" },
-  { value: "faculty",  label: "Faculty",   icon: "bi-person-badge"  },
-  { value: "guest",    label: "Guests",    icon: "bi-person"        },
-  { value: "speaker",  label: "Speakers",  icon: "bi-mic"           },
+  { value: "student", label: "Students", icon: "bi-mortarboard"   },
+  { value: "teacher", label: "Teachers", icon: "bi-person-video3" },
+  { value: "faculty", label: "Faculty",  icon: "bi-person-badge"  },
+  { value: "guest",   label: "Guests",   icon: "bi-person"        },
+  { value: "speaker", label: "Speakers", icon: "bi-mic"           },
 ];
 
 async function insertSeminarNotification(userId, seminarTitle, seminarId) {
@@ -116,7 +116,7 @@ function DetailsTab({ seminar, onUpdate }) {
     target_departments: seminar.target_departments  || [],
     target_roles:       seminar.target_roles?.length ? seminar.target_roles : ["student"],
   });
-  const [saving, setSaving]   = useState(false);
+  const [saving, setSaving]       = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError]     = useState("");
   const [err,   setErr]       = useState({});
@@ -124,7 +124,6 @@ function DetailsTab({ seminar, onUpdate }) {
   const coverRef              = useRef();
   const setF = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErr(e => ({ ...e, [k]: null })); };
 
-  // Load distinct departments from profiles for the targeting dropdown
   useEffect(() => {
     let active = true;
     (async () => {
@@ -146,7 +145,6 @@ function DetailsTab({ seminar, onUpdate }) {
   const toggleRole = (role) => {
     setForm(f => {
       const has = f.target_roles.includes(role);
-      // Prevent removing the last role — at least one must stay selected
       if (has && f.target_roles.length === 1) return f;
       return { ...f, target_roles: has ? f.target_roles.filter(r => r !== role) : [...f.target_roles, role] };
     });
@@ -186,9 +184,9 @@ function DetailsTab({ seminar, onUpdate }) {
     }
 
     const payload = {
-      title:               form.title.trim(),
-      description:         form.description?.trim() || null,
-      seminar_type:        form.seminar_type || "webinar",
+      title:                form.title.trim(),
+      description:          form.description?.trim() || null,
+      seminar_type:         form.seminar_type || "webinar",
       status:               form.status || "upcoming",
       cover_image_url:      form.cover_image_url || null,
       venue:                form.venue?.trim() || null,
@@ -206,9 +204,6 @@ function DetailsTab({ seminar, onUpdate }) {
     const { error: saveErr } = await supabase.from("seminars").update(payload).eq("id", seminar.id);
     if (saveErr) { setSaving(false); setError(saveErr.message); return; }
 
-    // ── Eligibility recalculation ──────────────────────────────────────
-    // If targeting became more restrictive, remove registrations that no
-    // longer qualify and notify those students.
     const targetingChanged =
       seminar.target_audience !== payload.target_audience ||
       JSON.stringify((seminar.target_departments||[]).slice().sort()) !== JSON.stringify(payload.target_departments.slice().sort()) ||
@@ -221,7 +216,6 @@ function DetailsTab({ seminar, onUpdate }) {
         .eq("seminar_id", seminar.id)
         .neq("status", "cancelled");
 
-      // Determine each registrant's role from user_roles table
       const userIds = (activeRegs || []).map(r => r.user_id);
       let roleMap = {};
       if (userIds.length > 0) {
@@ -249,7 +243,6 @@ function DetailsTab({ seminar, onUpdate }) {
       }
     }
 
-    // ── Notify newly eligible students when seminar becomes public ──────
     if (!wasPublic && nowPublic) {
       let recipientsQuery = supabase.from("profiles").select("id, department").eq("is_active", true);
       const { data: allProfiles } = await recipientsQuery;
@@ -289,7 +282,6 @@ function DetailsTab({ seminar, onUpdate }) {
     <div>
       {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 16 }}>{error}</div>}
 
-      {/* Cover image */}
       <div style={s.coverBox} onClick={() => !uploading && coverRef.current?.click()}>
         {form.cover_image_url
           ? <img src={form.cover_image_url} alt="cover" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -352,7 +344,6 @@ function DetailsTab({ seminar, onUpdate }) {
           </div>
         )}
 
-        {/* ── Target Audience ── */}
         <div style={{ ...s.fg, background: G.wash, borderRadius: 10, padding: "16px 18px", border: `1px solid ${G.pale}` }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: G.dark, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
             <i className="bi bi-people-fill" style={{ color: G.base }}/>Target Audience
@@ -378,7 +369,6 @@ function DetailsTab({ seminar, onUpdate }) {
 
           {form.target_audience === "specific" && (
             <>
-              {/* Role selection */}
               <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
                   Eligible Roles
@@ -399,35 +389,34 @@ function DetailsTab({ seminar, onUpdate }) {
                 </div>
               </div>
 
-              {/* Department selection applies uniformly to all selected roles, with no exceptions */}
               <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                    Eligible Departments <span style={{ fontWeight: 400, textTransform: "none" }}>(leave empty = all departments)</span>
-                  </div>
-                  {departments.length === 0 ? (
-                    <div style={{ fontSize: 12, color: "#aaa", fontStyle: "italic" }}>No departments found in student records yet.</div>
-                  ) : (
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxHeight: 140, overflowY: "auto" }}>
-                      {departments.map(dept => {
-                        const active = form.target_departments.includes(dept);
-                        return (
-                          <button key={dept} onClick={() => toggleDept(dept)}
-                            style={{ padding: "6px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                              border: `1.5px solid ${active ? G.base : "#DDE8DD"}`,
-                              background: active ? G.wash : "#fff", color: active ? G.dark : "#888" }}>
-                            {active && <i className="bi bi-check-lg me-1"/>}{dept}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {form.target_departments.length > 0 && (
-                    <div style={{ marginTop: 8, fontSize: 11, color: G.base, fontWeight: 600 }}>
-                      <i className="bi bi-info-circle me-1"/>
-                      Only users from {form.target_departments.length} selected department{form.target_departments.length !== 1 ? "s" : ""} will see this seminar.
-                    </div>
-                  )}
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Eligible Departments <span style={{ fontWeight: 400, textTransform: "none" }}>(leave empty = all departments)</span>
                 </div>
+                {departments.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#aaa", fontStyle: "italic" }}>No departments found in student records yet.</div>
+                ) : (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxHeight: 140, overflowY: "auto" }}>
+                    {departments.map(dept => {
+                      const active = form.target_departments.includes(dept);
+                      return (
+                        <button key={dept} onClick={() => toggleDept(dept)}
+                          style={{ padding: "6px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                            border: `1.5px solid ${active ? G.base : "#DDE8DD"}`,
+                            background: active ? G.wash : "#fff", color: active ? G.dark : "#888" }}>
+                          {active && <i className="bi bi-check-lg me-1"/>}{dept}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {form.target_departments.length > 0 && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: G.base, fontWeight: 600 }}>
+                    <i className="bi bi-info-circle me-1"/>
+                    Only users from {form.target_departments.length} selected department{form.target_departments.length !== 1 ? "s" : ""} will see this seminar.
+                  </div>
+                )}
+              </div>
             </>
           )}
 
@@ -450,18 +439,17 @@ function DetailsTab({ seminar, onUpdate }) {
   );
 }
 
-// ── Attendees Tab — eligible audience + registration status ────────
+// ── Attendees Tab ────────────────────────────────────────────────
 function AttendeesTab({ seminar }) {
   const [eligible, setEligible] = useState([]);
-  const [regMap,   setRegMap]   = useState({}); // userId -> registration row
+  const [regMap,   setRegMap]   = useState({});
   const [loading,  setLoading]  = useState(true);
   const [search,   setSearch]   = useState("");
-  const [filter,   setFilter]   = useState("all"); // all | registered | not_registered
+  const [filter,   setFilter]   = useState("all");
 
   const load = async () => {
     setLoading(true);
 
-    // Determine eligible profiles based on seminar targeting
     let profilesQuery = supabase.from("profiles").select("id, full_name, email, department, year_level, student_id").eq("is_active", true);
     const { data: allProfiles } = await profilesQuery;
 
@@ -478,16 +466,11 @@ function AttendeesTab({ seminar }) {
       eligibleProfiles = (allProfiles || []).filter(p => {
         const role = roleByUser[p.id] || "student";
         const roleOk = targetRoles.includes(role);
-        // Department filter applies to everyone uniformly. If no departments
-        // were selected, that means "all departments" — otherwise the
-        // person's department must be in the selected list, no exceptions
-        // for any particular role.
         const deptOk = targetDepts.length === 0 || targetDepts.includes(p.department);
         return roleOk && deptOk;
       });
     }
 
-    // Load registrations for this seminar to cross-reference
     const { data: regs } = await supabase
       .from("seminar_registrations")
       .select("*")
@@ -521,7 +504,6 @@ function AttendeesTab({ seminar }) {
 
   return (
     <div>
-      {/* Targeting summary banner */}
       <div style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18, display: "flex", alignItems: "flex-start", gap: 10 }}>
         <i className="bi bi-people-fill" style={{ color: G.base, fontSize: 16, marginTop: 1 }}/>
         <div style={{ fontSize: 13, color: G.dark }}>
@@ -542,7 +524,6 @@ function AttendeesTab({ seminar }) {
         </div>
       </div>
 
-      {/* Stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <div style={s.statCard(G.base)}>
           <div style={{ ...s.statNum, color: G.base, fontSize: 22 }}>{eligible.length}</div>
@@ -558,7 +539,6 @@ function AttendeesTab({ seminar }) {
         </div>
       </div>
 
-      {/* Filters */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or email…"
           style={{ ...s.input, maxWidth: 280 }} />
@@ -680,7 +660,6 @@ function RegistrationsTab({ seminar }) {
 
   return (
     <div>
-      {/* Stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
           { label: "Total",     value: regs.length,                                    color: G.base    },
@@ -694,7 +673,6 @@ function RegistrationsTab({ seminar }) {
         ))}
       </div>
 
-      {/* Role breakdown pills */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button onClick={() => setRoleFilter("all")}
           style={{ padding: "4px 12px", borderRadius: 20, border: `1.5px solid ${roleFilter==="all"?"#2D6A2D":"#DDE8DD"}`, background: roleFilter==="all"?"#E8F5E9":"#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: roleFilter==="all"?"#2D6A2D":"#555" }}>
@@ -708,7 +686,6 @@ function RegistrationsTab({ seminar }) {
         ))}
       </div>
 
-      {/* Search */}
       <div style={{ marginBottom: 14 }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or email…"
           style={{ ...s.input, maxWidth: 300 }} />
@@ -910,16 +887,17 @@ function EvaluationsTab({ seminar }) {
 
 // ── Jitsi Meeting Modal ───────────────────────────────────────────
 const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClose }) {
-  const roomName = `bloom-gad-${seminar.id}`;
-  const jitsiUrl = `https://meet.bloomgad.xyz/${roomName}`;
+  const cleanId = seminar.id.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  const roomName = `bloomgad${cleanId}`;
+  // Omit user info from raw URL and let Jitsi prompt or handle it cleanly
+const jitsiUrl = `https://meet.bloomgad.xyz/${roomName}`;
   const [copied, setCopied] = useState(false);
 
- const iframeSrc = useRef(
-  `${jitsiUrl}#userInfo.displayName="GADRC Admin (Moderator)"&config.startWithVideoMuted=true&config.startWithAudioMuted=true&interfaceConfig...`
-).current;
+  const encodedDisplayName = encodeURIComponent("GADRC Admin (Moderator)");
+  const iframeSrc = `${jitsiUrl}#userInfo.displayName="%22"${encodedDisplayName}"%22"&config.disableDeepLinking=true`;
 
   const copyLink = () => {
-    navigator.clipboard.writeText(jitsiUrl);
+    navigator.clipboard.writeText(`${jitsiUrl}#config.disableDeepLinking=true`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -945,7 +923,7 @@ const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClo
           <i className={`bi bi-${copied ? "check-circle-fill" : "link-45deg"}`}/>
           {copied ? "Copied!" : "Copy Join Link"}
         </button>
-        <a href={jitsiUrl} target="_blank" rel="noreferrer"
+        <a href={`${jitsiUrl}#config.disableDeepLinking=true`} target="_blank" rel="noreferrer"
           style={{ padding: "7px 14px", background: "rgba(255,255,255,0.12)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
           <i className="bi bi-box-arrow-up-right"/> Open in Tab
         </a>
@@ -974,17 +952,16 @@ const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClo
   );
 }, (prevProps, nextProps) => prevProps.seminar.id === nextProps.seminar.id);
 
-
 // ── Attendance Report Tab ─────────────────────────────────────────────────────
 function AttendanceReportTab({ seminar, onUpdate }) {
   const toast = useToast();
-  const [logs,        setLogs]        = useState([]);
-  const [loading,     setLoading]     = useState(true);
-  const [search,      setSearch]      = useState("");
-  const [filter,      setFilter]      = useState("all"); // all | present | partial | absent | eligible
-  const [marking,     setMarking]     = useState(false);
-  const [exporting,   setExporting]   = useState(false);
-  const [editingId,   setEditingId]   = useState(null);
+  const [logs,         setLogs]        = useState([]);
+  const [loading,      setLoading]     = useState(true);
+  const [search,       setSearch]      = useState("");
+  const [filter,       setFilter]      = useState("all");
+  const [marking,      setMarking]     = useState(false);
+  const [exporting,    setExporting]   = useState(false);
+  const [editingId,    setEditingId]   = useState(null);
   const [editStatus,  setEditStatus]  = useState("");
 
   const load = useCallback(async () => {
@@ -1027,7 +1004,6 @@ function AttendanceReportTab({ seminar, onUpdate }) {
     present: "green", partial: "yellow", joined: "blue", absent: "red",
   }[st] || "");
 
-  // ── Auto-mark eligible on meeting end ──────────────────────────────────────
   const autoMarkEligible = async () => {
     setMarking(true);
     let marked = 0;
@@ -1037,7 +1013,7 @@ function AttendanceReportTab({ seminar, onUpdate }) {
         await supabase.from("seminar_attendance_logs")
           .update({ is_eligible: eligible, attendance_status: eligible ? "present" : log.attendance_status })
           .eq("id", log.id);
-        // Also update seminar_attendance table for certificate gating
+
         if (eligible) {
           await supabase.from("seminar_attendance").upsert({
             seminar_id: seminar.id, user_id: log.user_id,
@@ -1053,7 +1029,6 @@ function AttendanceReportTab({ seminar, onUpdate }) {
     setMarking(false);
   };
 
-  // ── Manual override ────────────────────────────────────────────────────────
   const saveOverride = async (log) => {
     await supabase.from("seminar_attendance_logs")
       .update({ attendance_status: editStatus, is_eligible: editStatus === "present" })
@@ -1073,7 +1048,6 @@ function AttendanceReportTab({ seminar, onUpdate }) {
     load();
   };
 
-  // ── Export PDF ─────────────────────────────────────────────────────────────
   const exportPDF = async () => {
     setExporting(true);
     try {
@@ -1120,7 +1094,6 @@ function AttendanceReportTab({ seminar, onUpdate }) {
     setExporting(false);
   };
 
-  // ── Export Excel ───────────────────────────────────────────────────────────
   const exportExcel = async () => {
     setExporting(true);
     try {
@@ -1132,15 +1105,15 @@ function AttendanceReportTab({ seminar, onUpdate }) {
         });
       }
       const rows = filteredLogs.map(l => ({
-        "Name":         l.profiles?.full_name   || "—",
-        "Student ID":   l.profiles?.student_id  || "—",
-        "Department":   l.profiles?.department  || "—",
-        "Year Level":   l.profiles?.year_level  ? `Year ${l.profiles.year_level}` : "—",
-        "Email":        l.profiles?.email       || "—",
-        "Join Time":    fmtTime(l.join_time),
-        "Leave Time":   fmtTime(l.leave_time),
-        "Duration":     fmtDuration(l.duration_minutes),
-        "Status":       l.attendance_status     || "—",
+        "Name":                 l.profiles?.full_name   || "—",
+        "Student ID":           l.profiles?.student_id  || "—",
+        "Department":           l.profiles?.department  || "—",
+        "Year Level":           l.profiles?.year_level  ? `Year ${l.profiles.year_level}` : "—",
+        "Email":                l.profiles?.email       || "—",
+        "Join Time":            fmtTime(l.join_time),
+        "Leave Time":           fmtTime(l.leave_time),
+        "Duration":             fmtDuration(l.duration_minutes),
+        "Status":               l.attendance_status     || "—",
         "Certificate Eligible": l.is_eligible ? "Yes" : "No",
       }));
       const ws = window.XLSX.utils.json_to_sheet(rows);
@@ -1173,7 +1146,6 @@ function AttendanceReportTab({ seminar, onUpdate }) {
 
   return (
     <div>
-      {/* Info banner */}
       <div style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18, fontSize: 13, color: G.dark, display: "flex", alignItems: "center", gap: 10 }}>
         <i className="bi bi-info-circle-fill" style={{ color: G.base, flexShrink: 0 }}/>
         <div>
@@ -1184,7 +1156,6 @@ function AttendanceReportTab({ seminar, onUpdate }) {
         </div>
       </div>
 
-      {/* Stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
           { label: "Total",    value: stats.total,   color: G.base    },
@@ -1200,7 +1171,6 @@ function AttendanceReportTab({ seminar, onUpdate }) {
         ))}
       </div>
 
-      {/* Toolbar */}
       <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         <input style={{ ...s.input, width: 240 }} placeholder="Search by name, ID, department…"
           value={search} onChange={e => setSearch(e.target.value)} />
@@ -1433,7 +1403,6 @@ export default function SeminarsPage() {
               <span style={s.tag(selected.is_public ? "green" : "yellow")}>{selected.is_public ? "Public" : "Private"}</span>
               {(selected.seminar_type === "webinar" || selected.seminar_type === "hybrid") && selected.status !== "cancelled" && selected.status !== "completed" && (
                 <button onClick={async () => {
-                    // Set status to ongoing so students can join
                     await supabase.from("seminars").update({ status: "ongoing" }).eq("id", selected.id);
                     setSeminars(ss => ss.map(s => s.id === selected.id ? { ...s, status: "ongoing" } : s));
                     setSelected(s => ({ ...s, status: "ongoing" }));
@@ -1451,11 +1420,11 @@ export default function SeminarsPage() {
               ))}
             </div>
             <div style={s.content}>
-              {tab === "details"     && <DetailsTab           key={selected.id + "_d"} seminar={selected} onUpdate={reload} />}
-              {tab === "attendees"   && <AttendeesTab         key={selected.id + "_a"} seminar={selected} />}
+              {tab === "details"       && <DetailsTab           key={selected.id + "_d"} seminar={selected} onUpdate={reload} />}
+              {tab === "attendees"     && <AttendeesTab         key={selected.id + "_a"} seminar={selected} />}
               {tab === "registrations" && <RegistrationsTab   key={selected.id + "_r"} seminar={selected} />}
-              {tab === "attendance"  && <AttendanceReportTab  key={selected.id + "_ar"} seminar={selected} onUpdate={reload} />}
-              {tab === "evaluations" && <EvaluationsTab       key={selected.id + "_e"} seminar={selected} />}
+              {tab === "attendance"    && <AttendanceReportTab  key={selected.id + "_ar"} seminar={selected} onUpdate={reload} />}
+              {tab === "evaluations"   && <EvaluationsTab       key={selected.id + "_e"} seminar={selected} />}
             </div>
           </>
         )}
@@ -1464,11 +1433,12 @@ export default function SeminarsPage() {
       {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)}/>}
 
       {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={async () => {
-        const endTime    = new Date();
-        const startTime  = jitsiRoom.scheduled_start ? new Date(jitsiRoom.scheduled_start) : null;
-        const durationMins = startTime ? Math.round((endTime - startTime) / 60000) : null;
+        const endTime = new Date();
+        const startTime = jitsiRoom.scheduled_start 
+          ? new Date(jitsiRoom.scheduled_start) 
+          : new Date(jitsiRoom.created_at || Date.now());
+        const durationMins = Math.max(1, Math.round((endTime - startTime) / 60000));
 
-        // Update seminar status + store meeting duration
         await supabase.from("seminars").update({
           status: "completed",
           meeting_duration_minutes: durationMins,
@@ -1476,7 +1446,6 @@ export default function SeminarsPage() {
         setSeminars(ss => ss.map(s => s.id === jitsiRoom.id ? { ...s, status: "completed", meeting_duration_minutes: durationMins } : s));
         setSelected(s => s?.id === jitsiRoom.id ? { ...s, status: "completed", meeting_duration_minutes: durationMins } : s);
 
-        // Auto-mark attendance eligibility for all logged participants
         const { data: attendanceLogs } = await supabase
           .from("seminar_attendance_logs")
           .select("id, user_id, duration_minutes, join_time, leave_time")
@@ -1485,8 +1454,6 @@ export default function SeminarsPage() {
         const meetingEndTime = endTime.toISOString();
         let marked = 0;
         for (const log of (attendanceLogs || [])) {
-          // If student has no leave_time, they were still in when admin ended —
-          // use the meeting end time as their leave time
           let duration = log.duration_minutes;
           let leaveTime = log.leave_time;
           if (!leaveTime && log.join_time) {
