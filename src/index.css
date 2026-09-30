@@ -66,3 +66,9 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+select, option {
+  color: #1A2E1A;
+  background-color: #fff;
+  color-scheme: light;
+}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase.js";
 import { ConfirmModal } from "./App.jsx";
 import { useToast } from "./App.jsx";
@@ -27,6 +27,32 @@ async function sendPublishNotifications(title, notifType, referenceId) {
       await supabase.from("notifications").insert(notifs.slice(i, i + 50));
     }
   } catch (e) { console.error("sendPublishNotifications failed:", e); }
+}
+
+// ── Update helper ─────────────────────────────────────────────────────────────
+// Supabase does NOT return an error when a row-level security (RLS) policy
+// blocks an update — it just updates 0 rows. Asking for the updated row back
+// lets us detect that and show a real error instead of a fake "saved" message.
+const NO_ROWS_MSG =
+  "Nothing was saved. Your account may not have permission to edit announcements " +
+  "(check the UPDATE policy on the announcements table in Supabase).";
+
+async function updateAnnouncement(id, patch) {
+  const { data, error } = await supabase
+    .from("announcements")
+    .update(patch)
+    .eq("id", id)
+    .select("id");
+  if (error) return error;
+  if (!data || data.length === 0) return { message: NO_ROWS_MSG };
+  return null;
+}
+
+// Escape text before putting it into the email's HTML
+function escapeHtml(v) {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 const G = {
@@ -60,7 +86,7 @@ const s = {
   mFooter:    { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
   label:      { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
   input:      { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:     { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:     { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, colorScheme: "light" },
   textarea:   { width: "100%", padding: "9px 12px", border: `1px solid ${G.pale}`, borderRadius: 8, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 100 },
   fg:         { marginBottom: 16 },
   row:        { display: "flex", gap: 12 },
@@ -92,6 +118,22 @@ function formatDate(iso) {
   });
 }
 
+// "YYYY-MM-DD" for today in Philippine time (for comparing date inputs)
+function todayPH() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+}
+
+// Turn a stored expires_at (date or timestamp) into "YYYY-MM-DD" for the date input
+function toDateInput(value) {
+  if (!value) return "";
+  const str = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const utcStr = str.endsWith("Z") || str.includes("+") ? str : str + "Z";
+  const d = new Date(utcStr);
+  if (Number.isNaN(d.getTime())) return str.slice(0, 10);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+}
+
 export default function AnnouncementsPage() {
   const toast = useToast();
   const [announcements, setAnnouncements] = useState([]);
@@ -112,44 +154,37 @@ export default function AnnouncementsPage() {
   const [confirm, setConfirm] = useState(null);
 
   // ── Fetch ──────────────────────────────────────────────────────
-  const fetchData = async () => {
-    setLoading(true);
-    const { data, error: err } = await supabase
+  const fetchData = useCallback(async () => {
+    const { data, error: fetchErr } = await supabase
       .from("announcements")
       .select("*")
       .order("created_at", { ascending: false });
-    if (err) console.error("Fetch error:", err.message);
+    if (fetchErr) console.error("Fetch error:", fetchErr.message);
     setAnnouncements(data ?? []);
     setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     let active = true;
     (async () => {
       setLoading(true);
-      const { data, error: err } = await supabase
-        .from("announcements")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (err) console.error(err.message);
-      if (active) {
-        setAnnouncements(data ?? []);
-        setLoading(false);
-        // Load departments for email targeting
-        const { data: depts } = await supabase
-          .from("profiles")
-          .select("department")
-          .eq("is_active", true);
-        const uniqueDepts = [...new Set((depts || []).map(d => d.department).filter(Boolean))].sort();
-        setDepartments(uniqueDepts);
-      }
+      await fetchData();
+      if (!active) return;
+      // Load departments for email targeting
+      const { data: depts } = await supabase
+        .from("profiles")
+        .select("department")
+        .eq("is_active", true);
+      if (!active) return;
+      const uniqueDepts = [...new Set((depts || []).map(d => d.department).filter(Boolean))].sort();
+      setDepartments(uniqueDepts);
     })();
     return () => { active = false; };
-  }, []);
+  }, [fetchData]);
 
   // ── Open modal ─────────────────────────────────────────────────
   const openAdd = () => {
-    setForm({ priority: "normal", type: "general", target_audience: "all", is_published: false, is_pinned: false });
+    setForm({ title: "", content: "", priority: "normal", type: "general", target_audience: "all", expires_at: "", is_published: false, is_pinned: false });
     setError(""); setErr({});
     setModal("add");
   };
@@ -161,7 +196,7 @@ export default function AnnouncementsPage() {
       priority:        a.priority  || "normal",
       type:            a.type      || "general",
       target_audience: a.target_audience || "all",
-      expires_at:      a.expires_at ? a.expires_at.slice(0, 10) : "",
+      expires_at:      toDateInput(a.expires_at),
       is_published:    !!a.published_at,
       is_pinned:       !!a.is_pinned,
     });
@@ -169,8 +204,13 @@ export default function AnnouncementsPage() {
     setModal(a);
   };
 
+  const closeModal = () => { setModal(null); setForm({}); setError(""); setErr({}); };
+
   // ── Save (add or edit) ─────────────────────────────────────────
   const save = async () => {
+    const isAdd = modal === "add";
+    const originalExpiry = isAdd ? "" : toDateInput(modal.expires_at);
+
     const errors = V.all({
       title:   V.title(form.title, "Title"),
       content: !form.content?.trim()
@@ -180,8 +220,10 @@ export default function AnnouncementsPage() {
           : form.content.trim().length > 2000
             ? "Content must not exceed 2000 characters."
             : null,
-      expires_at: form.expires_at
-        ? (new Date(form.expires_at) < new Date(new Date().toDateString()) ? "Expiry date cannot be in the past." : null)
+      // Only check the expiry date if the admin changed it — otherwise an
+      // announcement that has already expired could never be edited again.
+      expires_at: form.expires_at && form.expires_at !== originalExpiry && form.expires_at < todayPH()
+        ? "Expiry date cannot be in the past."
         : null,
     });
     if (errors) { setErr(errors); return; }
@@ -192,79 +234,88 @@ export default function AnnouncementsPage() {
 
     const { data: { user } } = await supabase.auth.getUser();
 
+    // Keep the original publish date when editing an already-published announcement
+    const wasPublished = !isAdd && !!modal.published_at;
+    const nowPublished = !!form.is_published;
+    const publishedAt  = nowPublished
+      ? (wasPublished ? modal.published_at : new Date().toISOString())
+      : null;
+
     const payload = {
       title:           form.title.trim(),
       body:            form.content.trim(),
       content:         form.content.trim(),
-      is_pinned:       !!(form.is_pinned),
-      is_published:    !!(form.is_published),
+      priority:        form.priority || "normal",
+      type:            form.type || "general",
+      is_pinned:       !!form.is_pinned,
+      is_published:    nowPublished,
       target_audience: form.target_audience || "all",
       expires_at:      form.expires_at || null,
-      published_at:    form.is_published ? new Date().toISOString() : null,
+      published_at:    publishedAt,
     };
 
-    let err = null;
+    let saveErr = null;
+    let savedId = isAdd ? null : modal.id;
 
-    if (modal === "add") {
-      const result = await supabase
+    if (isAdd) {
+      const { data, error: insertErr } = await supabase
         .from("announcements")
-        .insert({ ...payload, created_by: user?.id ?? null });
-      err = result.error;
-      if (err) console.error("Insert error:", err);
+        .insert({ ...payload, created_by: user?.id ?? null })
+        .select("id")
+        .single();
+      saveErr = insertErr;
+      savedId = data?.id ?? null;
+      if (insertErr) console.error("Insert error:", insertErr);
     } else {
-      const result = await supabase
-        .from("announcements")
-        .update(payload)
-        .eq("id", modal.id);
-      err = result.error;
-      if (err) console.error("Update error:", err);
+      saveErr = await updateAnnouncement(modal.id, payload);
+      if (saveErr) console.error("Update error:", saveErr);
     }
 
     setSaving(false);
 
-    if (err) { setError(err.message); return; }
-    toast(modal === "add" ? "Announcement created." : "Announcement updated.", "success");
-    logActivity(modal === "add" ? "announcement_created" : "announcement_updated", { title: form.title });
-    setModal(null);
-    setForm({});
+    if (saveErr) { setError(saveErr.message); return; }
+
+    // Notify students when an announcement becomes published through this form
+    if (nowPublished && !wasPublished && savedId) {
+      sendPublishNotifications(payload.title, "announcement", savedId);
+    }
+
+    toast(isAdd ? "Announcement created." : "Announcement updated.", "success");
+    logActivity(isAdd ? "announcement_created" : "announcement_updated", { id: savedId, title: payload.title });
+    closeModal();
     fetchData();
   };
 
   // ── Toggle publish ─────────────────────────────────────────────
   const togglePublish = async (a) => {
     const newVal = a.published_at ? null : new Date().toISOString();
-    const { error: err } = await supabase
-      .from("announcements")
-      .update({ published_at: newVal })
-      .eq("id", a.id);
-    if (!err) {
-      if (newVal) {
-        toast("Announcement published — students notified.", "success");
-        logActivity("announcement_published", { id: a.id, title: a.title });
-        sendPublishNotifications(a.title, "announcement", a.id);
-      } else {
-        toast("Announcement unpublished.", "success");
-        logActivity("announcement_unpublished", { id: a.id, title: a.title });
-      }
-      fetchData();
-    } else {
-      toast("Failed to update announcement.", "error");
+    // Keep is_published and published_at in sync
+    const updateErr = await updateAnnouncement(a.id, { published_at: newVal, is_published: !!newVal });
+    if (updateErr) {
+      toast(`Failed to update announcement: ${updateErr.message}`, "error");
+      return;
     }
+    if (newVal) {
+      toast("Announcement published — students notified.", "success");
+      logActivity("announcement_published", { id: a.id, title: a.title });
+      sendPublishNotifications(a.title, "announcement", a.id);
+    } else {
+      toast("Announcement unpublished.", "success");
+      logActivity("announcement_unpublished", { id: a.id, title: a.title });
+    }
+    fetchData();
   };
 
   // ── Toggle pin ─────────────────────────────────────────────────
   const togglePin = async (a) => {
-    const { error: err } = await supabase
-      .from("announcements")
-      .update({ is_pinned: !a.is_pinned })
-      .eq("id", a.id);
-    if (!err) {
-      toast(a.is_pinned ? "Announcement unpinned." : "Announcement pinned.", "success");
-      logActivity(a.is_pinned ? "announcement_unpinned" : "announcement_pinned", { id: a.id, title: a.title });
-      fetchData();
-    } else {
-      toast("Failed to update pin status.", "error");
+    const updateErr = await updateAnnouncement(a.id, { is_pinned: !a.is_pinned });
+    if (updateErr) {
+      toast(`Failed to update pin status: ${updateErr.message}`, "error");
+      return;
     }
+    toast(a.is_pinned ? "Announcement unpinned." : "Announcement pinned.", "success");
+    logActivity(a.is_pinned ? "announcement_unpinned" : "announcement_pinned", { id: a.id, title: a.title });
+    fetchData();
   };
 
   // ── Delete ─────────────────────────────────────────────────────
@@ -275,13 +326,14 @@ export default function AnnouncementsPage() {
       confirmLabel: "Delete",
       danger: true,
       onConfirm: async () => {
-        const { error: err } = await supabase.from("announcements").delete().eq("id", a.id);
-        if (!err) {
+        const { data, error: delErr } = await supabase
+          .from("announcements").delete().eq("id", a.id).select("id");
+        if (delErr || !data || data.length === 0) {
+          toast(`Failed to delete announcement${delErr ? `: ${delErr.message}` : " (no permission to delete)."}`, "error");
+        } else {
           toast("Announcement deleted.", "success");
           logActivity("announcement_deleted", { id: a.id, title: a.title });
           fetchData();
-        } else {
-          toast("Failed to delete announcement.", "error");
         }
         setConfirm(null);
       }
@@ -289,16 +341,15 @@ export default function AnnouncementsPage() {
   };
 
   // ── Filtered list ──────────────────────────────────────────────
+  const q = search.toLowerCase();
   const filtered = announcements
     .filter(a =>
-      (a.title || "").toLowerCase().includes(search.toLowerCase()) ||
-      ((a.body || a.content) || "").toLowerCase().includes(search.toLowerCase())
+      (a.title || "").toLowerCase().includes(q) ||
+      ((a.body || a.content) || "").toLowerCase().includes(q)
     )
     .sort((a, b) => {
-      // Pinned always on top
       if (a.is_pinned && !b.is_pinned) return -1;
       if (!a.is_pinned && b.is_pinned) return 1;
-      // Then by created_at descending
       return new Date(b.created_at) - new Date(a.created_at);
     });
 
@@ -309,7 +360,6 @@ export default function AnnouncementsPage() {
     setNotifyTarget(announcement);
     setNotifyGroup("all");
     setNotifyDept("");
-    setNotifyEmails([]);
     setNotifyResult(null);
     setShowNotify(true);
   };
@@ -320,10 +370,8 @@ export default function AnnouncementsPage() {
 
     setNotifySending(true); setNotifyResult(null);
 
-    // Fetch target emails from Supabase
     let query = supabase.from("profiles").select("email, full_name").eq("is_active", true);
     if (notifyGroup === "department" && notifyDept) query = query.eq("department", notifyDept);
-    if (notifyGroup === "specific" && notifyEmails.length > 0) query = query.in("email", notifyEmails);
 
     const { data: recipients } = await query;
     if (!recipients || recipients.length === 0) {
@@ -334,7 +382,8 @@ export default function AnnouncementsPage() {
 
     const announcement = notifyTarget;
     const subject = `📢 New Announcement: ${announcement.title}`;
-    const htmlBody = `
+    const bodyHtml = escapeHtml(announcement.body || announcement.content || "").split("\n").join("<br>");
+    const buildHtml = (recipientName) => `
       <!DOCTYPE html>
       <html>
       <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
@@ -342,21 +391,18 @@ export default function AnnouncementsPage() {
         <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:40px 0;">
           <tr><td align="center">
             <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-              <!-- Header -->
               <tr><td style="background:linear-gradient(135deg,#1A2E1A,#2D6A2D);padding:32px 40px;text-align:center;">
                 <div style="color:#fff;font-size:13px;letter-spacing:3px;text-transform:uppercase;opacity:0.8;margin-bottom:8px;">BLOOM GAD — CvSU GADRC</div>
-                <div style="color:#fff;font-size:24px;font-weight:800;">📢 New Announcement</div>
+                <div style="color:#fff;font-size:24px;font-weight:800;">📢 New Announcement for ${escapeHtml(recipientName || "Student")}</div>
               </td></tr>
-              <!-- Body -->
               <tr><td style="padding:40px;">
-                <h2 style="color:#1A2E1A;font-size:20px;margin:0 0 16px 0;">${announcement.title}</h2>
+                <h2 style="color:#1A2E1A;font-size:20px;margin:0 0 16px 0;">${escapeHtml(announcement.title)}</h2>
                 ${announcement.is_pinned ? '<div style="display:inline-block;background:#dcfce7;color:#16a34a;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;margin-bottom:16px;">📌 Pinned Announcement</div>' : ''}
                 <div style="color:#444;font-size:15px;line-height:1.8;border-left:4px solid #2D6A2D;padding-left:16px;margin-bottom:24px;">
-                  ${(announcement.body || announcement.content || '').split('\n').join('<br>')}
+                  ${bodyHtml}
                 </div>
                 <div style="color:#888;font-size:12px;">Published: ${new Date(announcement.published_at || announcement.created_at).toLocaleDateString("en-PH", { year:"numeric", month:"long", day:"numeric" })}</div>
               </td></tr>
-              <!-- Footer -->
               <tr><td style="background:#f9fafb;padding:24px 40px;text-align:center;border-top:1px solid #e5e7eb;">
                 <div style="color:#888;font-size:12px;">This email was sent by BLOOM GAD e-Learning Platform</div>
                 <div style="color:#888;font-size:12px;margin-top:4px;">Cavite State University — Gender and Development Resource Center</div>
@@ -367,7 +413,6 @@ export default function AnnouncementsPage() {
       </body>
       </html>`;
 
-    // Send emails via Resend (batch — one per recipient)
     let sent = 0, failed = 0;
     for (const recipient of recipients) {
       try {
@@ -378,7 +423,7 @@ export default function AnnouncementsPage() {
             from: "BLOOM GAD <onboarding@resend.dev>",
             to: [recipient.email],
             subject,
-            html: htmlBody.replace("New Announcement", `New Announcement for ${recipient.full_name || "Student"}`),
+            html: buildHtml(recipient.full_name),
           }),
         });
         if (res.ok) sent++; else failed++;
@@ -428,6 +473,7 @@ export default function AnnouncementsPage() {
           {filtered.map(a => {
             const body      = a.body || a.content || "";
             const published = !!a.published_at;
+            const expired   = a.expires_at && toDateInput(a.expires_at) < todayPH();
             return (
               <div key={a.id} style={{ ...s.card, borderLeft: a.is_pinned ? `4px solid ${G.light}` : `4px solid transparent` }}>
                 <div style={s.cardLeft}>
@@ -446,7 +492,9 @@ export default function AnnouncementsPage() {
                     {a.type && <span style={s.tag("blue")}>{a.type}</span>}
                     <span style={s.tag()}>{a.target_audience || "all"}</span>
                     {a.expires_at && (
-                      <span style={{ fontSize: 11, color: "#aaa" }}>Expires {formatDate(a.expires_at)}</span>
+                      <span style={{ fontSize: 11, color: expired ? "#dc2626" : "#aaa" }}>
+                        {expired ? "Expired" : "Expires"} {formatDate(a.expires_at)}
+                      </span>
                     )}
                     <span style={{ fontSize: 11, color: "#ccc" }}>{formatDate(a.created_at)}</span>
                   </div>
@@ -470,11 +518,10 @@ export default function AnnouncementsPage() {
         </div>
       )}
 
-      {/* ── Modal ─────────────────────────────────────────────── */}
       {/* ── Email Notification Modal ── */}
       {showNotify && notifyTarget && (
         <div style={s.overlay}>
-          <div style={s.modal(520)}>
+          <div style={{ ...s.modal, maxWidth: 520 }}>
             <div style={{padding:"18px 24px",background:`linear-gradient(135deg,${G.dark},${G.base})`,borderRadius:"10px 10px 0 0",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <div style={{width:36,height:36,borderRadius:10,background:"rgba(255,255,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.25)"}}>
@@ -488,7 +535,6 @@ export default function AnnouncementsPage() {
               <button style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",borderRadius:6,color:"#fff",cursor:"pointer",fontSize:16,width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>{setShowNotify(false);setNotifyResult(null);}}>×</button>
             </div>
             <div style={{...s.mBody,background:G.wash}}>
-              {/* Announcement Preview */}
               <div style={{background:"#fff",border:`1px solid ${G.pale}`,borderRadius:8,padding:"12px 16px",marginBottom:16}}>
                 <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ANNOUNCEMENT</div>
                 <div style={{fontWeight:700,color:G.dark,fontSize:14}}>{notifyTarget.title}</div>
@@ -497,7 +543,6 @@ export default function AnnouncementsPage() {
                 </div>
               </div>
 
-              {/* Recipient Group */}
               <div style={s.fg}>
                 <label style={s.label}>Send To</label>
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -513,7 +558,6 @@ export default function AnnouncementsPage() {
                 </div>
               </div>
 
-              {/* Department Selector */}
               {notifyGroup === "department" && (
                 <div style={s.fg}>
                   <label style={s.label}>Select Department</label>
@@ -524,14 +568,15 @@ export default function AnnouncementsPage() {
                 </div>
               )}
 
-              {/* Result */}
               {notifyResult && (
                 <div style={{background: notifyResult.error ? "#fee2e2" : "#f0fdf4", border:`1px solid ${notifyResult.error?"#fca5a5":"#86efac"}`, borderRadius:8, padding:"12px 16px", fontSize:13}}>
                   {notifyResult.error
                     ? <><i className="bi bi-exclamation-circle me-2" style={{color:"#dc2626"}}/>Error: {notifyResult.error}</>
                     : <>
-                        <i className="bi bi-check-circle me-2" style={{color:"#16a34a"}}/>
-                        <strong style={{color:"#16a34a"}}>Emails sent successfully!</strong>
+                        <i className="bi bi-check-circle me-2" style={{color: notifyResult.sent > 0 ? "#16a34a" : "#dc2626"}}/>
+                        <strong style={{color: notifyResult.sent > 0 ? "#16a34a" : "#dc2626"}}>
+                          {notifyResult.sent > 0 ? "Emails sent!" : "No emails could be sent."}
+                        </strong>
                         <div style={{marginTop:6,color:"#444",fontSize:12}}>
                           ✅ Sent: {notifyResult.sent} &nbsp;|&nbsp; ❌ Failed: {notifyResult.failed}
                         </div>
@@ -558,15 +603,19 @@ export default function AnnouncementsPage() {
         </div>
       )}
 
+      {/* ── Add / Edit Modal ── */}
       {modal && (
         <div style={s.overlay}>
           <div style={s.modal}>
             <div style={s.mHeader}>
               <span style={s.mTitle}>{modal === "add" ? "New Announcement" : "Edit Announcement"}</span>
-              <button style={s.iconBtn()} onClick={() => setModal(null)}>✕</button>
+              <button style={s.iconBtn()} onClick={closeModal}>✕</button>
             </div>
             <div style={s.mBody}>
               {error && <div style={s.error}>{error}</div>}
+              {Object.values(err).some(Boolean) && !error && (
+                <div style={s.error}>Please fix the highlighted fields below.</div>
+              )}
 
               <div style={s.fg}>
                 <label style={s.label}>Title *</label>
@@ -575,7 +624,7 @@ export default function AnnouncementsPage() {
               </div>
 
               <div style={s.fg}>
-                <label style={s.label}>Content *</label>
+                <label style={s.label}>Content * <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>({(form.content || "").length}/2000)</span></label>
                 <textarea style={{...s.textarea, borderColor: err.content ? "#dc2626" : undefined}} value={form.content || ""} onChange={e => setF("content", e.target.value)} placeholder="Write your announcement here…" />
                 <FieldError msg={err.content}/>
               </div>
@@ -603,14 +652,19 @@ export default function AnnouncementsPage() {
 
               <div style={s.fg}>
                 <label style={s.label}>Expiry Date (optional)</label>
-                <input style={{...s.input, borderColor: err.expires_at ? "#dc2626" : undefined}} type="date" value={form.expires_at || ""} onChange={e => setF("expires_at", e.target.value)} />
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input style={{...s.input, borderColor: err.expires_at ? "#dc2626" : undefined}} type="date" value={form.expires_at || ""} onChange={e => setF("expires_at", e.target.value)} />
+                  {form.expires_at && (
+                    <button type="button" style={{ ...s.btnSecondary, padding: "9px 12px", whiteSpace: "nowrap" }} onClick={() => setF("expires_at", "")}>Clear</button>
+                  )}
+                </div>
                 <FieldError msg={err.expires_at}/>
               </div>
 
               <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, color: G.dark, fontWeight: 600 }}>
                   <input type="checkbox" checked={!!form.is_published} onChange={e => setF("is_published", e.target.checked)} style={{ width: 16, height: 16, accentColor: G.base }} />
-                  Publish immediately
+                  {modal !== "add" && modal.published_at ? "Published" : "Publish immediately"}
                 </label>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, color: G.dark, fontWeight: 600 }}>
                   <input type="checkbox" checked={!!form.is_pinned} onChange={e => setF("is_pinned", e.target.checked)} style={{ width: 16, height: 16, accentColor: G.base }} />
@@ -620,7 +674,7 @@ export default function AnnouncementsPage() {
             </div>
 
             <div style={s.mFooter}>
-              <button style={s.btnSecondary} onClick={() => setModal(null)}>Cancel</button>
+              <button style={s.btnSecondary} onClick={closeModal}>Cancel</button>
               <button style={{ ...s.btnPrimary, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>
                 {saving ? "Saving…" : modal === "add" ? "Create Announcement" : "Save Changes"}
               </button>
@@ -628,7 +682,7 @@ export default function AnnouncementsPage() {
           </div>
         </div>
       )}
-    {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)}/>}
+      {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)}/>}
     </div>
   );
 }

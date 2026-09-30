@@ -26,10 +26,11 @@ const BOOTSTRAP_JS  = "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/boot
 const BI_CSS        = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css";
 const INTER_CSS     = "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap";
 
-/* ─── Mobile app download (QR code on the public landing page) ── */
+/* ─── Mobile app download (QR code + button on the public landing page) ── */
 // Direct-download link for the APK hosted on Google Drive
-const APP_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id=12sh24fi6BaDj73cm1ClYEYb4RuP-JROm";
-const QR_CODE_SRC = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=6&data=${encodeURIComponent(APP_DOWNLOAD_URL)}`;
+const APP_FILE_ID      = "1be2I0NZ91Md2QC0yaH_oz9D3pjtPH7f8";
+const APP_DOWNLOAD_URL = `https://drive.google.com/uc?export=download&id=${APP_FILE_ID}`;
+const QR_CODE_SRC = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=10&data=${encodeURIComponent(APP_DOWNLOAD_URL)}`;
 
 function loadCSS(href) {
   if (document.querySelector(`link[href="${href}"]`)) return;
@@ -376,7 +377,7 @@ function DeactivationModal({ onOk }) {
 }
 
 /* ─── PUBLIC LANDING PAGE ──────────────────────────────────────
-   Public-facing page: app description + QR download.
+   Public-facing page: app description + QR download + download button.
    A subtle, unlabeled button in the corner is the only way in
    to the admin login — nothing on this page advertises it. ── */
 function LandingPage({ onAdminClick }) {
@@ -412,18 +413,27 @@ function LandingPage({ onAdminClick }) {
             <img
               src={QR_CODE_SRC}
               alt="Scan to download the BLOOM GAD mobile app"
-              width={92}
-              height={92}
+              width={110}
+              height={110}
               style={{ borderRadius:10, border:"1px solid #DDE8DD", flexShrink:0 }}
             />
             <div>
               <div className="fw-semibold mb-1" style={{ fontSize:14, color:"#1A2E1A" }}>
                 Get the BLOOM GAD app
               </div>
-              <div className="text-muted" style={{ fontSize:12.5, lineHeight:1.6 }}>
-                Scan this QR code with your phone camera to download the app and access your
-                modules, seminars, and certificates on the go.
+              <div className="text-muted mb-2" style={{ fontSize:12.5, lineHeight:1.6 }}>
+                Scan this QR code with your phone camera, or tap the button below to download
+                the app and access your modules, seminars, and certificates on the go.
               </div>
+              <a
+                href={APP_DOWNLOAD_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-primary btn-sm d-inline-flex align-items-center gap-2"
+                style={{ padding:"7px 14px" }}
+              >
+                <i className="bi bi-download"/> Download the App
+              </a>
             </div>
           </div>
         </div>

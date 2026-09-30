@@ -33,9 +33,29 @@ const TARGET_ROLE_OPTIONS = [
   { value: "student", label: "Students", icon: "bi-mortarboard"   },
   { value: "teacher", label: "Teachers", icon: "bi-person-video3" },
   { value: "faculty", label: "Faculty",  icon: "bi-person-badge"  },
-  { value: "guest",   label: "Guests",   icon: "bi-person"        },
+  { value: "staff",   label: "Non-Academic Staff", icon: "bi-person-workspace" },
+  { value: "guest",   label: "Guests (Non-CvSU)",  icon: "bi-globe2"  },
   { value: "speaker", label: "Speakers", icon: "bi-mic"           },
 ];
+
+// ── Certificate eligibility rule ──────────────────────────────────
+// A participant must attend at least 80% of the ACTUAL meeting time
+// (measured from when the admin started the meeting, not the scheduled time).
+const ELIGIBILITY_RATIO = 0.8;
+const requiredMinutes = (meetingMins) => Math.max(1, Math.floor((meetingMins || 0) * ELIGIBILITY_RATIO));
+
+// Remembers when the admin started a meeting, so re-opening the page
+// (e.g. after an accidental refresh) keeps the original start time.
+const meetingStartKey = (id) => `bloom_meeting_started_${id}`;
+function readMeetingStart(id) {
+  try { return localStorage.getItem(meetingStartKey(id)); } catch { return null; }
+}
+function writeMeetingStart(id, iso) {
+  try { localStorage.setItem(meetingStartKey(id), iso); } catch { /* storage unavailable */ }
+}
+function clearMeetingStart(id) {
+  try { localStorage.removeItem(meetingStartKey(id)); } catch { /* storage unavailable */ }
+}
 
 async function insertSeminarNotification(userId, seminarTitle, seminarId) {
   try {
@@ -81,7 +101,8 @@ const s = {
   card:         { background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #DDE8DD", boxShadow: "0 1px 6px rgba(0,0,0,0.04)", marginBottom: 16 },
   label:        { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
   input:        { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:       { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
+  select:       { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, colorScheme: "light" },
+  smallSelect:  { padding: "6px 10px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12, outline: "none", cursor: "pointer", background: "#fff", color: G.dark, colorScheme: "light" },
   textarea:     { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 80 },
   fg:           { marginBottom: 16 },
   row:          { display: "flex", gap: 12 },
@@ -204,6 +225,9 @@ function DetailsTab({ seminar, onUpdate }) {
     const { error: saveErr } = await supabase.from("seminars").update(payload).eq("id", seminar.id);
     if (saveErr) { setSaving(false); setError(saveErr.message); return; }
 
+    // Manually closing a seminar here also clears any remembered meeting start time
+    if (payload.status === "completed" || payload.status === "cancelled") clearMeetingStart(seminar.id);
+
     const targetingChanged =
       seminar.target_audience !== payload.target_audience ||
       JSON.stringify((seminar.target_departments||[]).slice().sort()) !== JSON.stringify(payload.target_departments.slice().sort()) ||
@@ -244,8 +268,7 @@ function DetailsTab({ seminar, onUpdate }) {
     }
 
     if (!wasPublic && nowPublic) {
-      let recipientsQuery = supabase.from("profiles").select("id, department").eq("is_active", true);
-      const { data: allProfiles } = await recipientsQuery;
+      const { data: allProfiles } = await supabase.from("profiles").select("id, department").eq("is_active", true);
       let recipientIds = (allProfiles || []).map(p => p.id);
 
       if (payload.target_audience === "specific") {
@@ -320,6 +343,11 @@ function DetailsTab({ seminar, onUpdate }) {
               <option value="completed">Completed</option>
               <option value="cancelled">Cancelled</option>
             </select>
+            {form.status === "ongoing" && seminar.status !== "ongoing" && (
+              <div style={{ fontSize: 11, color: "#a16207", marginTop: 4 }}>
+                <i className="bi bi-info-circle me-1"/>Tip: use <strong>Start Meeting</strong> at the top instead, so attendance is tracked.
+              </div>
+            )}
           </div>
         </div>
         <div style={s.row}>
@@ -450,8 +478,7 @@ function AttendeesTab({ seminar }) {
   const load = async () => {
     setLoading(true);
 
-    let profilesQuery = supabase.from("profiles").select("id, full_name, email, department, year_level, student_id").eq("is_active", true);
-    const { data: allProfiles } = await profilesQuery;
+    const { data: allProfiles } = await supabase.from("profiles").select("id, full_name, email, department, year_level, student_id").eq("is_active", true);
 
     let eligibleProfiles = allProfiles || [];
 
@@ -615,10 +642,144 @@ const SEMINAR_ROLES = [
   { value: "staff",         label: "Staff",         color: "blue"   },
 ];
 
+// Seminar role to give someone, based on their account role
+const SEMINAR_ROLE_FOR_ACCOUNT = { guest: "guest", staff: "staff", speaker: "guest_speaker" };
+const ACCOUNT_ROLE_LABEL = {
+  student: "Student", teacher: "Teacher", faculty: "Faculty", staff: "Non-Academic Staff",
+  guest: "Guest (Non-CvSU)", speaker: "Speaker",
+};
+
+// ── Add Participants Modal (for people who can't register through the app) ──
+function AddParticipantsModal({ seminar, existingRegs, onAdded, onClose }) {
+  const toast = useToast();
+  const [people,   setPeople]   = useState([]);
+  const [roles,    setRoles]    = useState({});
+  const [loading,  setLoading]  = useState(true);
+  const [search,   setSearch]   = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [picked,   setPicked]   = useState([]);
+  const [saving,   setSaving]   = useState(false);
+
+  const activeIds = new Set(existingRegs.filter(r => r.status !== "cancelled").map(r => r.user_id));
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const [{ data: profs }, { data: roleRows }] = await Promise.all([
+        supabase.from("profiles").select("id, full_name, email, student_id, department, organization, position").eq("is_active", true).order("full_name"),
+        supabase.from("user_roles").select("user_id, roles(name)"),
+      ]);
+      if (!active) return;
+      const map = {};
+      (roleRows || []).forEach(r => { if (r.user_id && r.roles?.name) map[r.user_id] = r.roles.name; });
+      setRoles(map);
+      setPeople((profs || []).filter(p => map[p.id] !== "admin" && map[p.id] !== "super_admin"));
+      setLoading(false);
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const q = search.toLowerCase();
+  const list = people.filter(p => !activeIds.has(p.id)).filter(p => {
+    const role = roles[p.id] || "student";
+    const matchType = typeFilter === "all" || role === typeFilter;
+    const matchSearch = !q || [p.full_name, p.email, p.student_id, p.organization, p.department]
+      .some(v => (v || "").toLowerCase().includes(q));
+    return matchType && matchSearch;
+  });
+
+  const toggle = (id) => setPicked(ps => ps.includes(id) ? ps.filter(x => x !== id) : [...ps, id]);
+
+  const save = async () => {
+    if (picked.length === 0) return;
+    setSaving(true);
+    const now = new Date().toISOString();
+    const cancelledByUser = {};
+    existingRegs.filter(r => r.status === "cancelled").forEach(r => { cancelledByUser[r.user_id] = r; });
+
+    let added = 0, failed = 0;
+    for (const uid of picked) {
+      const seminarRole = SEMINAR_ROLE_FOR_ACCOUNT[roles[uid]] || "student";
+      const prev = cancelledByUser[uid];
+      const { error } = prev
+        ? await supabase.from("seminar_registrations")
+            .update({ status: "registered", role: seminarRole, removed_reason: null, registered_at: now })
+            .eq("id", prev.id)
+        : await supabase.from("seminar_registrations")
+            .insert({ seminar_id: seminar.id, user_id: uid, status: "registered", role: seminarRole, registered_at: now });
+      if (error) { failed++; console.error("Add participant failed:", error.message); } else { added++; }
+    }
+    setSaving(false);
+    if (added > 0) {
+      toast(`${added} participant(s) registered${failed ? `, ${failed} failed` : ""}.`, failed ? "warning" : "success");
+      logActivity("seminar_participants_added_by_admin", { seminar_id: seminar.id, count: added });
+      onAdded();
+    } else {
+      toast("Could not register the selected participants.", "error");
+    }
+  };
+
+  return (
+    <div style={{ ...s.overlay, zIndex: 1100 }}>
+      <div style={s.modal(560)}>
+        <div style={s.mHeader}>
+          <span style={s.mTitle}><i className="bi bi-person-plus me-2"/>Add Participants</span>
+          <button style={s.iconBtn()} onClick={onClose}><i className="bi bi-x-lg"/></button>
+        </div>
+        <div style={s.mBody}>
+          <div style={{ background: G.wash, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: G.dark, marginBottom: 14, lineHeight: 1.5 }}>
+            <i className="bi bi-info-circle me-1"/>
+            Register people who can't use the app, such as non-academic staff and guests from outside CvSU.
+            Not in the list? Add them first in <strong>Users → Add User</strong>.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            <input style={{ ...s.input, flex: "1 1 220px" }} placeholder="Search name, email, organization…" value={search} onChange={e => setSearch(e.target.value)} autoFocus />
+            <select style={{ ...s.select, width: "auto", flex: "0 0 auto" }} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+              <option value="all">All types</option>
+              {Object.entries(ACCOUNT_ROLE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div style={{ maxHeight: 320, overflowY: "auto", border: "1px solid #DDE8DD", borderRadius: 6 }}>
+            {loading ? <div style={{ padding: 20, textAlign: "center", color: "#aaa", fontSize: 13 }}>Loading masterlist…</div>
+              : list.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "#aaa", fontSize: 13 }}>No one to add. Everyone matching is already registered.</div>
+              : list.map(p => {
+                  const role = roles[p.id] || "student";
+                  const checked = picked.includes(p.id);
+                  const sub = role === "guest"
+                    ? [p.organization, p.position].filter(Boolean).join(" · ")
+                    : [p.student_id, p.department, p.position].filter(Boolean).join(" · ");
+                  return (
+                    <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", cursor: "pointer", borderBottom: `1px solid ${G.wash}`, background: checked ? G.wash : "transparent" }}>
+                      <input type="checkbox" checked={checked} onChange={() => toggle(p.id)} style={{ width: 15, height: 15, accentColor: G.base, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: G.dark }}>{p.full_name}</div>
+                        <div style={{ fontSize: 11, color: "#aaa" }}>{sub || "—"}</div>
+                      </div>
+                      <span style={s.tag(role === "guest" ? "" : role === "staff" ? "blue" : "green")}>{ACCOUNT_ROLE_LABEL[role] || role}</span>
+                    </label>
+                  );
+                })
+            }
+          </div>
+          {picked.length > 0 && <div style={{ marginTop: 8, fontSize: 12, color: G.base, fontWeight: 600 }}>{picked.length} selected</div>}
+        </div>
+        <div style={s.mFooter}>
+          <button style={s.btnSecondary} onClick={onClose}>Cancel</button>
+          <button style={{ ...s.btnPrimary, opacity: saving || picked.length === 0 ? 0.6 : 1 }} onClick={save} disabled={saving || picked.length === 0}>
+            {saving ? "Registering…" : `Register ${picked.length || ""} Participant${picked.length === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function roleColor(role) { return SEMINAR_ROLES.find(r => r.value === role)?.color || "blue"; }
 function roleLabel(role) { return SEMINAR_ROLES.find(r => r.value === role)?.label || role || "Student"; }
 
 function RegistrationsTab({ seminar }) {
+  const toast = useToast();
+  const [showAddPeople, setShowAddPeople] = useState(false);
   const [regs, setRegs]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState("");
@@ -639,7 +800,8 @@ function RegistrationsTab({ seminar }) {
   useEffect(() => { load(); }, [seminar.id]);
 
   const updateRole = async (id, role) => {
-    await supabase.from("seminar_registrations").update({ role, status: "registered" }).eq("id", id);
+    const { error } = await supabase.from("seminar_registrations").update({ role, status: "registered" }).eq("id", id);
+    if (error) { toast("Could not change role: " + error.message, "error"); return; }
     setRegs(r => r.map(x => x.id === id ? { ...x, role, status: "registered" } : x));
     logActivity("seminar_registration_role_changed", { seminar_id: seminar.id, registration_id: id, new_role: role });
   };
@@ -686,10 +848,21 @@ function RegistrationsTab({ seminar }) {
         ))}
       </div>
 
-      <div style={{ marginBottom: 14 }}>
+      <div style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or email…"
           style={{ ...s.input, maxWidth: 300 }} />
+        {seminar.status !== "completed" && seminar.status !== "cancelled" && (
+          <button onClick={() => setShowAddPeople(true)}
+            style={{ ...s.btnGreen, marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <i className="bi bi-person-plus"/> Add Participants
+          </button>
+        )}
       </div>
+      {showAddPeople && (
+        <AddParticipantsModal seminar={seminar} existingRegs={regs}
+          onAdded={() => { setShowAddPeople(false); load(); }}
+          onClose={() => setShowAddPeople(false)} />
+      )}
 
       {regs.length === 0 ? (
         <div style={s.emptyBox}>
@@ -724,10 +897,9 @@ function RegistrationsTab({ seminar }) {
                     <td style={{ ...s.td, fontSize: 12 }}>{formatDate(r.registered_at)}</td>
                     <td style={s.td}><span style={s.tag(roleColor(currentRole))}>{roleLabel(currentRole)}</span></td>
                     <td style={s.td}>
-                      <select value={currentRole} onChange={e => updateRole(r.id, e.target.value)}
-                        style={{ padding: "6px 10px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12, outline: "none", cursor: "pointer", background: "#fff" }}>
+                      <select value={currentRole} onChange={e => updateRole(r.id, e.target.value)} style={s.smallSelect}>
                         {SEMINAR_ROLES.map(role => (
-                          <option key={role.value} value={role.value}>{role.label}</option>
+                          <option key={role.value} value={role.value} style={{ color: G.dark, background: "#fff" }}>{role.label}</option>
                         ))}
                       </select>
                     </td>
@@ -760,7 +932,7 @@ function StarRating({ value }) {
         <i key={i} className={`bi bi-star${i<=stars?"-fill":""}`}
           style={{ color: i<=stars?"#f59e0b":"#e5e7eb", fontSize: 14, marginRight: 2 }} />
       ))}
-      <span style={{ fontSize: 12, color: "#888", marginLeft: 4 }}>({value?.toFixed(1)||"—"})</span>
+      <span style={{ fontSize: 12, color: "#888", marginLeft: 4 }}>({value ? Number(value).toFixed(1) : "—"})</span>
     </span>
   );
 }
@@ -791,6 +963,12 @@ function EvaluationsTab({ seminar }) {
   const overallAvg = evals.length > 0
     ? (EVAL_FIELDS.map(f => parseFloat(avg(f.key))||0).reduce((a,b)=>a+b,0)/EVAL_FIELDS.length).toFixed(1)
     : "—";
+
+  // Each person's own average across the six criteria
+  const personAvg = (e) => {
+    const vals = EVAL_FIELDS.map(f => e[f.key]).filter(v => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  };
 
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading…</div>;
 
@@ -854,7 +1032,7 @@ function EvaluationsTab({ seminar }) {
                     <div style={{ fontSize: 11, color: "#aaa" }}>{e.profiles?.student_id} · {formatDate(e.submitted_at)}</div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <StarRating value={parseFloat(avg("q_overall")) || e.q_overall || 0}/>
+                    <StarRating value={personAvg(e)}/>
                     <i className={`bi bi-chevron-${selected?.id===e.id?"up":"down"}`} style={{ color: "#aaa" }}/>
                   </div>
                 </div>
@@ -886,15 +1064,102 @@ function EvaluationsTab({ seminar }) {
 }
 
 // ── Jitsi Meeting Modal ───────────────────────────────────────────
-const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClose }) {
-  const cleanId = seminar.id.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  const roomName = `bloomgad${cleanId}`;
-  // Omit user info from raw URL and let Jitsi prompt or handle it cleanly
-const jitsiUrl = `https://meet.bloomgad.xyz/${roomName}`;
-  const [copied, setCopied] = useState(false);
+const JITSI_DOMAIN = "meet.bloomgad.xyz";
 
-  const encodedDisplayName = encodeURIComponent("GADRC Admin (Moderator)");
-  const iframeSrc = `${jitsiUrl}#userInfo.displayName="%22"${encodedDisplayName}"%22"&config.disableDeepLinking=true`;
+// Load Jitsi's official embed script once
+function loadJitsiScript() {
+  if (window.JitsiMeetExternalAPI) return Promise.resolve();
+  if (window.__bloomJitsiScript) return window.__bloomJitsiScript;
+  window.__bloomJitsiScript = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `https://${JITSI_DOMAIN}/external_api.js`;
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => {
+      window.__bloomJitsiScript = null;
+      reject(new Error("Could not load the meeting. Check your connection and try again."));
+    };
+    document.head.appendChild(script);
+  });
+  return window.__bloomJitsiScript;
+}
+
+const JitsiMeetingModal = React.memo(function JitsiMeetingModal({ seminar, onClose }) {
+  const cleanId  = seminar.id.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  const roomName = `bloomgad${cleanId}`;
+  const jitsiUrl = `https://${JITSI_DOMAIN}/${roomName}`;
+
+  const containerRef = useRef(null);
+  const apiRef       = useRef(null);
+  const endedRef     = useRef(false);
+  const onCloseRef   = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const [copied,    setCopied]    = useState(false);
+  const [ending,    setEnding]    = useState(false);
+  const [loadError, setLoadError] = useState("");
+
+  // Ends the meeting exactly once: optionally removes everyone from the call,
+  // then runs the parent's onClose (status → completed, attendance, eligibility).
+  const finishMeeting = useCallback(async (endForEveryone) => {
+    if (endedRef.current) return;
+    endedRef.current = true;
+    setEnding(true);
+
+    const api = apiRef.current;
+    if (api && endForEveryone) {
+      try { api.executeCommand("endConference"); } catch { /* not moderator / already left */ }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    try { api?.dispose(); } catch { /* already disposed */ }
+    apiRef.current = null;
+
+    await onCloseRef.current();
+  }, []);
+
+  const finishRef = useRef(finishMeeting);
+  finishRef.current = finishMeeting;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    loadJitsiScript()
+      .then(() => {
+        if (cancelled || !containerRef.current) return;
+        const api = new window.JitsiMeetExternalAPI(JITSI_DOMAIN, {
+          roomName,
+          parentNode: containerRef.current,
+          width: "100%",
+          height: "100%",
+          userInfo: { displayName: "GADRC Admin (Moderator)" },
+          configOverwrite: {
+            disableDeepLinking: true,
+            prejoinConfig: { enabled: false },
+          },
+        });
+        apiRef.current = api;
+        // Admin pressed Jitsi's own red "Leave / End meeting" button
+        api.addListener("readyToClose", () => finishRef.current(false));
+      })
+      .catch(err => { if (!cancelled) setLoadError(err.message); });
+
+    return () => {
+      cancelled = true;
+      try { apiRef.current?.dispose(); } catch { /* ignore */ }
+      apiRef.current = null;
+    };
+  }, [roomName]);
+
+  // Warn before closing/refreshing the tab while the meeting is still running
+  useEffect(() => {
+    const warn = (e) => {
+      if (endedRef.current) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, []);
 
   const copyLink = () => {
     navigator.clipboard.writeText(`${jitsiUrl}#config.disableDeepLinking=true`);
@@ -914,25 +1179,22 @@ const jitsiUrl = `https://meet.bloomgad.xyz/${roomName}`;
               {seminar.title}
             </div>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
-              Live on meet.bloomgad.xyz · Room: {roomName}
+              Live on {JITSI_DOMAIN} · Room: {roomName}
+              {seminar._startedAt && <> · Started {new Date(seminar._startedAt).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}</>}
             </div>
           </div>
         </div>
-        <button onClick={copyLink}
+        <button onClick={copyLink} disabled={ending}
           style={{ padding: "7px 14px", background: copied ? "#16a34a" : "rgba(255,255,255,0.12)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, transition: "background .2s" }}>
           <i className={`bi bi-${copied ? "check-circle-fill" : "link-45deg"}`}/>
           {copied ? "Copied!" : "Copy Join Link"}
         </button>
-        <a href={`${jitsiUrl}#config.disableDeepLinking=true`} target="_blank" rel="noreferrer"
-          style={{ padding: "7px 14px", background: "rgba(255,255,255,0.12)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
-          <i className="bi bi-box-arrow-up-right"/> Open in Tab
-        </a>
-        <button onClick={onClose}
-          style={{ padding: "7px 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <i className="bi bi-x-circle"/> End & Close
+        <button onClick={() => finishMeeting(true)} disabled={ending}
+          style={{ padding: "7px 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: ending ? "wait" : "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, opacity: ending ? 0.7 : 1 }}>
+          <i className="bi bi-x-circle"/> {ending ? "Ending…" : "End Meeting for All"}
         </button>
       </div>
-      <div style={{ background: "#0f1f0f", padding: "8px 20px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
+      <div style={{ background: "#0f1f0f", padding: "8px 20px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
           <i className="bi bi-info-circle"/>
           Share this link with students so they can join:
@@ -940,20 +1202,34 @@ const jitsiUrl = `https://meet.bloomgad.xyz/${roomName}`;
         <code style={{ fontSize: 12, color: "#4CAF50", background: "rgba(255,255,255,0.06)", padding: "3px 10px", borderRadius: 4 }}>
           {jitsiUrl}
         </code>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", marginLeft: "auto" }}>
+          Ending the call marks the seminar as completed and opens evaluations for attendees.
+        </div>
       </div>
-      <iframe
-        key={roomName}
-        src={iframeSrc}
-        allow="camera; microphone; fullscreen; display-capture; autoplay"
-        style={{ flex: 1, border: "none", width: "100%" }}
-        title="Jitsi Meeting"
-      />
+
+      {loadError ? (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#fff", gap: 12, padding: 24, textAlign: "center" }}>
+          <i className="bi bi-exclamation-triangle" style={{ fontSize: 32, color: "#fbbf24" }}/>
+          <div style={{ fontSize: 14 }}>{loadError}</div>
+          <a href={`${jitsiUrl}#config.disableDeepLinking=true`} target="_blank" rel="noreferrer" style={{ color: "#4CAF50", fontSize: 13 }}>
+            Open the meeting in a new tab instead
+          </a>
+        </div>
+      ) : (
+        <div ref={containerRef} style={{ flex: 1, width: "100%", minHeight: 0, background: "#000" }} />
+      )}
+
+      {ending && (
+        <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 14, fontWeight: 600, gap: 10 }}>
+          <span className="spinner-border spinner-border-sm" /> Ending meeting and saving attendance…
+        </div>
+      )}
     </div>
   );
 }, (prevProps, nextProps) => prevProps.seminar.id === nextProps.seminar.id);
 
 // ── Attendance Report Tab ─────────────────────────────────────────────────────
-function AttendanceReportTab({ seminar, onUpdate }) {
+function AttendanceReportTab({ seminar }) {
   const toast = useToast();
   const [logs,         setLogs]        = useState([]);
   const [loading,      setLoading]     = useState(true);
@@ -962,29 +1238,62 @@ function AttendanceReportTab({ seminar, onUpdate }) {
   const [marking,      setMarking]     = useState(false);
   const [exporting,    setExporting]   = useState(false);
   const [editingId,    setEditingId]   = useState(null);
-  const [editStatus,  setEditStatus]  = useState("");
+  const [editStatus,   setEditStatus]  = useState("");
+  const [untracked,    setUntracked]   = useState([]);  // registered, but no attendance record (no app)
+  const [markingId,    setMarkingId]   = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("seminar_attendance_logs")
-      .select("*, profiles(full_name, student_id, department, email, year_level)")
-      .eq("seminar_id", seminar.id)
-      .order("join_time", { ascending: true });
+    const [{ data, error }, { data: regs }] = await Promise.all([
+      supabase
+        .from("seminar_attendance_logs")
+        .select("*, profiles(full_name, student_id, department, email, year_level, organization)")
+        .eq("seminar_id", seminar.id)
+        .order("join_time", { ascending: true }),
+      supabase
+        .from("seminar_registrations")
+        .select("user_id, role, profiles(full_name, student_id, department, organization, email)")
+        .eq("seminar_id", seminar.id)
+        .neq("status", "cancelled"),
+    ]);
+    const logged = new Set((data || []).map(l => l.user_id));
     startTransition(() => {
       if (!error) setLogs(data || []);
+      setUntracked((regs || []).filter(r => !logged.has(r.user_id)));
       setLoading(false);
     });
   }, [seminar.id]);
 
+  // For participants who joined through the link or attended in person (no app):
+  // record them as present for the whole meeting.
+  const markPresentManually = async (reg) => {
+    const totalMinutes = seminar.meeting_duration_minutes || 0;
+    if (!totalMinutes) { toast("End the meeting first, so the meeting length is known.", "warning"); return; }
+    setMarkingId(reg.user_id);
+    const start = seminar.scheduled_start ? new Date(seminar.scheduled_start) : new Date();
+    const end   = new Date(start.getTime() + totalMinutes * 60000);
+    const { error } = await supabase.from("seminar_attendance_logs").insert({
+      seminar_id: seminar.id, user_id: reg.user_id,
+      join_time: start.toISOString(), leave_time: end.toISOString(),
+      duration_minutes: totalMinutes, attendance_status: "present", is_eligible: true,
+    });
+    if (error) { toast("Could not mark attendance: " + error.message, "error"); setMarkingId(null); return; }
+    await supabase.from("seminar_attendance").upsert({
+      seminar_id: seminar.id, user_id: reg.user_id, checked_in_at: start.toISOString(),
+    }, { onConflict: "seminar_id,user_id" });
+    logActivity("seminar_attendance_marked_manually", { seminar_id: seminar.id, user_id: reg.user_id });
+    toast(`${reg.profiles?.full_name || "Participant"} marked present.`, "success");
+    setMarkingId(null);
+    load();
+  };
+
   useEffect(() => { load(); }, [load]);
 
   const totalMins = seminar.meeting_duration_minutes || 0;
+  const neededMins = totalMins ? requiredMinutes(totalMins) : 1;
 
-  const isEligible = (log) => {
-    if (!totalMins) return log.duration_minutes >= 1;
-    return log.duration_minutes >= totalMins;
-  };
+  // Same rule as when the meeting ends: at least 80% of the actual meeting time
+  const isEligible = (log) => (log.duration_minutes || 0) >= neededMins;
 
   const fmtTime = (iso) => {
     if (!iso) return "—";
@@ -1011,7 +1320,7 @@ function AttendanceReportTab({ seminar, onUpdate }) {
       const eligible = isEligible(log);
       if (eligible !== log.is_eligible) {
         await supabase.from("seminar_attendance_logs")
-          .update({ is_eligible: eligible, attendance_status: eligible ? "present" : log.attendance_status })
+          .update({ is_eligible: eligible, attendance_status: eligible ? "present" : "partial" })
           .eq("id", log.id);
 
         if (eligible) {
@@ -1030,9 +1339,10 @@ function AttendanceReportTab({ seminar, onUpdate }) {
   };
 
   const saveOverride = async (log) => {
-    await supabase.from("seminar_attendance_logs")
+    const { error: e1 } = await supabase.from("seminar_attendance_logs")
       .update({ attendance_status: editStatus, is_eligible: editStatus === "present" })
       .eq("id", log.id);
+    if (e1) { toast("Could not update attendance: " + e1.message, "error"); return; }
     if (editStatus === "present") {
       await supabase.from("seminar_attendance").upsert({
         seminar_id: seminar.id, user_id: log.user_id,
@@ -1047,6 +1357,17 @@ function AttendanceReportTab({ seminar, onUpdate }) {
     setEditingId(null);
     load();
   };
+
+  const filteredLogs = logs.filter(l => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || (l.profiles?.full_name || "").toLowerCase().includes(q)
+      || (l.profiles?.student_id || "").toLowerCase().includes(q)
+      || (l.profiles?.department || "").toLowerCase().includes(q);
+    const matchFilter = filter === "all" ? true
+      : filter === "eligible" ? l.is_eligible
+      : l.attendance_status === filter;
+    return matchSearch && matchFilter;
+  });
 
   const exportPDF = async () => {
     setExporting(true);
@@ -1070,7 +1391,7 @@ function AttendanceReportTab({ seminar, onUpdate }) {
       doc.setFontSize(11); doc.setFont(undefined, "normal"); doc.setTextColor(80);
       doc.text(seminar.title, 14, 23);
       doc.setFontSize(9); doc.setTextColor(130);
-      doc.text(`Generated: ${new Date().toLocaleString("en-PH")} · ${filteredLogs.length} participants`, 14, 29);
+      doc.text(`Generated: ${new Date().toLocaleString("en-PH")} · ${filteredLogs.length} participants${totalMins ? ` · Meeting: ${totalMins} min · Required: ${neededMins} min` : ""}`, 14, 29);
       doc.autoTable({
         startY: 34,
         head: [["Name", "Student ID", "Department", "Join Time", "Leave Time", "Duration", "Status", "Eligible"]],
@@ -1125,17 +1446,6 @@ function AttendanceReportTab({ seminar, onUpdate }) {
     setExporting(false);
   };
 
-  const filteredLogs = logs.filter(l => {
-    const q = search.toLowerCase();
-    const matchSearch = !q || (l.profiles?.full_name || "").toLowerCase().includes(q)
-      || (l.profiles?.student_id || "").toLowerCase().includes(q)
-      || (l.profiles?.department || "").toLowerCase().includes(q);
-    const matchFilter = filter === "all" ? true
-      : filter === "eligible" ? l.is_eligible
-      : l.attendance_status === filter;
-    return matchSearch && matchFilter;
-  });
-
   const stats = {
     total:   logs.length,
     present: logs.filter(l => l.attendance_status === "present").length,
@@ -1149,10 +1459,10 @@ function AttendanceReportTab({ seminar, onUpdate }) {
       <div style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18, fontSize: 13, color: G.dark, display: "flex", alignItems: "center", gap: 10 }}>
         <i className="bi bi-info-circle-fill" style={{ color: G.base, flexShrink: 0 }}/>
         <div>
-          Attendance is logged automatically when students join and leave the Jitsi meeting.
+          Attendance is logged automatically when students join and leave the meeting. If a student disconnects and rejoins, their time is added together.
           {totalMins > 0
-            ? <> Participants must attend the <strong>full {totalMins} minutes</strong> to be eligible for a certificate.</>
-            : <> Click <strong>Auto-Mark Eligible</strong> after the meeting ends to set certificate eligibility.</>}
+            ? <> The meeting lasted <strong>{totalMins} minutes</strong>. Participants who attended at least <strong>{neededMins} minutes</strong> (80%) are eligible for a certificate.</>
+            : <> Eligibility is set automatically when you end the meeting. You can also click <strong>Auto-Mark Eligible</strong>.</>}
         </div>
       </div>
 
@@ -1197,12 +1507,42 @@ function AttendanceReportTab({ seminar, onUpdate }) {
         </div>
       </div>
 
+      {!loading && untracked.length > 0 && (
+        <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #fde68a", marginBottom: 16, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", background: "#fffbeb", borderBottom: "1px solid #fde68a", fontSize: 13, color: "#92400e" }}>
+            <i className="bi bi-person-exclamation me-2"/>
+            <strong>{untracked.length} registered participant(s) have no attendance record.</strong>{" "}
+            These are usually people added by an admin who joined through the link or attended in person.
+            {!totalMins && <> End the meeting first to mark them present.</>}
+          </div>
+          <table style={s.table}>
+            <tbody>
+              {untracked.map(r => (
+                <tr key={r.user_id}>
+                  <td style={s.td}>
+                    <div style={{ fontWeight: 600 }}>{r.profiles?.full_name || "—"}</div>
+                    <div style={{ fontSize: 11, color: "#aaa" }}>{r.profiles?.organization || r.profiles?.department || r.profiles?.student_id || "—"}</div>
+                  </td>
+                  <td style={s.td}><span style={s.tag("")}>{(r.role || "student").replace("_", " ")}</span></td>
+                  <td style={{ ...s.td, textAlign: "right" }}>
+                    <button onClick={() => markPresentManually(r)} disabled={!totalMins || markingId === r.user_id}
+                      style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: totalMins ? G.base : "#e5e7eb", color: totalMins ? "#fff" : "#9ca3af", fontSize: 12, cursor: totalMins ? "pointer" : "not-allowed", fontWeight: 700 }}>
+                      {markingId === r.user_id ? "Saving…" : <><i className="bi bi-check2-circle me-1"/>Mark Present</>}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {loading ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading attendance records…</div>
         : logs.length === 0 ? (
           <div style={s.emptyBox}>
             <i className="bi bi-person-check d-block mb-2" style={{ fontSize: 40, color: G.pale }}/>
             <div style={{ fontWeight: 700, color: G.dark, marginBottom: 6 }}>No attendance records yet</div>
-            <div style={{ fontSize: 13, color: "#aaa" }}>Records appear automatically when participants join the Jitsi meeting.</div>
+            <div style={{ fontSize: 13, color: "#aaa" }}>Records appear automatically when participants join the meeting.</div>
           </div>
         ) : filteredLogs.length === 0 ? (
           <div style={{ textAlign: "center", padding: "40px 0", color: "#aaa" }}>No records match your search/filter.</div>
@@ -1231,7 +1571,14 @@ function AttendanceReportTab({ seminar, onUpdate }) {
                     <td style={s.td}>{l.profiles?.department || "—"}{l.profiles?.year_level ? ` · Yr ${l.profiles.year_level}` : ""}</td>
                     <td style={{ ...s.td, fontSize: 12 }}>{fmtTime(l.join_time)}</td>
                     <td style={{ ...s.td, fontSize: 12 }}>{fmtTime(l.leave_time)}</td>
-                    <td style={s.td}><span style={{ fontWeight: 700, color: G.base }}>{fmtDuration(l.duration_minutes)}</span></td>
+                    <td style={s.td}>
+                      <span style={{ fontWeight: 700, color: G.base }}>{fmtDuration(l.duration_minutes)}</span>
+                      {l.session_started_at && (
+                        <div style={{ fontSize: 10, color: "#16a34a", fontWeight: 700, marginTop: 2 }}>
+                          ● In call since {fmtTime(l.session_started_at)}
+                        </div>
+                      )}
+                    </td>
                     <td style={s.td}>
                       <span style={s.tag(statusColor(l.attendance_status))}>
                         {l.attendance_status || "joined"}
@@ -1245,8 +1592,7 @@ function AttendanceReportTab({ seminar, onUpdate }) {
                     <td style={s.td}>
                       {editingId === l.id ? (
                         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                          <select value={editStatus} onChange={e => setEditStatus(e.target.value)}
-                            style={{ padding: "4px 8px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 12 }}>
+                          <select value={editStatus} onChange={e => setEditStatus(e.target.value)} style={s.smallSelect}>
                             <option value="present">Present</option>
                             <option value="partial">Partial</option>
                             <option value="absent">Absent</option>
@@ -1257,7 +1603,7 @@ function AttendanceReportTab({ seminar, onUpdate }) {
                             style={{ padding: "4px 8px", background: G.wash, color: G.dark, border: "none", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>Cancel</button>
                         </div>
                       ) : (
-                        <button onClick={() => { setEditingId(l.id); setEditStatus(l.attendance_status || "present"); }}
+                        <button onClick={() => { setEditingId(l.id); setEditStatus(l.attendance_status === "joined" ? "present" : (l.attendance_status || "present")); }}
                           style={{ padding: "5px 10px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 600, color: G.dark, display: "flex", alignItems: "center", gap: 4 }}>
                           <i className="bi bi-pencil" style={{ fontSize: 11 }}/>Override
                         </button>
@@ -1288,6 +1634,7 @@ export default function SeminarsPage() {
   const [addError, setAddError]   = useState("");
   const [confirm, setConfirm]     = useState(null);
   const [jitsiRoom, setJitsiRoom] = useState(null);
+  const [starting, setStarting]   = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -1306,6 +1653,131 @@ export default function SeminarsPage() {
     const { data } = await supabase.from("seminars").select("*, seminar_registrations(count)").order("created_at", { ascending: false });
     setSeminars(data || []);
     if (selected) setSelected(data?.find(s => s.id === selected.id) || data?.[0] || null);
+  };
+
+  const patchSeminar = (id, patch) => {
+    setSeminars(ss => ss.map(sm => sm.id === id ? { ...sm, ...patch } : sm));
+    setSelected(sm => sm?.id === id ? { ...sm, ...patch } : sm);
+  };
+
+  // ── Start (or rejoin) the live meeting ──────────────────────────
+  const startMeeting = async () => {
+    const sem = selected;
+    if (!sem || starting) return;
+    setStarting(true);
+
+    const alreadyOngoing = sem.status === "ongoing";
+    if (!alreadyOngoing) {
+      const { error } = await supabase.from("seminars").update({ status: "ongoing" }).eq("id", sem.id);
+      if (error) {
+        setStarting(false);
+        toast("Could not start the meeting: " + error.message, "error");
+        return;
+      }
+      logActivity("seminar_meeting_started", { seminar_id: sem.id, title: sem.title });
+    }
+
+    // Keep the original start time when re-joining a meeting that is already running
+    let startedAt = alreadyOngoing ? readMeetingStart(sem.id) : null;
+    if (!startedAt) {
+      startedAt = new Date().toISOString();
+      writeMeetingStart(sem.id, startedAt);
+    }
+
+    patchSeminar(sem.id, { status: "ongoing" });
+    setJitsiRoom({ ...sem, status: "ongoing", _startedAt: startedAt });
+    setStarting(false);
+  };
+
+  // ── End the meeting: complete the seminar + finalize attendance ──
+  const finalizeMeeting = async (room) => {
+    const endTime   = new Date();
+    const startTime = new Date(room._startedAt || room.scheduled_start || room.created_at || Date.now());
+    const durationMins = Math.max(1, Math.round((endTime - startTime) / 60000));
+    const needed       = requiredMinutes(durationMins);
+
+    const { error: semErr } = await supabase.from("seminars").update({
+      status: "completed",
+      meeting_duration_minutes: durationMins,
+    }).eq("id", room.id);
+    if (semErr) {
+      toast("Could not mark the seminar as completed: " + semErr.message, "error");
+    } else {
+      patchSeminar(room.id, { status: "completed", meeting_duration_minutes: durationMins });
+    }
+    clearMeetingStart(room.id);
+
+    const { data: attendanceLogs, error: logErr } = await supabase
+      .from("seminar_attendance_logs")
+      .select("id, user_id, duration_minutes, join_time, leave_time, session_started_at")
+      .eq("seminar_id", room.id);
+
+    if (logErr) {
+      toast("Meeting ended, but attendance could not be loaded: " + logErr.message, "error");
+      setJitsiRoom(null);
+      return;
+    }
+
+    const meetingEndTime = endTime.toISOString();
+    let eligibleCount = 0, partialCount = 0, failed = 0;
+
+    const minutesBetween = (from, to) => Math.max(0, Math.round((to - from) / 60000));
+
+    for (const log of (attendanceLogs || [])) {
+      // duration_minutes = total from sessions the student already finished
+      // (rejoining after a disconnect adds to this total instead of resetting it)
+      let duration  = log.duration_minutes ?? 0;
+      let leaveTime = log.leave_time;
+
+      if (log.session_started_at) {
+        // Still in the call when the meeting ended → add the current session.
+        // Time before the admin started the meeting doesn't count.
+        const sessionStart = new Date(Math.max(new Date(log.session_started_at).getTime(), startTime.getTime()));
+        duration += minutesBetween(sessionStart, endTime);
+        leaveTime = meetingEndTime;
+      } else if (!leaveTime && log.join_time) {
+        // Older records (before session tracking): count from the join time
+        const joined = new Date(Math.max(new Date(log.join_time).getTime(), startTime.getTime()));
+        duration  = minutesBetween(joined, endTime);
+        leaveTime = meetingEndTime;
+      }
+
+      // Nobody can attend longer than the meeting itself
+      duration = Math.min(duration, durationMins);
+
+      const eligible = duration >= needed;
+      const { error: upErr } = await supabase.from("seminar_attendance_logs")
+        .update({
+          leave_time:         leaveTime,
+          duration_minutes:   duration,
+          session_started_at: null,
+          is_eligible:        eligible,
+          attendance_status:  eligible ? "present" : "partial",
+        })
+        .eq("id", log.id);
+      if (upErr) { failed++; continue; }
+
+      if (eligible) {
+        await supabase.from("seminar_attendance").upsert({
+          seminar_id: room.id, user_id: log.user_id,
+          checked_in_at: log.join_time,
+        }, { onConflict: "seminar_id,user_id" });
+        eligibleCount++;
+      } else {
+        partialCount++;
+      }
+    }
+
+    const total = (attendanceLogs || []).length;
+    toast(
+      total === 0
+        ? `Meeting ended after ${durationMins} min. No participants joined.`
+        : `Meeting ended after ${durationMins} min. ${eligibleCount} of ${total} participant(s) attended at least ${needed} min and are eligible for certificates.` +
+          (failed ? ` ${failed} record(s) could not be saved.` : ""),
+      failed ? "warning" : "success"
+    );
+    logActivity("seminar_meeting_ended", { seminar_id: room.id, duration_mins: durationMins, required_mins: needed, eligible: eligibleCount, partial: partialCount });
+    setJitsiRoom(null);
   };
 
   const createSeminar = async () => {
@@ -1334,7 +1806,9 @@ export default function SeminarsPage() {
       message: `Delete "${selected?.title}"? All registrations and evaluations will be removed.`,
       confirmLabel: "Delete", danger: true,
       onConfirm: async () => {
-        await supabase.from("seminars").delete().eq("id", selected.id);
+        const { error } = await supabase.from("seminars").delete().eq("id", selected.id);
+        if (error) { toast("Could not delete seminar: " + error.message, "error"); setConfirm(null); return; }
+        clearMeetingStart(selected.id);
         logActivity("seminar_deleted", { seminar_id: selected.id, title: selected.title });
         const rest = seminars.filter(s => s.id !== selected.id);
         setSeminars(rest); setSelected(rest[0] || null);
@@ -1343,9 +1817,11 @@ export default function SeminarsPage() {
     });
   };
 
-  const statusColor = (s) => s === "ongoing" ? "green" : s === "completed" ? "blue" : s === "cancelled" ? "red" : "yellow";
-  const regCount    = (s) => s?.seminar_registrations?.[0]?.count || 0;
-  const filtered    = seminars.filter(s => (s.title || "").toLowerCase().includes(search.toLowerCase()));
+  const statusColor = (st) => st === "ongoing" ? "green" : st === "completed" ? "blue" : st === "cancelled" ? "red" : "yellow";
+  const regCount    = (sm) => sm?.seminar_registrations?.[0]?.count || 0;
+  const filtered    = seminars.filter(sm => (sm.title || "").toLowerCase().includes(search.toLowerCase()));
+  const canMeet     = selected && (selected.seminar_type === "webinar" || selected.seminar_type === "hybrid")
+                      && selected.status !== "cancelled" && selected.status !== "completed";
 
   return (
     <div style={s.page}>
@@ -1370,7 +1846,10 @@ export default function SeminarsPage() {
                     {sem.cover_image_url && <img src={sem.cover_image_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt="" />}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={s.itemTitle}>{sem.title}</div>
+                    <div style={s.itemTitle}>
+                      {sem.status === "ongoing" && <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "#4ade80", marginRight: 6, verticalAlign: "middle" }}/>}
+                      {sem.title}
+                    </div>
                     <div style={s.itemMeta}>{formatDateShort(sem.scheduled_start)} · {regCount(sem)} registered</div>
                   </div>
                   <div style={s.pubBadge(sem.is_public)}>
@@ -1401,15 +1880,10 @@ export default function SeminarsPage() {
               </div>
               <span style={s.tag(statusColor(selected.status))}>{selected.status || "upcoming"}</span>
               <span style={s.tag(selected.is_public ? "green" : "yellow")}>{selected.is_public ? "Public" : "Private"}</span>
-              {(selected.seminar_type === "webinar" || selected.seminar_type === "hybrid") && selected.status !== "cancelled" && selected.status !== "completed" && (
-                <button onClick={async () => {
-                    await supabase.from("seminars").update({ status: "ongoing" }).eq("id", selected.id);
-                    setSeminars(ss => ss.map(s => s.id === selected.id ? { ...s, status: "ongoing" } : s));
-                    setSelected(s => ({ ...s, status: "ongoing" }));
-                    setJitsiRoom(selected);
-                  }}
-                  style={{ padding: "7px 14px", background: "linear-gradient(135deg,#1A2E1A,#2D6A2D)", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <i className="bi bi-camera-video-fill"/> Start Meeting
+              {canMeet && (
+                <button onClick={startMeeting} disabled={starting}
+                  style={{ padding: "7px 14px", background: "linear-gradient(135deg,#1A2E1A,#2D6A2D)", color: "#fff", border: "none", borderRadius: 6, cursor: starting ? "wait" : "pointer", fontWeight: 700, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6, opacity: starting ? 0.7 : 1 }}>
+                  <i className="bi bi-camera-video-fill"/> {selected.status === "ongoing" ? "Rejoin Meeting" : "Start Meeting"}
                 </button>
               )}
               <button style={s.btnDanger} onClick={deleteSeminar}><i className="bi bi-trash me-1"/> Delete</button>
@@ -1420,10 +1894,12 @@ export default function SeminarsPage() {
               ))}
             </div>
             <div style={s.content}>
-              {tab === "details"       && <DetailsTab           key={selected.id + "_d"} seminar={selected} onUpdate={reload} />}
+              {/* Keys include status so tabs reload after a meeting starts/ends
+                  (prevents saving an old "ongoing" status from the Details form) */}
+              {tab === "details"       && <DetailsTab           key={`${selected.id}_d_${selected.status}`} seminar={selected} onUpdate={reload} />}
               {tab === "attendees"     && <AttendeesTab         key={selected.id + "_a"} seminar={selected} />}
-              {tab === "registrations" && <RegistrationsTab   key={selected.id + "_r"} seminar={selected} />}
-              {tab === "attendance"    && <AttendanceReportTab  key={selected.id + "_ar"} seminar={selected} onUpdate={reload} />}
+              {tab === "registrations" && <RegistrationsTab     key={selected.id + "_r"} seminar={selected} />}
+              {tab === "attendance"    && <AttendanceReportTab  key={`${selected.id}_ar_${selected.status}_${selected.meeting_duration_minutes || 0}`} seminar={selected} />}
               {tab === "evaluations"   && <EvaluationsTab       key={selected.id + "_e"} seminar={selected} />}
             </div>
           </>
@@ -1432,57 +1908,7 @@ export default function SeminarsPage() {
 
       {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)}/>}
 
-      {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={async () => {
-        const endTime = new Date();
-        const startTime = jitsiRoom.scheduled_start 
-          ? new Date(jitsiRoom.scheduled_start) 
-          : new Date(jitsiRoom.created_at || Date.now());
-        const durationMins = Math.max(1, Math.round((endTime - startTime) / 60000));
-
-        await supabase.from("seminars").update({
-          status: "completed",
-          meeting_duration_minutes: durationMins,
-        }).eq("id", jitsiRoom.id);
-        setSeminars(ss => ss.map(s => s.id === jitsiRoom.id ? { ...s, status: "completed", meeting_duration_minutes: durationMins } : s));
-        setSelected(s => s?.id === jitsiRoom.id ? { ...s, status: "completed", meeting_duration_minutes: durationMins } : s);
-
-        const { data: attendanceLogs } = await supabase
-          .from("seminar_attendance_logs")
-          .select("id, user_id, duration_minutes, join_time, leave_time")
-          .eq("seminar_id", jitsiRoom.id);
-
-        const meetingEndTime = endTime.toISOString();
-        let marked = 0;
-        for (const log of (attendanceLogs || [])) {
-          let duration = log.duration_minutes;
-          let leaveTime = log.leave_time;
-          if (!leaveTime && log.join_time) {
-            leaveTime = meetingEndTime;
-            duration  = Math.round((endTime - new Date(log.join_time)) / 60000);
-            await supabase.from("seminar_attendance_logs")
-              .update({ leave_time: leaveTime, duration_minutes: duration })
-              .eq("id", log.id);
-          }
-          const eligible = durationMins
-            ? duration >= durationMins
-            : duration >= 1;
-          await supabase.from("seminar_attendance_logs")
-            .update({ is_eligible: eligible, attendance_status: eligible ? "present" : "partial" })
-            .eq("id", log.id);
-          if (eligible) {
-            await supabase.from("seminar_attendance").upsert({
-              seminar_id: jitsiRoom.id, user_id: log.user_id,
-              checked_in_at: log.join_time,
-            }, { onConflict: "seminar_id,user_id" });
-            marked++;
-          }
-        }
-        if (marked > 0) {
-          toast(`Meeting ended — ${marked} participant(s) auto-marked as eligible for certificates.`, "success");
-        }
-        logActivity("seminar_meeting_ended", { seminar_id: jitsiRoom.id, duration_mins: durationMins, eligible: marked });
-        setJitsiRoom(null);
-      }}/>}
+      {jitsiRoom && <JitsiMeetingModal seminar={jitsiRoom} onClose={() => finalizeMeeting(jitsiRoom)} />}
 
       {/* Create Modal */}
       {showAdd && (
@@ -1523,4 +1949,4 @@ export default function SeminarsPage() {
       )}
     </div>
   );
-}
+} 

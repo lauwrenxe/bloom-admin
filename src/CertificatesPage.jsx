@@ -3,9 +3,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase.js";
-import { ConfirmModal, useToast } from "./App.jsx";
+import { useToast } from "./App.jsx";
 import { V, FieldError } from "./lib/Validate.jsx";
 import { logActivity } from "./lib/activityLog.js";
+import { TemplatesTab, TemplateCanvas, loadTemplates, buildTemplateHTML } from "./CertificateTemplateEditor.jsx";
 
 const G = {
   dark:  "#1A2E1A", mid:   "#2D6A2D", base:  "#3A7A3A",
@@ -29,6 +30,62 @@ function formatDateLong(iso) {
   });
 }
 
+// Escape user-provided text before putting it into a printable HTML string,
+// so names like "Ana <3" or "Cruz & Sons" don't break the certificate layout.
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Format a registration role like "guest_speaker" → "Guest Speaker"
+function prettyRole(role) {
+  if (!role) return "";
+  return role.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+// ── Shared helper: build the data object a design template's fields read from ─
+function templateDataFromCert({ recipientName, seminarTitle, dateStr, certCode, sig1Name, sig1Title, sig2Name, sig2Title, bodyText }) {
+  return {
+    recipient_name: recipientName || "[Participant Name]",
+    seminar_title:  seminarTitle  || "",
+    date:           dateStr       || "",
+    cert_code:      certCode      || "CERT-XXXXXX",
+    sig1_name:      sig1Name  || DEFAULT_SIGS.sig1_name,
+    sig1_title:     sig1Title || DEFAULT_SIGS.sig1_title,
+    sig2_name:      sig2Name  || DEFAULT_SIGS.sig2_name,
+    sig2_title:     sig2Title || DEFAULT_SIGS.sig2_title,
+    body_text:      bodyText  || "",
+  };
+}
+
+// Templates usable for a certificate type (and optionally a specific seminar).
+// Designs linked to THIS seminar come first, then the default ★ design.
+// Designs linked to a different seminar are hidden.
+function templatesForType(templates, refType, seminarId = null) {
+  const typeOk = (t) => !t.reference_type || t.reference_type === "any" || t.reference_type === refType;
+  const seminarOk = (t) => !t.seminar_id || !seminarId || t.seminar_id === seminarId;
+  let list = templates.filter(t => (seminarId && t.seminar_id === seminarId) || (typeOk(t) && seminarOk(t)));
+  if (list.length === 0) list = templates.filter(seminarOk);
+  const rank = (t) => (seminarId && t.seminar_id === seminarId ? 2 : 0) + (t.is_default ? 1 : 0);
+  return [...list].sort((a, b) => rank(b) - rank(a));
+}
+
+// The design to pre-select: one linked to this seminar, else the default for the type.
+function pickTemplateFor(templates, refType, seminarId = null) {
+  const list = templatesForType(templates, refType, seminarId);
+  return list.find(t => seminarId && t.seminar_id === seminarId)
+      || list.find(t => t.is_default && (!t.reference_type || t.reference_type === "any" || t.reference_type === refType))
+      || null;
+}
+
+function templateOptionLabel(t, seminarId) {
+  return `${t.name}${t.is_default ? " ★" : ""}${seminarId && t.seminar_id === seminarId ? " (this seminar)" : ""}`;
+}
+
 const s = {
   page:        { padding: "28px 32px", fontFamily: "'Inter','Segoe UI',system-ui,sans-serif", background: "#F5F7F5", minHeight: "100vh" },
   header:      { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 },
@@ -48,7 +105,7 @@ const s = {
   mFooter:     { padding: "16px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", gap: 8, justifyContent: "flex-end", position: "sticky", bottom: 0, background: "#fff" },
   label:       { fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 5, display: "block", textTransform: "uppercase", letterSpacing: 0.6 },
   input:       { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark },
-  select:      { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, appearance: "auto" },
+  select:      { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, appearance: "auto", colorScheme: "light" },
   textarea:    { width: "100%", padding: "9px 12px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 14, outline: "none", background: "#fff", boxSizing: "border-box", color: G.dark, resize: "vertical", minHeight: 70 },
   fg:          { marginBottom: 16 },
   row:         { display: "flex", gap: 12 },
@@ -61,7 +118,7 @@ const s = {
   badgeCard:   { background: "#fff", borderRadius: 10, padding: "16px", border: "1px solid #DDE8DD", display: "flex", alignItems: "center", gap: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.04)" },
   toolbar:     { display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" },
   searchBar:   { padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", color: G.dark, width: 260 },
-  filterSelect:{ padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", color: G.dark, appearance: "auto", cursor: "pointer", minWidth: 140 },
+  filterSelect:{ padding: "9px 14px", border: "1px solid #DDE8DD", borderRadius: 6, fontSize: 13, outline: "none", background: "#fff", color: G.dark, appearance: "auto", cursor: "pointer", minWidth: 140, colorScheme: "light" },
   infoBox:    (c) => ({ background: c === "green" ? "#f0fdf4" : c === "red" ? "#fef2f2" : c === "yellow" ? "#fffbeb" : "#eff6ff", border: `1px solid ${c === "green" ? "#bbf7d0" : c === "red" ? "#fecaca" : c === "yellow" ? "#fed7aa" : "#bfdbfe"}`, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: c === "green" ? "#15803d" : c === "red" ? "#b91c1c" : c === "yellow" ? "#92400e" : "#1d4ed8", display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 14 }),
 };
 
@@ -93,7 +150,7 @@ async function saveSignatorySettings(sigs) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SIGNATORY SETTINGS PANEL — with validation
+//  SIGNATORY SETTINGS PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 function SignatorySettingsPanel({ sigs, onChange }) {
   const toast = useToast();
@@ -215,7 +272,7 @@ function certTitle(refType) { return CERT_TITLES[refType] || "Certificate of Ach
 // ─────────────────────────────────────────────────────────────────────────────
 //  DEFAULT TEMPLATE GENERATOR
 // ─────────────────────────────────────────────────────────────────────────────
-function buildDefaultTemplate({ seminar, recipientName = "[Participant Name]", refType = "seminar", sigs = DEFAULT_SIGS }) {
+function buildDefaultTemplate({ seminar, refType = "seminar", sigs = DEFAULT_SIGS }) {
   const semTitle   = seminar?.title || "the seminar";
   const semDate    = seminar?.scheduled_start ? formatDateLong(seminar.scheduled_start) : "";
   const semVenue   = seminar?.venue || "";
@@ -237,7 +294,7 @@ function buildDefaultTemplate({ seminar, recipientName = "[Participant Name]", r
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  NOTIFICATION HELPER
+//  NOTIFICATION & CODE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 async function insertCertificateNotification(userId, certCode, seminarTitle) {
   try {
@@ -248,12 +305,17 @@ async function insertCertificateNotification(userId, certCode, seminarTitle) {
     });
   } catch (e) { console.error("insertCertificateNotification failed:", e); }
 }
-function genCertCode() { return `CERT-${Date.now().toString(36).toUpperCase()}`; }
+
+function genCertCode() {
+  const ts = Date.now().toString(36).toUpperCase();
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `CERT-${ts}-${rand}`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  MINI CERTIFICATE PREVIEW
 // ─────────────────────────────────────────────────────────────────────────────
-function MiniCertPreview({ recipientName, refType, seminarTitle, template }) {
+function MiniCertPreview({ recipientName, refType, template }) {
   const title = certTitle(refType);
   const themeColor = template.theme_color || "#2D6A2D";
   const bodyText   = template.body_text   || "";
@@ -298,7 +360,7 @@ function MiniCertPreview({ recipientName, refType, seminarTitle, template }) {
 // ─────────────────────────────────────────────────────────────────────────────
 //  FULL CERTIFICATE PREVIEW MODAL
 // ─────────────────────────────────────────────────────────────────────────────
-function CertPreviewModal({ cert, onClose }) {
+function CertPreviewModal({ cert, seminarTitle = "", onClose }) {
   const refType     = cert.reference_type || "achievement";
   const title       = certTitle(refType);
   const studentName = cert.profiles?.full_name || "Recipient";
@@ -310,7 +372,14 @@ function CertPreviewModal({ cert, onClose }) {
   const sig2Title   = cert.sig2_title  || "Cavite State University";
   const themeColor  = cert.theme_color || "#2D6A2D";
 
-  const certHTML = () => `<!DOCTYPE html><html><head><title>${title}</title>
+  const tmpl = cert.certificate_templates || null;
+  const templateData = templateDataFromCert({
+    recipientName: studentName, seminarTitle, dateStr: issuedDate, certCode: cert.certificate_code,
+    sig1Name, sig1Title, sig2Name, sig2Title, bodyText,
+  });
+
+  // All user-provided text is escaped before going into the printable HTML
+  const certHTML = () => `<!DOCTYPE html><html><head><title>${escapeHtml(title)}</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
       @page { size: A4 landscape; margin: 0; }
@@ -341,23 +410,33 @@ function CertPreviewModal({ cert, onClose }) {
         <div class="org-name">Cavite State University</div>
         <div class="org-sub">Gender and Development Resource Center (GADRC) · BLOOM e-Learning Platform</div>
         <hr class="divider"/>
-        <div class="title">${title}</div>
+        <div class="title">${escapeHtml(title)}</div>
         <div class="presented">This is to certify that</div>
-        <div class="name-wrap"><span class="name">${studentName}</span></div>
-        <div class="desc">${bodyText}</div>
+        <div class="name-wrap"><span class="name">${escapeHtml(studentName)}</span></div>
+        <div class="desc">${escapeHtml(bodyText)}</div>
       </div>
       <div class="footer">
-        <div class="sig-block"><div class="seal">★</div><div class="sig-line">${sig1Name}</div><div class="sig-sub">${sig1Title}</div></div>
-        <div class="code-block"><div class="code-label">Certificate Code</div><div class="code-value">${cert.certificate_code || "—"}</div><div class="code-date">Issued: ${issuedDate}</div></div>
-        <div class="sig-block"><div class="seal">✦</div><div class="sig-line">${sig2Name}</div><div class="sig-sub">${sig2Title}</div></div>
+        <div class="sig-block"><div class="seal">★</div><div class="sig-line">${escapeHtml(sig1Name)}</div><div class="sig-sub">${escapeHtml(sig1Title)}</div></div>
+        <div class="code-block"><div class="code-label">Certificate Code</div><div class="code-value">${escapeHtml(cert.certificate_code || "—")}</div><div class="code-date">Issued: ${escapeHtml(issuedDate)}</div></div>
+        <div class="sig-block"><div class="seal">✦</div><div class="sig-line">${escapeHtml(sig2Name)}</div><div class="sig-sub">${escapeHtml(sig2Title)}</div></div>
       </div>
     </div></body></html>`;
 
   const printCert = () => {
     const w = window.open("", "_blank");
-    w.document.write(certHTML());
-    w.document.close();
-    setTimeout(() => { w.focus(); w.print(); }, 600);
+    if (!w) {
+      alert("Please allow popups to view or print certificates.");
+      return;
+    }
+    if (tmpl) {
+      // The template page waits for its image and fonts, then prints itself
+      w.document.write(buildTemplateHTML(tmpl, templateData, { autoPrint: true }));
+      w.document.close();
+    } else {
+      w.document.write(certHTML());
+      w.document.close();
+      w.onload = () => { w.focus(); w.print(); };
+    }
   };
 
   return (
@@ -371,36 +450,40 @@ function CertPreviewModal({ cert, onClose }) {
           </div>
         </div>
         <div style={{ padding: 32, background: "#F5F7F5" }}>
-          <div style={{ width: "100%", aspectRatio: "842/595", maxWidth: 842, margin: "0 auto", position: "relative", border: `10px double ${themeColor}`, background: "linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%)", padding: 32, boxSizing: "border-box", fontFamily: "'Inter',sans-serif", boxShadow: "0 8px 32px rgba(0,0,0,.12)" }}>
-            <div style={{ textAlign: "center", marginBottom: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: themeColor, letterSpacing: 3, textTransform: "uppercase" }}>Cavite State University</div>
-              <div style={{ fontSize: 10, color: "#888", letterSpacing: 1 }}>Gender and Development Resource Center (GADRC)</div>
-            </div>
-            <div style={{ border: "none", borderTop: `2px solid ${themeColor}`, margin: "10px 60px" }} />
-            <div style={{ fontFamily: "Georgia,serif", fontSize: 28, color: "#1A2E1A", textAlign: "center", margin: "12px 0 6px", fontWeight: 700 }}>{title}</div>
-            <div style={{ fontSize: 11, color: "#666", textAlign: "center", letterSpacing: 2, textTransform: "uppercase", margin: "6px 0" }}>This is to certify that</div>
-            <div style={{ textAlign: "center", margin: "10px 0" }}>
-              <span style={{ fontFamily: "Georgia,serif", fontStyle: "italic", fontSize: 32, color: themeColor, borderBottom: "2px solid #C8E6C9", paddingBottom: 6, paddingLeft: 32, paddingRight: 32 }}>{studentName}</span>
-            </div>
-            <div style={{ fontSize: 11, color: "#444", textAlign: "center", maxWidth: 480, margin: "10px auto", lineHeight: 1.8 }}>{bodyText}</div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 20, paddingTop: 14, borderTop: "1px solid #C8E6C9" }}>
-              <div style={{ textAlign: "center", minWidth: 140 }}>
-                <div style={{ width: 44, height: 44, borderRadius: "50%", border: `2px solid ${themeColor}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", fontSize: 18, color: themeColor }}>★</div>
-                <div style={{ borderTop: "1px solid #1A2E1A", paddingTop: 4, fontSize: 10, fontWeight: 700, color: "#1A2E1A", letterSpacing: .5 }}>{sig1Name}</div>
-                <div style={{ fontSize: 9, color: "#888" }}>{sig1Title}</div>
+          {tmpl ? (
+            <TemplateCanvas imageUrl={tmpl.image_url} fields={tmpl.fields} data={templateData} editable={false} width={780} />
+          ) : (
+            <div style={{ width: "100%", aspectRatio: "842/595", maxWidth: 842, margin: "0 auto", position: "relative", border: `10px double ${themeColor}`, background: "linear-gradient(135deg,#fafdf6 0%,#f6f9f0 100%)", padding: 32, boxSizing: "border-box", fontFamily: "'Inter',sans-serif", boxShadow: "0 8px 32px rgba(0,0,0,.12)" }}>
+              <div style={{ textAlign: "center", marginBottom: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: themeColor, letterSpacing: 3, textTransform: "uppercase" }}>Cavite State University</div>
+                <div style={{ fontSize: 10, color: "#888", letterSpacing: 1 }}>Gender and Development Resource Center (GADRC)</div>
               </div>
-              <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 9, color: "#888", letterSpacing: 1, textTransform: "uppercase" }}>Certificate Code</div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: themeColor, letterSpacing: 2 }}>{cert.certificate_code || "—"}</div>
-                <div style={{ fontSize: 9, color: "#888", marginTop: 4 }}>Issued: {issuedDate}</div>
+              <div style={{ border: "none", borderTop: `2px solid ${themeColor}`, margin: "10px 60px" }} />
+              <div style={{ fontFamily: "Georgia,serif", fontSize: 28, color: "#1A2E1A", textAlign: "center", margin: "12px 0 6px", fontWeight: 700 }}>{title}</div>
+              <div style={{ fontSize: 11, color: "#666", textAlign: "center", letterSpacing: 2, textTransform: "uppercase", margin: "6px 0" }}>This is to certify that</div>
+              <div style={{ textAlign: "center", margin: "10px 0" }}>
+                <span style={{ fontFamily: "Georgia,serif", fontStyle: "italic", fontSize: 32, color: themeColor, borderBottom: "2px solid #C8E6C9", paddingBottom: 6, paddingLeft: 32, paddingRight: 32 }}>{studentName}</span>
               </div>
-              <div style={{ textAlign: "center", minWidth: 140 }}>
-                <div style={{ width: 44, height: 44, borderRadius: "50%", border: `2px solid ${themeColor}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", fontSize: 18, color: themeColor }}>✦</div>
-                <div style={{ borderTop: "1px solid #1A2E1A", paddingTop: 4, fontSize: 10, fontWeight: 700, color: "#1A2E1A", letterSpacing: .5 }}>{sig2Name}</div>
-                <div style={{ fontSize: 9, color: "#888" }}>{sig2Title}</div>
+              <div style={{ fontSize: 11, color: "#444", textAlign: "center", maxWidth: 480, margin: "10px auto", lineHeight: 1.8 }}>{bodyText}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 20, paddingTop: 14, borderTop: "1px solid #C8E6C9" }}>
+                <div style={{ textAlign: "center", minWidth: 140 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: "50%", border: `2px solid ${themeColor}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", fontSize: 18, color: themeColor }}>★</div>
+                  <div style={{ borderTop: "1px solid #1A2E1A", paddingTop: 4, fontSize: 10, fontWeight: 700, color: "#1A2E1A", letterSpacing: .5 }}>{sig1Name}</div>
+                  <div style={{ fontSize: 9, color: "#888" }}>{sig1Title}</div>
+                </div>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: "#888", letterSpacing: 1, textTransform: "uppercase" }}>Certificate Code</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: themeColor, letterSpacing: 2 }}>{cert.certificate_code || "—"}</div>
+                  <div style={{ fontSize: 9, color: "#888", marginTop: 4 }}>Issued: {issuedDate}</div>
+                </div>
+                <div style={{ textAlign: "center", minWidth: 140 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: "50%", border: `2px solid ${themeColor}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", fontSize: 18, color: themeColor }}>✦</div>
+                  <div style={{ borderTop: "1px solid #1A2E1A", paddingTop: 4, fontSize: 10, fontWeight: 700, color: "#1A2E1A", letterSpacing: .5 }}>{sig2Name}</div>
+                  <div style={{ fontSize: 9, color: "#888" }}>{sig2Title}</div>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
@@ -408,45 +491,50 @@ function CertPreviewModal({ cert, onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ATTENDANCE GATE CHECK
+//  ATTENDANCE GATE CHECK — checks ALL selected recipients at once
 // ─────────────────────────────────────────────────────────────────────────────
-async function checkAttendance(userId, seminarId) {
-  if (!userId || !seminarId) return { attended: false, checkedInAt: null };
-  const { data, error } = await supabase
-    .from("seminar_attendance")
-    .select("checked_in_at")
-    .eq("user_id", userId)
-    .eq("seminar_id", seminarId)
-    .maybeSingle();
-  if (error || !data) return { attended: false, checkedInAt: null };
-  return { attended: !!data.checked_in_at, checkedInAt: data.checked_in_at };
+async function checkAttendanceForMany(userIds, seminarId) {
+  const [att, certs] = await Promise.all([
+    supabase.from("seminar_attendance")
+      .select("user_id, checked_in_at")
+      .eq("seminar_id", seminarId)
+      .in("user_id", userIds),
+    supabase.from("certificates")
+      .select("user_id")
+      .eq("reference_type", "seminar")
+      .eq("reference_id", seminarId)
+      .eq("is_revoked", false)
+      .in("user_id", userIds),
+  ]);
+  const attendedMap = {};
+  (att.data || []).forEach(a => { if (a.checked_in_at) attendedMap[a.user_id] = a.checked_in_at; });
+  const certSet = new Set((certs.data || []).map(c => c.user_id));
+  return { attendedMap, certSet, error: att.error || certs.error || null };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  CERTIFICATES TAB
 // ─────────────────────────────────────────────────────────────────────────────
-function CertificatesTab() {
+function CertificatesTab({ sigs, onSigsChange }) {
   const toast = useToast();
 
-  const [certs,    setCerts]    = useState([]);
-  const [students, setStudents] = useState([]);
-  const [seminars, setSeminars] = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [search,   setSearch]   = useState("");
+  const [certs,     setCerts]     = useState([]);
+  const [students,  setStudents]  = useState([]);
+  const [seminars,  setSeminars]  = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [search,    setSearch]    = useState("");
   const [filterType, setFilterType] = useState("all");
-  const [sigs, setSigs] = useState({ ...DEFAULT_SIGS });
-  useEffect(() => { loadSignatorySettings().then(setSigs); }, []);
 
-  const [showAdd,  setShowAdd]  = useState(false);
-  const [form,     setForm]     = useState({ reference_type: "seminar" });
-  const [template, setTemplate] = useState({});
-  const [showTemplateEdit, setShowTemplateEdit] = useState(false);
-  const [saving,   setSaving]   = useState(false);
-  const [error,    setError]    = useState("");
+  const [showAdd,   setShowAdd]   = useState(false);
+  const [form,      setForm]      = useState({ reference_type: "seminar" });
+  const [template,  setTemplate]  = useState({});
+  const [saving,    setSaving]    = useState(false);
+  const [error,     setError]     = useState("");
   const [recipientSearch,    setRecipientSearch]    = useState("");
   const [selectedRecipients, setSelectedRecipients] = useState([]);
-  const [attendanceCheck, setAttendanceCheck] = useState(null);
-  const [alreadyHasCert,  setAlreadyHasCert]  = useState(false);
+  // gate: null | "checking" | { attendedMap, certSet, error }
+  const [gate, setGate] = useState(null);
   const [editCert,   setEditCert]   = useState(null);
   const [editForm,   setEditForm]   = useState({});
   const [editSaving, setEditSaving] = useState(false);
@@ -457,83 +545,143 @@ function CertificatesTab() {
   const COLORS = [["#2D6A2D","Forest Green"],["#1A2E1A","Dark Green"],["#1d4ed8","Blue"],["#7c3aed","Purple"],["#c2410c","Orange"],["#0f766e","Teal"]];
 
   const setF  = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const setT  = (k, v) => setTemplate(t => ({ ...t, [k]: v }));
   const setEF = (k, v) => { setEditForm(f => ({ ...f, [k]: v })); setEditErr(e => ({ ...e, [k]: null })); };
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: c }, { data: profiles }, { data: sems }] = await Promise.all([
-      supabase.from("certificates").select("*, profiles!certificates_user_id_fkey(full_name, student_id, email)").order("issued_at", { ascending: false }),
+
+    const [{ data: c, error: cErr }, { data: profiles, error: pErr }, { data: sems, error: sErr }] = await Promise.all([
+      supabase
+        .from("certificates")
+        .select("*, profiles!certificates_user_id_fkey(full_name, student_id, email), certificate_templates(*)")
+        .order("issued_at", { ascending: false }),
       supabase.from("profiles").select("id, full_name, student_id, role").order("full_name"),
       supabase.from("seminars").select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status").order("scheduled_start", { ascending: false }),
     ]);
-    setCerts(c || []); setStudents(profiles || []); setSeminars(sems || []); setLoading(false);
+
+    if (cErr) {
+      console.error("Certificates fetch error:", cErr);
+      const { data: fallbackData } = await supabase
+        .from("certificates")
+        .select("*, profiles!certificates_user_id_fkey(full_name, student_id, email)")
+        .order("issued_at", { ascending: false });
+      setCerts(fallbackData || []);
+    } else {
+      setCerts(c || []);
+    }
+
+    if (pErr) console.error("Profiles fetch error:", pErr);
+    if (sErr) console.error("Seminars fetch error:", sErr);
+
+    setStudents(profiles || []);
+    setSeminars(sems || []);
+    setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
-
   useEffect(() => {
-    const seminar   = seminars.find(s => s.id === form.seminar_id) || null;
-    const refType   = form.reference_type || "seminar";
-    const recipient = selectedRecipients.length === 1 ? (students.find(s => s.id === selectedRecipients[0])?.full_name || "") : "";
-    const defaults  = buildDefaultTemplate({ seminar, recipientName: recipient, refType, sigs });
-    setTemplate(defaults);
+    load();
+    loadTemplates().then(setTemplates);
+  }, [load]);
+
+  // Rebuild the default body/signatories when seminar, type, or signatories change
+  useEffect(() => {
+    const seminar = seminars.find(s => s.id === form.seminar_id) || null;
+    const refType = form.reference_type || "seminar";
+    setTemplate(buildDefaultTemplate({ seminar, refType, sigs }));
   }, [form.seminar_id, form.reference_type, seminars, sigs]);
 
+  // Check attendance + existing certificates for EVERY selected recipient
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (form.reference_type !== "seminar") { if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); } return; }
-      const userId = selectedRecipients[0], seminarId = form.seminar_id;
-      if (!userId || !seminarId) { if (!cancelled) { setAttendanceCheck(null); setAlreadyHasCert(false); } return; }
-      if (!cancelled) setAttendanceCheck("checking");
-      const [attendance, existingCert] = await Promise.all([
-        checkAttendance(userId, seminarId),
-        supabase.from("certificates").select("id").eq("user_id", userId).eq("reference_type", "seminar").eq("reference_id", seminarId).eq("is_revoked", false).maybeSingle(),
-      ]);
-      if (cancelled) return;
-      setAttendanceCheck(attendance); setAlreadyHasCert(!!existingCert.data);
+      if (form.reference_type !== "seminar" || !form.seminar_id || selectedRecipients.length === 0) {
+        if (!cancelled) setGate(null);
+        return;
+      }
+      setGate("checking");
+      const result = await checkAttendanceForMany(selectedRecipients, form.seminar_id);
+      if (!cancelled) setGate(result);
     })();
     return () => { cancelled = true; };
   }, [selectedRecipients, form.seminar_id, form.reference_type]);
 
+  const nameOf = (id) => students.find(st => st.id === id)?.full_name || "Unknown";
+
+  // Split selected recipients into who can / can't receive a seminar certificate
+  const isSeminarType   = form.reference_type === "seminar";
+  const gateReady       = gate && gate !== "checking" && !gate.error;
+  const okIds           = gateReady ? selectedRecipients.filter(id => gate.attendedMap[id] && !gate.certSet.has(id)) : [];
+  const hasCertIds      = gateReady ? selectedRecipients.filter(id => gate.certSet.has(id)) : [];
+  const notAttendedIds  = gateReady ? selectedRecipients.filter(id => !gate.attendedMap[id] && !gate.certSet.has(id)) : [];
+  const issueTargets    = isSeminarType ? okIds : selectedRecipients;
+  const skippedCount    = isSeminarType ? selectedRecipients.length - okIds.length : 0;
+
+  const resetIssueForm = () => {
+    setForm({ reference_type: "seminar" }); setTemplate({}); setError("");
+    setSelectedRecipients([]); setRecipientSearch(""); setGate(null);
+  };
+
   const issueCert = async () => {
     setError("");
     if (selectedRecipients.length === 0) { setError("Please select at least one recipient."); return; }
-    if (form.reference_type === "seminar") {
+    if (isSeminarType) {
       if (!form.seminar_id) { setError("Please select a seminar."); return; }
-      if (attendanceCheck === "checking") { setError("Checking attendance, please wait…"); return; }
-      if (!attendanceCheck?.attended) { setError("This participant has no verified attendance for the selected seminar."); return; }
-      if (alreadyHasCert) { setError("A valid certificate for this seminar has already been issued to this participant."); return; }
+      if (!gate || gate === "checking") { setError("Checking attendance, please wait…"); return; }
+      if (gate.error) { setError(`Could not check attendance: ${gate.error.message}`); return; }
+      if (okIds.length === 0) { setError("None of the selected participants can receive a certificate. They either have no verified attendance or already have one."); return; }
     }
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
     const seminar = seminars.find(s => s.id === form.seminar_id);
-    let failed = 0;
-    for (const uid of selectedRecipients) {
-      const code = genCertCode();
-      const { error: err } = await supabase.from("certificates").insert({
-        user_id: uid, reference_type: form.reference_type || "seminar",
-        reference_id: form.reference_type === "seminar" ? form.seminar_id : (form.reference_id || null),
-        certificate_code: code, is_revoked: false, issued_at: new Date().toISOString(), issued_by: user?.id,
-        body_text: template.body_text || null, sig1_name: template.sig1_name || null, sig1_title: template.sig1_title || null,
-        sig2_name: template.sig2_name || null, sig2_title: template.sig2_title || null, theme_color: template.theme_color || "#2D6A2D",
-      });
-      if (err) { failed++; continue; }
-      await insertCertificateNotification(uid, code, seminar?.title);
+
+    const rowsToInsert = issueTargets.map(uid => ({
+      user_id: uid,
+      reference_type: form.reference_type || "seminar",
+      reference_id: isSeminarType ? form.seminar_id : (form.reference_id || null),
+      certificate_code: genCertCode(),
+      is_revoked: false,
+      issued_at: new Date().toISOString(),
+      issued_by: user?.id,
+      body_text: template.body_text || null,
+      sig1_name: template.sig1_name || null,
+      sig1_title: template.sig1_title || null,
+      sig2_name: template.sig2_name || null,
+      sig2_title: template.sig2_title || null,
+      theme_color: template.theme_color || "#2D6A2D",
+      template_id: form.template_id || null,
+    }));
+
+    const { data: insertedData, error: err } = await supabase
+      .from("certificates")
+      .insert(rowsToInsert)
+      .select();
+
+    if (err) {
+      setSaving(false);
+      setError(`Failed to issue certificates: ${err.message}`);
+      return;
     }
+
+    await Promise.all(
+      (insertedData || []).map(c => insertCertificateNotification(c.user_id, c.certificate_code, seminar?.title))
+    );
+
     setSaving(false);
-    if (failed > 0) { setError(`${failed} certificate(s) failed to issue.`); return; }
-    toast(selectedRecipients.length > 1 ? `${selectedRecipients.length} certificates issued successfully.` : "Certificate issued successfully.", "success");
-    logActivity("certificate_issued", { count: selectedRecipients.length, type: form.reference_type });
-    setShowAdd(false); setForm({ reference_type: "seminar" }); setTemplate({});
-    setSelectedRecipients([]); setRecipientSearch(""); setAttendanceCheck(null); setAlreadyHasCert(false); setShowTemplateEdit(false);
+    const n = rowsToInsert.length;
+    toast(
+      `${n} certificate${n !== 1 ? "s" : ""} issued successfully.${skippedCount > 0 ? ` ${skippedCount} skipped.` : ""}`,
+      "success"
+    );
+    logActivity("certificate_issued", { count: n, skipped: skippedCount, type: form.reference_type });
+    setShowAdd(false);
+    resetIssueForm();
     load();
   };
 
   const toggleRevoke = async (cert) => {
     const newVal = !cert.is_revoked;
-    await supabase.from("certificates").update({ is_revoked: newVal }).eq("id", cert.id);
+    const { error: err } = await supabase.from("certificates").update({ is_revoked: newVal }).eq("id", cert.id);
+    if (err) { toast(`Failed to update certificate: ${err.message}`, "error"); return; }
     setCerts(cs => cs.map(c => c.id === cert.id ? { ...c, is_revoked: newVal } : c));
     toast(newVal ? "Certificate revoked." : "Certificate restored.", "success");
     logActivity(newVal ? "certificate_revoked" : "certificate_restored", { certificate_code: cert.certificate_code });
@@ -547,8 +695,10 @@ function CertificatesTab() {
       body_text: cert.body_text || "", sig1_name: cert.sig1_name || "GAD Coordinator",
       sig1_title: cert.sig1_title || "Cavite State University", sig2_name: cert.sig2_name || "GADRC Director",
       sig2_title: cert.sig2_title || "Cavite State University", theme_color: cert.theme_color || "#2D6A2D",
+      template_id: cert.template_id || "",
     });
     setEditError(""); setEditErr({});
+    loadTemplates().then(setTemplates);
   };
 
   const saveEdit = async () => {
@@ -569,6 +719,7 @@ function CertificatesTab() {
       issued_at: new Date(editForm.issued_at).toISOString(),
       body_text: editForm.body_text || null, sig1_name: editForm.sig1_name || null, sig1_title: editForm.sig1_title || null,
       sig2_name: editForm.sig2_name || null, sig2_title: editForm.sig2_title || null, theme_color: editForm.theme_color || "#2D6A2D",
+      template_id: editForm.template_id || null,
     }).eq("id", editCert.id);
     setEditSaving(false);
     if (err) { setEditError(err.message); return; }
@@ -579,36 +730,102 @@ function CertificatesTab() {
     load();
   };
 
+  // "Reset to default" in the edit modal uses the certificate's actual seminar if it has one
+  const resetEditBody = () => {
+    const seminar = editForm.reference_type === "seminar"
+      ? seminars.find(sm => sm.id === editCert?.reference_id) || null
+      : null;
+    const d = buildDefaultTemplate({ seminar, refType: editForm.reference_type, sigs });
+    setEF("body_text", d.body_text);
+  };
+
   const filtered = certs.filter(c => {
-    const matchSearch = (c.profiles?.full_name || "").toLowerCase().includes(search.toLowerCase()) || (c.profiles?.student_id || "").toLowerCase().includes(search.toLowerCase()) || (c.certificate_code || "").toLowerCase().includes(search.toLowerCase());
+    const q = search.toLowerCase();
+    const matchSearch = (c.profiles?.full_name || "").toLowerCase().includes(q) || (c.profiles?.student_id || "").toLowerCase().includes(q) || (c.certificate_code || "").toLowerCase().includes(q);
     const matchType   = filterType === "all" || c.reference_type === filterType;
     return matchSearch && matchType;
   });
 
   const renderAttendanceGate = () => {
-    if (form.reference_type !== "seminar") return null;
-    const userId = selectedRecipients[0];
-    if (!userId || !form.seminar_id) return null;
-    if (attendanceCheck === "checking") return <div style={s.infoBox("blue")}><span className="spinner-border spinner-border-sm me-2" />Checking attendance record…</div>;
-    if (alreadyHasCert) return <div style={s.infoBox("yellow")}><i className="bi bi-exclamation-triangle-fill" /><div><strong>Certificate already issued.</strong> A valid certificate for this seminar already exists for this participant.</div></div>;
-    if (attendanceCheck?.attended) return <div style={s.infoBox("green")}><i className="bi bi-check-circle-fill" /><div><strong>Attendance verified.</strong> Checked in on {formatDate(attendanceCheck.checkedInAt)}. Certificate can be issued.</div></div>;
-    return <div style={s.infoBox("red")}><i className="bi bi-x-circle-fill" /><div><strong>No attendance record found.</strong> This participant has no verified check-in for the selected seminar.</div></div>;
+    if (!isSeminarType || !form.seminar_id || selectedRecipients.length === 0) return null;
+    if (!gate || gate === "checking") {
+      return <div style={s.infoBox("blue")}><span className="spinner-border spinner-border-sm me-2" />Checking attendance records…</div>;
+    }
+    if (gate.error) {
+      return <div style={s.infoBox("red")}><i className="bi bi-x-circle-fill" /><div><strong>Could not check attendance.</strong> {gate.error.message}</div></div>;
+    }
+    const single = selectedRecipients.length === 1;
+    return (
+      <>
+        {okIds.length > 0 && (
+          <div style={s.infoBox("green")}>
+            <i className="bi bi-check-circle-fill" />
+            <div>
+              <strong>Attendance verified.</strong>{" "}
+              {single
+                ? <>Checked in on {formatDate(gate.attendedMap[okIds[0]])}. Certificate can be issued.</>
+                : <>{okIds.length} participant{okIds.length !== 1 ? "s" : ""} will receive a certificate.</>}
+            </div>
+          </div>
+        )}
+        {hasCertIds.length > 0 && (
+          <div style={s.infoBox("yellow")}>
+            <i className="bi bi-exclamation-triangle-fill" />
+            <div>
+              <strong>Already has a certificate{single ? "" : " (will be skipped)"}:</strong>{" "}
+              {hasCertIds.map(nameOf).join(", ")}
+            </div>
+          </div>
+        )}
+        {notAttendedIds.length > 0 && (
+          <div style={s.infoBox("red")}>
+            <i className="bi bi-x-circle-fill" />
+            <div>
+              <strong>No verified attendance{single ? "" : " (will be skipped)"}:</strong>{" "}
+              {notAttendedIds.map(nameOf).join(", ")}
+            </div>
+          </div>
+        )}
+      </>
+    );
   };
 
   const canIssue = () => {
     if (selectedRecipients.length === 0) return false;
-    if (form.reference_type === "seminar") return !!form.seminar_id && attendanceCheck !== "checking" && attendanceCheck?.attended === true && !alreadyHasCert;
+    if (isSeminarType) return !!form.seminar_id && gateReady && okIds.length > 0;
     return true;
+  };
+
+  const issueButtonLabel = () => {
+    if (saving) return "Issuing…";
+    const n = issueTargets.length;
+    const base = n > 1 ? `Issue ${n} Certificates` : "Issue Certificate";
+    return skippedCount > 0 && n > 0 ? `${base} (${skippedCount} skipped)` : base;
   };
 
   const typeLabel = (t) => ({ manual: "Manual", module: "Module Completion", seminar: "Seminar Attendance", assessment: "Assessment" }[t] || t);
   const filteredStudents = students.filter(st => { const q = recipientSearch.toLowerCase(); return (st.full_name || "").toLowerCase().includes(q) || (st.student_id || "").toLowerCase().includes(q) || (st.role || "").toLowerCase().includes(q); });
-  const previewRecipientName = selectedRecipients.length === 1 ? (students.find(s => s.id === selectedRecipients[0])?.full_name || "") : selectedRecipients.length > 1 ? `${selectedRecipients.length} Recipients` : "";
+  const previewRecipientName = selectedRecipients.length === 1 ? nameOf(selectedRecipients[0]) : selectedRecipients.length > 1 ? `${selectedRecipients.length} Recipients` : "";
   const selectedSeminar = seminars.find(s => s.id === form.seminar_id);
+
+  const issueSeminarId       = isSeminarType ? (form.seminar_id || null) : null;
+  const displayTemplates     = templatesForType(templates, form.reference_type || "seminar", issueSeminarId);
+  const selectedTemplateObj  = displayTemplates.find(t => t.id === form.template_id) || null;
+  const editSeminarId        = editForm.reference_type === "seminar" ? (editCert?.reference_id || null) : null;
+  const editDisplayTemplates = templatesForType(templates, editForm.reference_type || "manual", editSeminarId);
+
+  const issuePreviewData = templateDataFromCert({
+    recipientName: previewRecipientName,
+    seminarTitle:  selectedSeminar?.title,
+    dateStr:       selectedSeminar?.scheduled_start ? formatDateLong(selectedSeminar.scheduled_start) : new Date().toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" }),
+    certCode:      "CERT-XXXXXX",
+    sig1Name: template.sig1_name, sig1Title: template.sig1_title, sig2Name: template.sig2_name, sig2Title: template.sig2_title,
+    bodyText: template.body_text,
+  });
 
   return (
     <div>
-      <SignatorySettingsPanel sigs={sigs} onChange={setSigs} />
+      <SignatorySettingsPanel sigs={sigs} onChange={onSigsChange} />
 
       <div style={s.toolbar}>
         <input style={s.searchBar} placeholder="Search by name, ID, or code…" value={search} onChange={e => setSearch(e.target.value)} />
@@ -620,7 +837,13 @@ function CertificatesTab() {
           <option value="assessment">Assessment</option>
         </select>
         <div style={{ marginLeft: "auto" }}>
-          <button style={s.addBtn} onClick={() => { setForm({ reference_type: "seminar" }); setTemplate({}); setError(""); setSelectedRecipients([]); setRecipientSearch(""); setAttendanceCheck(null); setAlreadyHasCert(false); setShowTemplateEdit(false); setShowAdd(true); }}>
+          <button style={s.addBtn} onClick={() => {
+            resetIssueForm(); setShowAdd(true);
+            loadTemplates().then(list => {
+              setTemplates(list);
+              setForm(f => f.template_id ? f : { ...f, template_id: pickTemplateFor(list, f.reference_type || "seminar", f.seminar_id || null)?.id || "" });
+            });
+          }}>
             <i className="bi bi-plus-lg" />Issue Certificate
           </button>
         </div>
@@ -660,7 +883,13 @@ function CertificatesTab() {
         )
       }
 
-      {previewCert && <CertPreviewModal cert={previewCert} onClose={() => setPreviewCert(null)} />}
+      {previewCert && (
+        <CertPreviewModal
+          cert={previewCert}
+          seminarTitle={previewCert.reference_type === "seminar" ? (seminars.find(sm => sm.id === previewCert.reference_id)?.title || "") : ""}
+          onClose={() => setPreviewCert(null)}
+        />
+      )}
 
       {/* ── Issue Certificate Modal ── */}
       {showAdd && (
@@ -670,22 +899,37 @@ function CertificatesTab() {
               <span style={s.mTitle}><i className="bi bi-patch-check me-2" />Issue Certificate</span>
               <button style={s.iconBtn()} onClick={() => setShowAdd(false)}><i className="bi bi-x-lg" /></button>
             </div>
+
             <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
+              {/* Left Column: Form Controls */}
               <div style={{ flex: "0 0 380px", borderRight: `1px solid ${G.wash}`, overflow: "auto", padding: "20px 24px" }}>
-                {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "flex-start", gap: 8 }}><i className="bi bi-exclamation-triangle-fill" style={{ flexShrink: 0, marginTop: 1 }} />{error}</div>}
+                {error && (
+                  <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <i className="bi bi-exclamation-triangle-fill" style={{ flexShrink: 0, marginTop: 1 }} />{error}
+                  </div>
+                )}
+
                 <div style={s.fg}>
                   <label style={s.label}>Certificate Type *</label>
-                  <select style={s.select} value={form.reference_type || "seminar"} onChange={e => { setF("reference_type", e.target.value); setF("seminar_id", ""); setSelectedRecipients([]); setRecipientSearch(""); setAttendanceCheck(null); setAlreadyHasCert(false); }}>
+                  <select style={s.select} value={form.reference_type || "seminar"} onChange={e => {
+                    const type = e.target.value;
+                    setForm(f => ({ ...f, reference_type: type, seminar_id: "", template_id: pickTemplateFor(templates, type, null)?.id || "" }));
+                    setSelectedRecipients([]); setRecipientSearch(""); setGate(null);
+                  }}>
                     <option value="seminar">Certificate of Participation (Seminar)</option>
                     <option value="module">Certificate of Completion (Module)</option>
                     <option value="assessment">Certificate of Achievement (Assessment)</option>
                     <option value="manual">Certificate of Recognition (Manual)</option>
                   </select>
                 </div>
-                {form.reference_type === "seminar" && (
+
+                {isSeminarType && (
                   <div style={s.fg}>
                     <label style={s.label}>Seminar *</label>
-                    <select style={s.select} value={form.seminar_id || ""} onChange={e => setF("seminar_id", e.target.value)}>
+                    <select style={s.select} value={form.seminar_id || ""} onChange={e => {
+                      const sid = e.target.value;
+                      setForm(f => ({ ...f, seminar_id: sid, template_id: pickTemplateFor(templates, "seminar", sid || null)?.id || "" }));
+                    }}>
                       <option value="">— Select seminar —</option>
                       {seminars.map(sem => <option key={sem.id} value={sem.id}>{sem.title}{sem.scheduled_start ? ` (${formatDate(sem.scheduled_start)})` : ""}</option>)}
                     </select>
@@ -697,10 +941,20 @@ function CertificatesTab() {
                     )}
                   </div>
                 )}
+
+                <div style={s.fg}>
+                  <label style={s.label}>Design Template <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>(optional)</span></label>
+                  <select style={s.select} value={form.template_id || ""} onChange={e => setF("template_id", e.target.value)}>
+                    <option value="">— Use Default Layout —</option>
+                    {displayTemplates.map(t => <option key={t.id} value={t.id}>{templateOptionLabel(t, issueSeminarId)}</option>)}
+                  </select>
+                  {displayTemplates.length === 0 && <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>No uploaded designs available. Upload one in the <strong>Templates</strong> tab.</div>}
+                </div>
+
                 <div style={s.fg}>
                   <label style={s.label}>Recipient * {selectedRecipients.length > 0 && <span style={{ color: G.base, fontWeight: 700 }}>({selectedRecipients.length} selected)</span>}</label>
                   <input style={{ ...s.input, marginBottom: 8 }} placeholder="Search by name, ID, or role…" value={recipientSearch} onChange={e => setRecipientSearch(e.target.value)} />
-                  <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff" }}>
+                  <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff" }}>
                     {filteredStudents.length === 0 ? <div style={{ padding: "20px", textAlign: "center", color: "#aaa", fontSize: 13 }}>No results</div>
                       : filteredStudents.map(st => {
                           const checked = selectedRecipients.includes(st.id);
@@ -715,62 +969,29 @@ function CertificatesTab() {
                   </div>
                   {selectedRecipients.length > 0 && <div style={{ marginTop: 6, fontSize: 12, color: "#888", display: "flex", justifyContent: "space-between" }}><span>{selectedRecipients.length} recipient(s) selected</span><span style={{ cursor: "pointer", color: G.base, textDecoration: "underline" }} onClick={() => setSelectedRecipients([])}>Clear all</span></div>}
                 </div>
+
                 {renderAttendanceGate()}
-                {form.reference_type === "seminar" && !form.seminar_id && (
-                  <div style={s.infoBox("blue")}><i className="bi bi-info-circle-fill" />Select a seminar to auto-populate the certificate template. Only participants with verified attendance can receive a certificate.</div>
-                )}
-                <div style={{ background: G.wash, borderRadius: 8, padding: "12px 14px", marginBottom: 16 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showTemplateEdit ? 14 : 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: G.dark, display: "flex", alignItems: "center", gap: 6 }}><i className="bi bi-magic" style={{ color: G.base }} />Auto-populated Template<span style={{ ...s.tag("green"), fontSize: 10 }}>Ready</span></div>
-                    <button style={{ ...s.iconBtn(G.base), fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }} onClick={() => setShowTemplateEdit(v => !v)}><i className={`bi ${showTemplateEdit ? "bi-chevron-up" : "bi-pencil"}`} />{showTemplateEdit ? "Collapse" : "Edit"}</button>
-                  </div>
-                  {!showTemplateEdit && (
-                    <div style={{ fontSize: 11, color: "#666", lineHeight: 1.5 }}>
-                      <div><strong>Title:</strong> {certTitle(form.reference_type)}</div>
-                      <div style={{ marginTop: 3 }}><strong>Signatories:</strong> {template.sig1_name || "GAD Coordinator"} &amp; {template.sig2_name || "GADRC Director"}</div>
-                      <div style={{ marginTop: 3 }}><strong>Theme:</strong><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: "50%", background: template.theme_color || "#2D6A2D", marginLeft: 6, verticalAlign: "middle", border: "1px solid #ccc" }} /><span style={{ marginLeft: 4 }}>{template.theme_color || "#2D6A2D"}</span></div>
-                    </div>
-                  )}
-                  {showTemplateEdit && (
-                    <>
-                      <div style={s.fg}>
-                        <label style={s.label}>Body Text</label>
-                        <textarea style={{ ...s.textarea, minHeight: 80, fontSize: 12 }} value={template.body_text || ""} onChange={e => setT("body_text", e.target.value)} />
-                        <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }} onClick={() => { const sem = seminars.find(s => s.id === form.seminar_id) || null; const d = buildDefaultTemplate({ seminar: sem, refType: form.reference_type }); setT("body_text", d.body_text); }}>↺ Reset to default</div>
-                      </div>
-                      <div style={{ display: "flex", gap: 10 }}>
-                        <div style={{ flex: 1 }}>
-                          <label style={s.label}>Left Signatory</label>
-                          <input style={{ ...s.input, marginBottom: 6 }} value={template.sig1_name || ""} onChange={e => setT("sig1_name", e.target.value)} placeholder="GAD Coordinator" />
-                          <input style={s.input} value={template.sig1_title || ""} onChange={e => setT("sig1_title", e.target.value)} placeholder="Title" />
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <label style={s.label}>Right Signatory</label>
-                          <input style={{ ...s.input, marginBottom: 6 }} value={template.sig2_name || ""} onChange={e => setT("sig2_name", e.target.value)} placeholder="GADRC Director" />
-                          <input style={s.input} value={template.sig2_title || ""} onChange={e => setT("sig2_title", e.target.value)} placeholder="Title" />
-                        </div>
-                      </div>
-                      <div style={{ marginTop: 12 }}>
-                        <label style={s.label}>Theme Color</label>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <input type="color" value={template.theme_color || "#2D6A2D"} onChange={e => setT("theme_color", e.target.value)} style={{ width: 40, height: 32, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", padding: 2 }} />
-                          {COLORS.map(([c, label]) => <span key={c} onClick={() => setT("theme_color", c)} title={label} style={{ display: "inline-block", width: 20, height: 20, borderRadius: "50%", background: c, cursor: "pointer", border: template.theme_color === c ? "3px solid #000" : "2px solid transparent" }} />)}
-                        </div>
-                      </div>
-                    </>
-                  )}
+              </div>
+
+              {/* Right Column: Live Preview */}
+              <div style={{ flex: 1, background: "#F5F7F5", padding: "20px 24px", display: "flex", flexDirection: "column", overflow: "auto" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.6, display: "flex", alignItems: "center", gap: 6 }}>
+                  <i className="bi bi-eye" />Live Preview
+                </div>
+                {selectedTemplateObj
+                  ? <TemplateCanvas imageUrl={selectedTemplateObj.image_url} fields={selectedTemplateObj.fields} data={issuePreviewData} editable={false} width={440} />
+                  : <MiniCertPreview recipientName={previewRecipientName} refType={form.reference_type} template={template} />
+                }
+                <div style={{ marginTop: 12, fontSize: 11, color: "#aaa", textAlign: "center" }}>
+                  Selected recipient details map directly onto the template background design.
                 </div>
               </div>
-              <div style={{ flex: 1, background: "#F5F7F5", padding: "20px 24px", display: "flex", flexDirection: "column", overflow: "auto" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.6, display: "flex", alignItems: "center", gap: 6 }}><i className="bi bi-eye" />Live Preview</div>
-                <MiniCertPreview recipientName={previewRecipientName} refType={form.reference_type} seminarTitle={selectedSeminar?.title} template={template} />
-                <div style={{ marginTop: 10, fontSize: 11, color: "#aaa", textAlign: "center" }}>Preview updates as you make changes. The actual certificate code will be generated on issue.</div>
-              </div>
             </div>
+
             <div style={s.mFooter}>
               <button style={s.btnSecondary} onClick={() => setShowAdd(false)}>Cancel</button>
               <button style={{ ...s.btnPrimary, opacity: (saving || !canIssue()) ? 0.5 : 1, cursor: canIssue() ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 6 }} onClick={issueCert} disabled={saving || !canIssue()}>
-                <i className="bi bi-send-check" />{saving ? "Issuing…" : selectedRecipients.length > 1 ? `Issue ${selectedRecipients.length} Certificates` : "Issue Certificate"}
+                <i className="bi bi-send-check" />{issueButtonLabel()}
               </button>
             </div>
           </div>
@@ -805,6 +1026,13 @@ function CertificatesTab() {
                 </select>
               </div>
               <div style={s.fg}>
+                <label style={s.label}>Design Template <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>(optional)</span></label>
+                <select style={s.select} value={editForm.template_id || ""} onChange={e => setEF("template_id", e.target.value)}>
+                  <option value="">— Use Default Layout —</option>
+                  {editDisplayTemplates.map(t => <option key={t.id} value={t.id}>{templateOptionLabel(t, editSeminarId)}</option>)}
+                </select>
+              </div>
+              <div style={s.fg}>
                 <label style={s.label}>Issue Date *</label>
                 <input type="date" style={{ ...s.input, borderColor: editErr.issued_at ? "#dc2626" : undefined }} value={editForm.issued_at || ""} max={new Date().toISOString().split("T")[0]} onChange={e => setEF("issued_at", e.target.value)} />
                 <FieldError msg={editErr.issued_at}/>
@@ -813,7 +1041,7 @@ function CertificatesTab() {
                 <label style={s.label}>Body Text <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>({(editForm.body_text||"").length}/500)</span></label>
                 <textarea style={{ ...s.textarea, minHeight: 80, borderColor: editErr.body_text ? "#dc2626" : undefined }} value={editForm.body_text || ""} onChange={e => setEF("body_text", e.target.value)} />
                 <FieldError msg={editErr.body_text}/>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }} onClick={() => { const d = buildDefaultTemplate({ refType: editForm.reference_type }); setEF("body_text", d.body_text); }}>↺ Reset to default</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 4, cursor: "pointer", textDecoration: "underline" }} onClick={resetEditBody}>↺ Reset to default</div>
               </div>
               <div style={s.row}>
                 <div style={{ flex: 1, ...s.fg }}>
@@ -837,14 +1065,16 @@ function CertificatesTab() {
                   <input style={s.input} value={editForm.sig2_title || ""} onChange={e => setEF("sig2_title", e.target.value)} placeholder="Cavite State University" />
                 </div>
               </div>
-              <div style={s.fg}>
-                <label style={s.label}>Theme Color</label>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <input type="color" value={editForm.theme_color || "#2D6A2D"} onChange={e => setEF("theme_color", e.target.value)} style={{ width: 48, height: 36, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", padding: 2 }} />
-                  <div style={{ flex: 1 }}>{COLORS.map(([c, label]) => <span key={c} onClick={() => setEF("theme_color", c)} title={label} style={{ display: "inline-block", width: 22, height: 22, borderRadius: "50%", background: c, marginRight: 6, cursor: "pointer", border: editForm.theme_color === c ? "3px solid #000" : "2px solid transparent", verticalAlign: "middle" }} />)}</div>
-                  <code style={{ fontSize: 11, color: "#888" }}>{editForm.theme_color}</code>
+              {!editForm.template_id && (
+                <div style={s.fg}>
+                  <label style={s.label}>Theme Color <span style={{ fontWeight: 400, color: "#aaa", textTransform: "none" }}>(default layout only)</span></label>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <input type="color" value={editForm.theme_color || "#2D6A2D"} onChange={e => setEF("theme_color", e.target.value)} style={{ width: 48, height: 36, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", padding: 2 }} />
+                    <div style={{ flex: 1 }}>{COLORS.map(([c, label]) => <span key={c} onClick={() => setEF("theme_color", c)} title={label} style={{ display: "inline-block", width: 22, height: 22, borderRadius: "50%", background: c, marginRight: 6, cursor: "pointer", border: editForm.theme_color === c ? "3px solid #000" : "2px solid transparent", verticalAlign: "middle" }} />)}</div>
+                    <code style={{ fontSize: 11, color: "#888" }}>{editForm.theme_color}</code>
+                  </div>
                 </div>
-              </div>
+              )}
               <div style={{ background: G.wash, borderRadius: 6, padding: "10px 14px", fontSize: 12, color: G.dark }}>
                 <i className="bi bi-info-circle me-1" />Certificate Code <strong>{editCert.certificate_code}</strong> cannot be changed.
               </div>
@@ -861,57 +1091,111 @@ function CertificatesTab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  AUTO-ISSUE TAB
+//  AUTO-ISSUE TAB — gated on: registered (not cancelled) + attended + evaluated
 // ─────────────────────────────────────────────────────────────────────────────
-function AutoIssueTab() {
+function AutoIssueTab({ sigs, onSigsChange }) {
   const toast = useToast();
-  const [seminars,  setSeminars]  = useState([]);
-  const [selected,  setSelected]  = useState(null);
-  const [eligible,  setEligible]  = useState([]);
-  const [loading,   setLoading]   = useState(false);
-  const [issuing,   setIssuing]   = useState(false);
-  const [issuedIds, setIssuedIds] = useState(new Set());
-  const [error,     setError]     = useState("");
-  const [sigs, setSigs] = useState({ ...DEFAULT_SIGS });
-  useEffect(() => { loadSignatorySettings().then(setSigs); }, []);
+  const [seminars,   setSeminars]   = useState([]);
+  const [templates,  setTemplates]  = useState([]);
+  const [templateId, setTemplateId] = useState("");
+  const [selected,   setSelected]   = useState(null);
+  const [eligible,   setEligible]   = useState([]);
+  const [counts,     setCounts]     = useState(null); // { registered, attended, evaluated }
+  const [loading,    setLoading]    = useState(false);
+  const [issuing,    setIssuing]    = useState(false);
+  const [issuedIds,  setIssuedIds]  = useState(new Set());
+  const [error,      setError]      = useState("");
 
   useEffect(() => {
+    let active = true;
     (async () => {
-      const { data } = await supabase.from("seminars").select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status").order("scheduled_start", { ascending: false });
-      setSeminars(data || []);
+      const [{ data: sems }, tmpls] = await Promise.all([
+        supabase.from("seminars").select("id, title, scheduled_start, scheduled_end, venue, seminar_type, status").order("scheduled_start", { ascending: false }),
+        loadTemplates(),
+      ]);
+      if (!active) return;
+      setSeminars(sems || []);
+      const list = tmpls || [];
+      setTemplates(list);
+      // Pre-select the default (★) seminar design, if there is one
+      const def = pickTemplateFor(list, "seminar", null);
+      if (def) setTemplateId(def.id);
     })();
+    return () => { active = false; };
   }, []);
 
+  const seminarTemplates = templatesForType(templates, "seminar", selected?.id || null);
+  const selectedTemplate = seminarTemplates.find(t => t.id === templateId) || null;
+
   const loadEligible = async (seminarId) => {
-    setLoading(true); setEligible([]); setIssuedIds(new Set()); setError("");
-    const [{ data: registered, error: regErr }, { data: evaluated, error: evalErr }, { data: existing }] = await Promise.all([
-      supabase.from("seminar_registrations").select("user_id, full_name, email, role, department").eq("seminar_id", seminarId),
-      supabase.from("seminar_evaluations").select("user_id, submitted_at").eq("seminar_id", seminarId).not("submitted_at", "is", null),
-      supabase.from("certificates").select("user_id").eq("reference_type", "seminar").eq("reference_id", seminarId).eq("is_revoked", false),
+    setLoading(true); setEligible([]); setIssuedIds(new Set()); setError(""); setCounts(null);
+    const [regRes, attRes, evalRes, certRes] = await Promise.all([
+      supabase.from("seminar_registrations")
+        .select("user_id, role, status, profiles(full_name, email, department)")
+        .eq("seminar_id", seminarId)
+        .neq("status", "cancelled"),
+      supabase.from("seminar_attendance")
+        .select("user_id")
+        .eq("seminar_id", seminarId),
+      supabase.from("seminar_evaluations")
+        .select("user_id")
+        .eq("seminar_id", seminarId)
+        .not("submitted_at", "is", null),
+      supabase.from("certificates")
+        .select("user_id")
+        .eq("reference_type", "seminar")
+        .eq("reference_id", seminarId)
+        .eq("is_revoked", false),
     ]);
-    if (regErr || evalErr) { setError((regErr || evalErr).message); setLoading(false); return; }
-    const evaluatedIds = new Set((evaluated || []).map(e => e.user_id));
-    const certUserIds  = new Set((existing  || []).map(c => c.user_id));
-    setEligible((registered || []).filter(r => evaluatedIds.has(r.user_id) && !certUserIds.has(r.user_id)));
-    setIssuedIds(certUserIds); setLoading(false);
+
+    const firstErr = regRes.error || attRes.error || evalRes.error || certRes.error;
+    if (firstErr) { setError(firstErr.message); setLoading(false); return; }
+
+    const registered = regRes.data || [];
+    const attended   = new Set((attRes.data  || []).map(a => a.user_id));
+    const evaluated  = new Set((evalRes.data || []).map(e => e.user_id));
+    const hasCert    = new Set((certRes.data || []).map(c => c.user_id));
+
+    setCounts({
+      registered: registered.length,
+      attended:   registered.filter(r => attended.has(r.user_id)).length,
+      evaluated:  registered.filter(r => attended.has(r.user_id) && evaluated.has(r.user_id)).length,
+    });
+
+    setEligible(
+      registered
+        .filter(r => attended.has(r.user_id) && evaluated.has(r.user_id) && !hasCert.has(r.user_id))
+        .map(r => ({
+          user_id:    r.user_id,
+          role:       r.role,
+          full_name:  r.profiles?.full_name,
+          email:      r.profiles?.email,
+          department: r.profiles?.department,
+        }))
+    );
+    setIssuedIds(hasCert);
+    setLoading(false);
   };
 
   const onSeminarChange = (seminarId) => {
     const sem = seminars.find(s => s.id === seminarId);
     setSelected(sem || null);
+    // Use the design linked to this seminar, else the default seminar design
+    setTemplateId(pickTemplateFor(templates, "seminar", seminarId || null)?.id || "");
     if (seminarId) loadEligible(seminarId);
+    else { setEligible([]); setCounts(null); }
   };
 
   const getTemplate = () => buildDefaultTemplate({ seminar: selected, refType: "seminar", sigs });
 
-  const issueOne = async (userId, seminarId) => {
-    const { data: { user } } = await supabase.auth.getUser();
+  const issueOne = async (userId, seminarId, issuerId) => {
     const code = genCertCode(), tmpl = getTemplate();
     const { error: err } = await supabase.from("certificates").insert({
       user_id: userId, reference_type: "seminar", reference_id: seminarId,
-      certificate_code: code, is_revoked: false, issued_at: new Date().toISOString(), issued_by: user?.id,
+      certificate_code: code, is_revoked: false, issued_at: new Date().toISOString(), issued_by: issuerId,
       body_text: tmpl.body_text, sig1_name: tmpl.sig1_name, sig1_title: tmpl.sig1_title,
       sig2_name: tmpl.sig2_name, sig2_title: tmpl.sig2_title, theme_color: tmpl.theme_color,
+      template_id: templateId || null,
     });
     if (!err) await insertCertificateNotification(userId, code, selected?.title);
     return err;
@@ -920,25 +1204,32 @@ function AutoIssueTab() {
   const issueAll = async () => {
     if (!selected || eligible.length === 0) return;
     setIssuing(true); setError("");
-    let failed = 0;
+    const { data: { user } } = await supabase.auth.getUser();
+    let failed = 0, succeeded = 0;
     const newIssued = new Set(issuedIds);
     for (const reg of eligible) {
-      const err = await issueOne(reg.user_id, selected.id);
-      if (err) { failed++; } else { newIssued.add(reg.user_id); }
+      const err = await issueOne(reg.user_id, selected.id, user?.id);
+      if (err) { failed++; } else { succeeded++; newIssued.add(reg.user_id); }
     }
     setIssuedIds(newIssued);
     setEligible(prev => prev.filter(r => !newIssued.has(r.user_id)));
     setIssuing(false);
-    if (failed > 0) { setError(`${failed} certificate(s) failed to issue.`); }
-    else { toast(`${eligible.length} certificate(s) issued for "${selected.title}".`, "success"); }
+    logActivity("certificate_auto_issued", { seminar_id: selected.id, count: succeeded, failed });
+    if (failed > 0) {
+      setError(`${failed} certificate(s) failed to issue.${succeeded > 0 ? ` ${succeeded} issued successfully.` : ""}`);
+    } else {
+      toast(`${succeeded} certificate(s) issued for "${selected.title}".`, "success");
+    }
   };
 
   const issueSingle = async (reg) => {
     setIssuing(true);
-    const err = await issueOne(reg.user_id, selected.id);
+    const { data: { user } } = await supabase.auth.getUser();
+    const err = await issueOne(reg.user_id, selected.id, user?.id);
     setIssuing(false);
     if (err) { setError(err.message); return; }
-    toast(`Certificate issued to ${reg.full_name}.`, "success");
+    toast(`Certificate issued to ${reg.full_name || "participant"}.`, "success");
+    logActivity("certificate_auto_issued", { seminar_id: selected.id, count: 1 });
     setIssuedIds(prev => new Set([...prev, reg.user_id]));
     setEligible(prev => prev.filter(r => r.user_id !== reg.user_id));
   };
@@ -951,22 +1242,35 @@ function AutoIssueTab() {
 
   return (
     <div>
-      <SignatorySettingsPanel sigs={sigs} onChange={setSigs} />
+      <SignatorySettingsPanel sigs={sigs} onChange={onSigsChange} />
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #DDE8DD", marginBottom: 20 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: G.dark, marginBottom: 10 }}>
           <i className="bi bi-lightning-charge me-2" style={{ color: G.base }} />
-          Select a seminar to see participants who have <strong>registered</strong> and <strong>submitted an evaluation</strong> but have not yet received a certificate.
+          Select a seminar to see participants who <strong>registered</strong>, <strong>attended</strong>, and <strong>submitted an evaluation</strong> but have not yet received a certificate.
         </div>
-        <select style={{ ...s.select, maxWidth: 480 }} value={selected?.id || ""} onChange={e => onSeminarChange(e.target.value)}>
-          <option value="">— Choose seminar —</option>
-          {seminars.map(sem => <option key={sem.id} value={sem.id}>{sem.title}{sem.scheduled_start ? ` · ${formatDate(sem.scheduled_start)}` : ""}</option>)}
-        </select>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 300px", maxWidth: 480 }}>
+            <label style={s.label}>Seminar</label>
+            <select style={s.select} value={selected?.id || ""} onChange={e => onSeminarChange(e.target.value)}>
+              <option value="">— Choose seminar —</option>
+              {seminars.map(sem => <option key={sem.id} value={sem.id}>{sem.title}{sem.scheduled_start ? ` · ${formatDate(sem.scheduled_start)}` : ""}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: "1 1 220px", maxWidth: 320 }}>
+            <label style={s.label}>Design Template</label>
+            <select style={s.select} value={templateId} onChange={e => setTemplateId(e.target.value)}>
+              <option value="">— Use Default Layout —</option>
+              {seminarTemplates.map(t => <option key={t.id} value={t.id}>{templateOptionLabel(t, selected?.id || null)}</option>)}
+            </select>
+          </div>
+        </div>
         {selected && selectedSeminarInfo && <div style={{ marginTop: 8, fontSize: 11, color: "#888", background: G.wash, borderRadius: 6, padding: "6px 10px", maxWidth: 480 }}><i className="bi bi-info-circle me-1" />{selectedSeminarInfo}</div>}
         {selected && (
           <div style={{ marginTop: 10, background: G.wash, borderRadius: 8, padding: "10px 14px", maxWidth: 480 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}><i className="bi bi-magic" style={{ color: G.base }} />Certificate Template Preview</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: G.dark, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}><i className="bi bi-magic" style={{ color: G.base }} />Certificate Preview</div>
             <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6 }}>
               <div><strong>Title:</strong> {certTitle("seminar")}</div>
+              <div><strong>Design:</strong> {selectedTemplate ? selectedTemplate.name : "Default layout"}</div>
               <div><strong>Body:</strong> {(getTemplate().body_text || "").slice(0, 120)}…</div>
               <div><strong>Signatories:</strong> {getTemplate().sig1_name} &amp; {getTemplate().sig2_name}</div>
             </div>
@@ -978,7 +1282,13 @@ function AutoIssueTab() {
           <div style={{ padding: "16px 24px", borderBottom: "1px solid #DDE8DD", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
             <div>
               <div style={{ fontWeight: 700, color: G.dark }}>{selected.title}</div>
-              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{loading ? "Checking records…" : `${eligible.length} participant(s) registered + evaluated, no certificate yet`}</div>
+              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
+                {loading
+                  ? "Checking records…"
+                  : counts
+                    ? `${counts.registered} registered · ${counts.attended} attended · ${counts.evaluated} attended + evaluated · ${eligible.length} awaiting certificate`
+                    : ""}
+              </div>
             </div>
             {eligible.length > 0 && !loading && (
               <button style={{ ...s.btnSuccess, opacity: issuing ? 0.7 : 1 }} onClick={issueAll} disabled={issuing}>
@@ -987,12 +1297,14 @@ function AutoIssueTab() {
             )}
           </div>
           {error && <div style={{ margin: "12px 24px 0", ...s.infoBox("red"), marginBottom: 0 }}><i className="bi bi-exclamation-triangle-fill" />{error}</div>}
-          {loading ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Checking registration and evaluation records…</div>
+          {loading ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Checking registration, attendance, and evaluation records…</div>
             : eligible.length === 0 ? (
               <div style={{ padding: "40px 20px", textAlign: "center" }}>
                 <i className="bi bi-check-circle" style={{ fontSize: 36, color: "#16a34a" }} />
-                <div style={{ fontWeight: 700, color: G.dark, marginTop: 12, marginBottom: 6 }}>All caught up!</div>
-                <div style={{ fontSize: 13, color: "#888" }}>All eligible participants have received their certificates.</div>
+                <div style={{ fontWeight: 700, color: G.dark, marginTop: 12, marginBottom: 6 }}>No one is waiting for a certificate</div>
+                <div style={{ fontSize: 13, color: "#888" }}>
+                  Everyone who attended and evaluated this seminar already has a certificate, or no one has met both requirements yet.
+                </div>
               </div>
             ) : (
               <table style={{ ...s.table, borderRadius: 0, boxShadow: "none" }}>
@@ -1000,9 +1312,9 @@ function AutoIssueTab() {
                 <tbody>
                   {eligible.map(reg => (
                     <tr key={reg.user_id}>
-                      <td style={s.td}><div style={{ fontWeight: 600 }}>{reg.full_name || "—"}</div><div style={{ fontSize: 11, color: "#aaa" }}>{reg.email}</div></td>
-                      <td style={s.td}>{reg.role && <span style={s.tag("blue")}>{reg.role.charAt(0).toUpperCase() + reg.role.slice(1)}</span>}</td>
-                      <td style={s.td}><span style={s.tag("green")}>Registered + Evaluated</span></td>
+                      <td style={s.td}><div style={{ fontWeight: 600 }}>{reg.full_name || "—"}</div><div style={{ fontSize: 11, color: "#aaa" }}>{reg.email}{reg.department ? ` · ${reg.department}` : ""}</div></td>
+                      <td style={s.td}>{reg.role && <span style={s.tag("blue")}>{prettyRole(reg.role)}</span>}</td>
+                      <td style={s.td}><span style={s.tag("green")}>Attended + Evaluated</span></td>
                       <td style={s.td}><button style={{ ...s.btnSuccess, padding: "6px 14px", fontSize: 12, opacity: issuing ? 0.6 : 1 }} onClick={() => issueSingle(reg)} disabled={issuing}><i className="bi bi-send-check" />Issue</button></td>
                     </tr>
                   ))}
@@ -1016,7 +1328,7 @@ function AutoIssueTab() {
         <div style={s.emptyBox}>
           <i className="bi bi-lightning-charge" style={{ fontSize: 36, color: G.pale }} />
           <div style={{ fontWeight: 700, color: G.dark, marginTop: 12, marginBottom: 6 }}>Select a seminar above</div>
-          <div style={{ fontSize: 13, color: "#aaa" }}>Participants who registered and evaluated the seminar but have no certificate will appear here.</div>
+          <div style={{ fontSize: 13, color: "#aaa" }}>Participants who attended and evaluated the seminar but have no certificate will appear here.</div>
         </div>
       )}
     </div>
@@ -1024,7 +1336,7 @@ function AutoIssueTab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  BADGES TAB — with validation and logActivity
+//  BADGES TAB
 // ─────────────────────────────────────────────────────────────────────────────
 function BadgesTab() {
   const toast = useToast();
@@ -1173,10 +1485,18 @@ function BadgesTab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  MAIN PAGE
+//  MAIN PAGE — signatory settings live here so both tabs stay in sync
 // ─────────────────────────────────────────────────────────────────────────────
 export default function CertificatesPage() {
-  const [tab, setTab] = useState("certificates");
+  const [tab,  setTab]  = useState("certificates");
+  const [sigs, setSigs] = useState({ ...DEFAULT_SIGS });
+
+  useEffect(() => {
+    let isMounted = true;
+    loadSignatorySettings().then(data => { if (isMounted) setSigs(data); });
+    return () => { isMounted = false; };
+  }, []);
+
   return (
     <div style={s.page}>
       <div style={s.header}>
@@ -1187,11 +1507,13 @@ export default function CertificatesPage() {
       </div>
       <div style={s.tabs}>
         <div style={s.tab(tab === "certificates")} onClick={() => setTab("certificates")}><i className="bi bi-patch-check" />Certificates</div>
-        <div style={s.tab(tab === "auto-issue")} onClick={() => setTab("auto-issue")}><i className="bi bi-lightning-charge" />Auto-Issue<span style={{ ...s.tag("blue"), marginLeft: 4, fontSize: 10 }}>Reg + Eval gated</span></div>
+        <div style={s.tab(tab === "templates")} onClick={() => setTab("templates")}><i className="bi bi-image" />Templates</div>
+        <div style={s.tab(tab === "auto-issue")} onClick={() => setTab("auto-issue")}><i className="bi bi-lightning-charge" />Auto-Issue<span style={{ ...s.tag("blue"), marginLeft: 4, fontSize: 10 }}>Attendance + Eval</span></div>
         <div style={s.tab(tab === "badges")} onClick={() => setTab("badges")}><i className="bi bi-award" />Badges</div>
       </div>
-      {tab === "certificates" && <CertificatesTab />}
-      {tab === "auto-issue"   && <AutoIssueTab />}
+      {tab === "certificates" && <CertificatesTab sigs={sigs} onSigsChange={setSigs} />}
+      {tab === "templates"    && <TemplatesTab />}
+      {tab === "auto-issue"   && <AutoIssueTab sigs={sigs} onSigsChange={setSigs} />}
       {tab === "badges"       && <BadgesTab />}
     </div>
   );

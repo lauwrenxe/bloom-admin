@@ -8,8 +8,9 @@ import { checkSessionTimeout, clearSessionMeta } from "./sessionUtils.js";
 //  MOBILE APP DOWNLOAD
 // ─────────────────────────────────────────────────────────────────────────────
 // Direct-download link for the APK hosted on Google Drive
-const APP_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id=12sh24fi6BaDj73cm1ClYEYb4RuP-JROm";
-const QR_CODE_SRC = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=8&data=${encodeURIComponent(APP_DOWNLOAD_URL)}`;
+const APP_FILE_ID      = "1be2I0NZ91Md2QC0yaH_oz9D3pjtPH7f8";
+const APP_DOWNLOAD_URL = `https://drive.google.com/uc?export=download&id=${APP_FILE_ID}`;
+const QR_CODE_SRC = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=10&data=${encodeURIComponent(APP_DOWNLOAD_URL)}`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  RATE LIMITER
@@ -204,11 +205,12 @@ function Divider({ label }) {
   );
 }
 
-// ── Mobile app download card (QR + short blurb) ───────────────────────────
+// ── Mobile app download card (QR + download button) ───────────────────────
 function MobileAppCard() {
+  const [hovered, setHovered] = useState(false);
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 16,
+      display: "flex", alignItems: "center", gap: 18,
       background: "rgba(255,255,255,.08)",
       border: "1px solid rgba(255,255,255,.12)",
       borderRadius: 14, padding: "16px 18px",
@@ -216,34 +218,44 @@ function MobileAppCard() {
       animation: "fadeUp .7s .2s ease both",
     }}>
       <div style={{
-        width: 76, height: 76, borderRadius: 10,
-        background: "#fff", flexShrink: 0,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 4,
-        boxShadow: "0 2px 8px rgba(0,0,0,.12)",
+        width: 116, height: 116, borderRadius: 10, background: "#fff",
+        flexShrink: 0, padding: 6, boxShadow: "0 2px 8px rgba(0,0,0,.12)",
       }}>
         <img
           src={QR_CODE_SRC}
           alt="Scan to download the BLOOM GAD mobile app"
-          width={68}
-          height={68}
           style={{ display: "block", width: "100%", height: "100%" }}
         />
       </div>
       <div>
-        <div style={{
-          fontSize: 12, fontWeight: 700, color: "#fff",
-          letterSpacing: ".2px", marginBottom: 4,
-        }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", marginBottom: 4 }}>
           Get the BLOOM GAD app
         </div>
         <p style={{
-          fontSize: 12, color: "rgba(255,255,255,.65)",
-          lineHeight: 1.6, margin: 0, maxWidth: 220,
+          fontSize: 12, color: "rgba(255,255,255,.7)",
+          lineHeight: 1.6, margin: "0 0 10px", maxWidth: 230,
         }}>
-          Scan the QR code to download the mobile app for students — access modules,
-          seminars, and certificates on the go.
+          Scan the QR code with your phone camera, or tap the button to download the Android app.
         </p>
+        <a
+          href={APP_DOWNLOAD_URL}
+          target="_blank"
+          rel="noreferrer"
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 8,
+            padding: "9px 16px", borderRadius: 8,
+            background: hovered ? "#fff" : "rgba(255,255,255,.92)",
+            color: C.brand2, fontSize: 13, fontWeight: 700,
+            textDecoration: "none",
+            boxShadow: hovered ? "0 4px 14px rgba(0,0,0,.18)" : "0 2px 6px rgba(0,0,0,.12)",
+            transform: hovered ? "translateY(-1px)" : "none",
+            transition: "all .15s",
+          }}
+        >
+          ⬇ Download APK
+        </a>
       </div>
     </div>
   );
