@@ -323,6 +323,455 @@ function AddUserModal({ onCreated, onClose }) {
 }
 
 // ── Edit Profile Modal ────────────────────────────────────────────────────────
+// ── CSV Import (mass-add people to the masterlist) ───────────────────────────
+const CSV_COLUMNS = [
+  { key: "email",          label: "email",          required: true,  example: "juan.delacruz@cvsu.edu.ph" },
+  { key: "full_name",      label: "full_name",      required: true,  example: "Juan Dela Cruz" },
+  { key: "role",           label: "role",           required: true,  example: "student" },
+  { key: "sex",            label: "sex",            required: true,  example: "male" },
+  { key: "student_id",     label: "student_id",     required: false, example: "2021-12345" },
+  { key: "department",     label: "department",     required: false, example: "CEIT" },
+  { key: "course",         label: "course",         required: false, example: "BSIT" },
+  { key: "year_level",     label: "year_level",     required: false, example: "3" },
+  { key: "organization",   label: "organization",   required: false, example: "" },
+  { key: "position",       label: "position",       required: false, example: "" },
+  { key: "contact_number", label: "contact_number", required: false, example: "09171234567" },
+];
+const CSV_ROLE_ALIASES = {
+  student: "student", students: "student",
+  faculty: "faculty", teacher: "teacher", instructor: "faculty", professor: "faculty",
+  staff: "staff", "non-academic": "staff", "non-academic staff": "staff", "non academic staff": "staff", employee: "staff",
+  guest: "guest", outsider: "guest", "non-cvsu": "guest", visitor: "guest",
+  speaker: "speaker", "resource speaker": "speaker",
+};
+const CSV_HEADER_ALIASES = {
+  email: "email", "e-mail": "email", "email address": "email", cvsu_email: "email",
+  full_name: "full_name", "full name": "full_name", name: "full_name",
+  role: "role", type: "role", "user type": "role",
+  sex: "sex", gender: "sex",
+  student_id: "student_id", "student id": "student_id", "student no": "student_id", "student number": "student_id",
+  department: "department", college: "department", office: "department",
+  course: "course", program: "course",
+  year_level: "year_level", "year level": "year_level", year: "year_level",
+  organization: "organization", affiliation: "organization", agency: "organization",
+  position: "position", designation: "position",
+  contact_number: "contact_number", "contact number": "contact_number", contact: "contact_number", phone: "contact_number", mobile: "contact_number",
+};
+
+// Small CSV parser — handles quoted fields, commas/newlines inside quotes, and "" escapes
+function parseCsv(text) {
+  const rows = []; let row = []; let field = ""; let inQuotes = false;
+  const t = text.replace(/^\uFEFF/, "");
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (inQuotes) {
+      if (c === '"') { if (t[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && t[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some(v => v.trim() !== "")) rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  row.push(field);
+  if (row.some(v => v.trim() !== "")) rows.push(row);
+  return rows;
+}
+
+function downloadCsvTemplate() {
+  const header = CSV_COLUMNS.map(c => c.label).join(",");
+  const examples = [
+    ["juan.delacruz@cvsu.edu.ph", "Juan Dela Cruz", "student", "male", "2021-12345", "CEIT", "BSIT", "3", "", "", "09171234567"],
+    ["maria.santos@gmail.com", "Maria Santos", "guest", "female", "", "", "", "", "LGU Indang", "Social Worker", "09181234567"],
+    ["pedro.reyes@cvsu.edu.ph", "Pedro Reyes", "staff", "male", "", "Registrar's Office", "", "", "", "Clerk", ""],
+  ];
+  const csv = [header, ...examples.map(r => r.map(v => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v).join(","))].join("\r\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = "BLOOM_masterlist_template.csv"; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function ImportCsvModal({ onImported, onClose }) {
+  const toast = useToast();
+  const [fileName, setFileName] = useState("");
+  const [rows,     setRows]     = useState([]);   // [{ line, data, errors[], status }]
+  const [parseErr, setParseErr] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result,   setResult]   = useState(null);
+  const [showOnly, setShowOnly] = useState("all");
+
+  const handleFile = async (file) => {
+    setParseErr(""); setRows([]); setResult(null); setFileName(file?.name || "");
+    if (!file) return;
+    if (!/\.csv$/i.test(file.name)) { setParseErr("Please choose a .csv file. In Excel, use File → Save As → CSV (Comma delimited)."); return; }
+    if (file.size > 5 * 1024 * 1024) { setParseErr("File is too large (max 5 MB)."); return; }
+
+    const text = await file.text();
+    const table = parseCsv(text);
+    if (table.length < 2) { setParseErr("The file has no data rows. Use the template and add one person per row."); return; }
+
+    // Map headers → our fields
+    const headers = table[0].map(h => CSV_HEADER_ALIASES[h.trim().toLowerCase()] || null);
+    const missing = CSV_COLUMNS.filter(c => c.required && !headers.includes(c.key)).map(c => c.label);
+    if (missing.length) { setParseErr(`Missing required column(s): ${missing.join(", ")}. Download the template to see the correct headers.`); return; }
+    if (table.length - 1 > 5000) { setParseErr("Too many rows (max 5,000 per import). Split the file into smaller files."); return; }
+
+    setChecking(true);
+    const seen = new Set();
+    const parsed = table.slice(1).map((cells, idx) => {
+      const d = {};
+      headers.forEach((key, i) => { if (key) d[key] = (cells[i] ?? "").trim(); });
+      const errors = [];
+      const email = (d.email || "").toLowerCase();
+      const role  = CSV_ROLE_ALIASES[(d.role || "").toLowerCase()] || null;
+      const sexIn = (d.sex || "").toLowerCase();
+      const sex   = ["m", "male"].includes(sexIn) ? "male" : ["f", "female"].includes(sexIn) ? "female" : null;
+      const year  = d.year_level ? parseInt(d.year_level, 10) : null;
+
+      if (!email) errors.push("Email is missing");
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("Invalid email");
+      if (!d.full_name || d.full_name.length < 2) errors.push("Full name is missing");
+      if (!role) errors.push(`Unknown role "${d.role || ""}" (use student, faculty, teacher, staff, guest, or speaker)`);
+      if (!sex) errors.push(`Sex must be male or female (got "${d.sex || ""}")`);
+      if (d.year_level && (isNaN(year) || year < 1 || year > 6)) errors.push("Year level must be 1–6");
+      if (role === "guest" && !d.organization) errors.push("Organization is required for guests");
+      if (d.contact_number && !/^[0-9+\-\s()]{7,20}$/.test(d.contact_number)) errors.push("Invalid contact number");
+
+      let status = errors.length ? "error" : "ok";
+      if (email && seen.has(email)) { status = "duplicate"; errors.push("Repeated in this file"); }
+      if (email) seen.add(email);
+
+      return {
+        line: idx + 2,
+        status, errors,
+        data: {
+          cvsu_email:     email,
+          full_name:      d.full_name || "",
+          role,
+          sex,
+          student_id:     d.student_id || null,
+          department:     d.department || null,
+          course:         d.course || null,
+          year_level:     year && !isNaN(year) ? year : null,
+          organization:   d.organization || (role && role !== "guest" ? "Cavite State University" : null),
+          position:       d.position || null,
+          contact_number: d.contact_number || null,
+        },
+      };
+    });
+
+    // Mark people who are already in the masterlist
+    try {
+      const emails = parsed.filter(r => r.status === "ok").map(r => r.data.cvsu_email);
+      const existing = new Set();
+      for (let i = 0; i < emails.length; i += 200) {
+        const { data } = await supabase.from("masterlist").select("cvsu_email").in("cvsu_email", emails.slice(i, i + 200));
+        (data || []).forEach(m => existing.add((m.cvsu_email || "").toLowerCase()));
+      }
+      parsed.forEach(r => {
+        if (r.status === "ok" && existing.has(r.data.cvsu_email)) { r.status = "exists"; r.errors.push("Already in the masterlist"); }
+      });
+    } catch { /* if this check fails, the database still rejects true duplicates */ }
+
+    setRows(parsed); setChecking(false);
+  };
+
+  const counts = {
+    ok:        rows.filter(r => r.status === "ok").length,
+    error:     rows.filter(r => r.status === "error").length,
+    duplicate: rows.filter(r => r.status === "duplicate").length,
+    exists:    rows.filter(r => r.status === "exists").length,
+  };
+  const visible = rows.filter(r => showOnly === "all" || (showOnly === "problems" ? r.status !== "ok" : r.status === "ok"));
+
+  const doImport = async () => {
+    const valid = rows.filter(r => r.status === "ok");
+    if (!valid.length) return;
+    setImporting(true); setProgress(0);
+    const { data: { user } } = await supabase.auth.getUser();
+    let added = 0; const failed = [];
+    const CHUNK = 200;
+    for (let i = 0; i < valid.length; i += CHUNK) {
+      const batch = valid.slice(i, i + CHUNK);
+      const payload = batch.map(r => ({ ...r.data, is_active: true, added_by: user?.id ?? null }));
+      const { error } = await supabase.from("masterlist").insert(payload);
+      if (!error) { added += batch.length; }
+      else {
+        // Retry one by one so a single bad row doesn't block the whole batch
+        for (const r of batch) {
+          const { error: e1 } = await supabase.from("masterlist").insert({ ...r.data, is_active: true, added_by: user?.id ?? null });
+          if (e1) failed.push({ line: r.line, email: r.data.cvsu_email, reason: e1.code === "23505" ? "Already in the masterlist" : e1.message });
+          else added++;
+        }
+      }
+      setProgress(Math.round(((i + batch.length) / valid.length) * 100));
+    }
+    setImporting(false);
+    setResult({ added, failed, skipped: rows.length - valid.length });
+    logActivity("masterlist_csv_imported", { file: fileName, added, failed: failed.length, skipped: rows.length - valid.length });
+    if (added) toast(`${added} ${added === 1 ? "person" : "people"} added to the masterlist.`, "success");
+    if (added) onImported?.();
+  };
+
+  const statusTag = (r) =>
+    r.status === "ok"        ? <span style={s.tag("green")}>Ready</span> :
+    r.status === "exists"    ? <span style={s.tag("blue")}>Already added</span> :
+    r.status === "duplicate" ? <span style={s.tag("yellow")}>Duplicate</span> :
+                               <span style={s.tag("red")}>Error</span>;
+
+  return (
+    <div style={{ ...s.overlay, zIndex: 1100 }}>
+      <div style={{ ...s.modal, maxWidth: 920 }}>
+        <div style={s.mHeader}>
+          <div style={s.mTitle}><i className="bi bi-file-earmark-arrow-up me-2" style={{ color: G.mid }}/>Import Masterlist from CSV</div>
+          <button onClick={onClose} disabled={importing} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888" }}>✕</button>
+        </div>
+
+        <div style={{ padding: "20px 24px" }}>
+          {!result && (
+            <>
+              <div style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 8, padding: "12px 14px", fontSize: 12.5, color: G.dark, marginBottom: 16, lineHeight: 1.6 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>How it works</div>
+                1. Download the template and fill in one person per row (you can edit it in Excel or Google Sheets).<br/>
+                2. Save it as <strong>CSV</strong> and upload it here. Each row is checked before anything is saved.<br/>
+                3. Click <strong>Import</strong>. Everyone imported can then sign up in the BLOOM app with their email.
+                <div style={{ marginTop: 8 }}>
+                  <strong>Required:</strong> email, full_name, role (<em>student, faculty, teacher, staff, guest, speaker</em>), sex (<em>male/female</em>).
+                  Guests also need <strong>organization</strong>.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 16 }}>
+                <button onClick={downloadCsvTemplate}
+                  style={{ padding: "9px 14px", background: "#fff", color: G.mid, border: `1.5px solid ${G.mid}`, borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 }}>
+                  <i className="bi bi-download me-1"/> Download Template
+                </button>
+                <label style={{ padding: "9px 14px", background: G.dark, color: "#fff", borderRadius: 6, cursor: importing ? "not-allowed" : "pointer", fontWeight: 700, fontSize: 13, margin: 0 }}>
+                  <i className="bi bi-upload me-1"/> Choose CSV File
+                  <input type="file" accept=".csv,text/csv" style={{ display: "none" }} disabled={importing}
+                    onChange={e => { handleFile(e.target.files?.[0]); e.target.value = ""; }} />
+                </label>
+                {fileName && <span style={{ fontSize: 12, color: "#666" }}><i className="bi bi-file-earmark-text me-1"/>{fileName}</span>}
+              </div>
+
+              {parseErr && (
+                <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>
+                  <i className="bi bi-exclamation-triangle me-1"/>{parseErr}
+                </div>
+              )}
+              {checking && <div style={{ padding: 20, textAlign: "center", color: "#888", fontSize: 13 }}>Checking rows…</div>}
+
+              {rows.length > 0 && !checking && (
+                <>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+                    <span style={s.tag("green")}>{counts.ok} ready</span>
+                    {counts.exists    > 0 && <span style={s.tag("blue")}>{counts.exists} already in masterlist (skipped)</span>}
+                    {counts.duplicate > 0 && <span style={s.tag("yellow")}>{counts.duplicate} repeated in file (skipped)</span>}
+                    {counts.error     > 0 && <span style={s.tag("red")}>{counts.error} with errors (skipped)</span>}
+                    <select style={{ ...s.select, padding: "5px 8px", fontSize: 12, marginLeft: "auto" }} value={showOnly} onChange={e => setShowOnly(e.target.value)}>
+                      <option value="all">Show all rows</option>
+                      <option value="problems">Show problems only</option>
+                      <option value="ok">Show ready only</option>
+                    </select>
+                  </div>
+
+                  <div style={{ maxHeight: 340, overflow: "auto", border: `1px solid ${G.wash}`, borderRadius: 8 }}>
+                    <table style={{ ...s.table, boxShadow: "none", borderRadius: 0 }}>
+                      <thead><tr>
+                        <th style={{ ...s.th, position: "sticky", top: 0 }}>Row</th>
+                        <th style={{ ...s.th, position: "sticky", top: 0 }}>Status</th>
+                        <th style={{ ...s.th, position: "sticky", top: 0 }}>Name</th>
+                        <th style={{ ...s.th, position: "sticky", top: 0 }}>Email</th>
+                        <th style={{ ...s.th, position: "sticky", top: 0 }}>Role</th>
+                        <th style={{ ...s.th, position: "sticky", top: 0 }}>Sex</th>
+                        <th style={{ ...s.th, position: "sticky", top: 0 }}>Problem</th>
+                      </tr></thead>
+                      <tbody>
+                        {visible.slice(0, 500).map(r => (
+                          <tr key={r.line} style={{ background: r.status === "ok" ? "#fff" : "#fffbeb" }}>
+                            <td style={{ ...s.td, padding: "8px 12px", color: "#888" }}>{r.line}</td>
+                            <td style={{ ...s.td, padding: "8px 12px" }}>{statusTag(r)}</td>
+                            <td style={{ ...s.td, padding: "8px 12px" }}>{r.data.full_name || "—"}</td>
+                            <td style={{ ...s.td, padding: "8px 12px", fontSize: 12 }}>{r.data.cvsu_email || "—"}</td>
+                            <td style={{ ...s.td, padding: "8px 12px" }}>{r.data.role || "—"}</td>
+                            <td style={{ ...s.td, padding: "8px 12px" }}>{sexLabel(r.data.sex)}</td>
+                            <td style={{ ...s.td, padding: "8px 12px", fontSize: 12, color: "#b45309" }}>{r.errors.join("; ")}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {visible.length > 500 && <div style={{ padding: 8, fontSize: 12, color: "#888", textAlign: "center" }}>Showing first 500 of {visible.length} rows</div>}
+                  </div>
+                  {(counts.error + counts.duplicate) > 0 && (
+                    <div style={{ fontSize: 12, color: "#888", marginTop: 8 }}>
+                      Rows with problems are skipped. You can fix them in your file and upload it again — rows already imported will be skipped automatically.
+                    </div>
+                  )}
+                </>
+              )}
+
+              {importing && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 12, color: G.dark, marginBottom: 4 }}>Importing… {progress}%</div>
+                  <div style={{ height: 8, background: G.wash, borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{ width: `${progress}%`, height: "100%", background: G.mid, transition: "width .2s" }}/>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {result && (
+            <div style={{ textAlign: "center", padding: "10px 0" }}>
+              <div style={{ fontSize: 40, color: result.added ? "#16a34a" : "#d97706" }}>
+                <i className={`bi ${result.added ? "bi-check-circle-fill" : "bi-exclamation-circle-fill"}`}/>
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: G.dark, margin: "6px 0" }}>
+                {result.added} {result.added === 1 ? "person" : "people"} added to the masterlist
+              </div>
+              <div style={{ fontSize: 13, color: "#666" }}>
+                {result.skipped > 0 && <>{result.skipped} row(s) skipped (errors, duplicates, or already added). </>}
+                They can now sign up in the BLOOM app with their email.
+              </div>
+              {result.failed.length > 0 && (
+                <div style={{ textAlign: "left", marginTop: 16, background: "#fee2e2", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#b91c1c", maxHeight: 180, overflow: "auto" }}>
+                  <strong>{result.failed.length} row(s) could not be saved:</strong>
+                  {result.failed.map(f => <div key={f.line}>Row {f.line} ({f.email}): {f.reason}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: "14px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          {result ? (
+            <button onClick={onClose} style={{ padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13 }}>Done</button>
+          ) : (
+            <>
+              <button onClick={onClose} disabled={importing} style={{ padding: "9px 18px", background: "#F5F7F5", color: G.dark, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Cancel</button>
+              <button onClick={doImport} disabled={importing || checking || counts.ok === 0}
+                style={{ padding: "9px 20px", background: counts.ok && !importing ? G.mid : "#b0bdb0", color: "#fff", border: "none", borderRadius: 6, cursor: counts.ok && !importing ? "pointer" : "not-allowed", fontWeight: 700, fontSize: 13 }}>
+                {importing ? "Importing…" : `Import ${counts.ok || ""} ${counts.ok === 1 ? "Person" : "People"}`}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Admin account management (calls the manage-admins Edge Function) ────────
+async function callManageAdmins(body) {
+  const { data, error } = await supabase.functions.invoke("manage-admins", { body });
+  if (error) {
+    let msg = error.message || "Request failed.";
+    try {
+      const res = error.context;
+      if (res && typeof res.json === "function") {
+        const j = await res.json();
+        if (j?.error) msg = j.error;
+      }
+    } catch { /* keep default message */ }
+    if (/Failed to send a request|FunctionsFetchError|not found/i.test(msg)) {
+      msg = 'The "manage-admins" function isn\'t deployed yet. Deploy it in Supabase → Edge Functions.';
+    }
+    return { error: msg };
+  }
+  if (data?.error) return { error: data.error };
+  return { data };
+}
+
+function AddAdminModal({ onCreated, onClose }) {
+  const toast = useToast();
+  const [form, setForm]     = useState({ full_name: "", email: "", password: "" });
+  const [err, setErr]       = useState({});
+  const [error, setError]   = useState("");
+  const [saving, setSaving] = useState(false);
+  const [showPw, setShowPw] = useState(false);
+  const setF = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErr(e => ({ ...e, [k]: null })); };
+
+  const save = async () => {
+    const errs = V.all({
+      full_name: V.name(form.full_name, "Full name"),
+      email: !form.email.trim() ? "Email is required."
+             : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()) ? "Please enter a valid email address." : null,
+      password: form.password.length < 8 ? "Password must be at least 8 characters." : null,
+    });
+    if (errs) { setErr(errs); return; }
+    setSaving(true); setError("");
+    const { data, error: e } = await callManageAdmins({
+      action: "create",
+      full_name: form.full_name.trim(),
+      email: form.email.trim().toLowerCase(),
+      password: form.password,
+    });
+    setSaving(false);
+    if (e) { setError(e); return; }
+    toast(data?.existing_account
+      ? `${form.full_name.trim()} already had an account and now has admin access.`
+      : `Admin account created for ${form.full_name.trim()}.`, "success");
+    logActivity("admin_account_created", { email: form.email.trim().toLowerCase(), name: form.full_name.trim() });
+    onCreated();
+  };
+
+  return (
+    <div style={{ ...s.overlay, zIndex: 1100 }}>
+      <div style={{ ...s.modal, maxWidth: 480 }}>
+        <div style={s.mHeader}>
+          <div style={s.mTitle}><i className="bi bi-shield-plus me-2" style={{ color: G.mid }}/>Add Administrator</div>
+          <button onClick={onClose} disabled={saving} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888" }}>✕</button>
+        </div>
+        <div style={{ padding: "20px 24px" }}>
+          {error && <div style={{ background: "#fee2e2", color: "#dc2626", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
+          {[
+            ["full_name", "Full Name *", "text", "e.g. Maria Santos"],
+            ["email", "Email Address *", "email", "admin@cvsu.edu.ph"],
+          ].map(([k, label, type, ph]) => (
+            <div key={k} style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 0.6, display: "block", marginBottom: 5 }}>{label}</label>
+              <input type={type} value={form[k]} placeholder={ph} onChange={e => setF(k, e.target.value)}
+                style={{ ...s.searchBar, width: "100%", borderColor: err[k] ? "#dc2626" : "#DDE8DD" }}/>
+              <FieldError msg={err[k]}/>
+            </div>
+          ))}
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 0.6, display: "block", marginBottom: 5 }}>Temporary Password *</label>
+            <div style={{ position: "relative" }}>
+              <input type={showPw ? "text" : "password"} value={form.password} placeholder="Minimum 8 characters"
+                onChange={e => setF("password", e.target.value)}
+                style={{ ...s.searchBar, width: "100%", paddingRight: 40, borderColor: err.password ? "#dc2626" : "#DDE8DD" }}/>
+              <button type="button" onClick={() => setShowPw(v => !v)}
+                style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#888", cursor: "pointer" }}>
+                <i className={`bi ${showPw ? "bi-eye-slash" : "bi-eye"}`}/>
+              </button>
+            </div>
+            <FieldError msg={err.password}/>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Share this with the new admin. They can change it later with "Forgot password".</div>
+          </div>
+          <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#c2410c" }}>
+            <i className="bi bi-exclamation-triangle me-1"/>
+            This person will have <strong>full access</strong> to the BLOOM admin panel, including adding other admins.
+          </div>
+        </div>
+        <div style={{ padding: "14px 24px", borderTop: `1px solid ${G.wash}`, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} disabled={saving} style={{ padding: "9px 18px", background: "#F5F7F5", color: G.dark, border: "1px solid #DDE8DD", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Cancel</button>
+          <button onClick={save} disabled={saving}
+            style={{ padding: "9px 20px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: saving ? "not-allowed" : "pointer", fontWeight: 700, fontSize: 13, opacity: saving ? 0.7 : 1 }}>
+            {saving ? "Creating…" : "Add Administrator"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EditProfileModal({ user, role, onSaved, onClose }) {
   const toast = useToast();
   const isGuest = role === "guest";
@@ -565,6 +1014,12 @@ export default function StudentsPage() {
   const [alertModal, setAlertModal] = useState(null);
   const [editUser,   setEditUser]   = useState(null);
   const [showAdd,    setShowAdd]    = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [showAddAdmin, setShowAddAdmin] = useState(false);
+  const [myId,       setMyId]       = useState(null);
+  const [adminBusy,  setAdminBusy]  = useState(null);
+
+  useEffect(() => { supabase.auth.getUser().then(({ data }) => setMyId(data?.user?.id ?? null)); }, []);
   const [masterlist, setMasterlist] = useState([]);
   const [inactivityDays] = useState(30);
 
@@ -616,6 +1071,48 @@ export default function StudentsPage() {
 
     setUsers(data || []); setUserRoles(roleMap); setAdmins(adminProfiles); setMasterlist(ml || []); setLoading(false);
   }, []);
+
+  const activeAdminCount = admins.filter(a => a.is_active !== false).length;
+
+  const setAdminActive = (admin, isActive) => {
+    const name = admin.full_name || admin.email;
+    setConfirm({
+      title: isActive ? "Activate Administrator" : "Deactivate Administrator",
+      message: isActive
+        ? `Allow ${name} to sign in to the admin panel again?`
+        : `${name} will be signed out and won't be able to sign in to the admin panel until reactivated.`,
+      confirmLabel: isActive ? "Activate" : "Deactivate",
+      danger: !isActive,
+      onConfirm: async () => {
+        setConfirm(null); setAdminBusy(admin.id);
+        const { error } = await callManageAdmins({ action: "set_active", user_id: admin.id, is_active: isActive });
+        setAdminBusy(null);
+        if (error) { toast(error, "error"); return; }
+        setAdmins(list => list.map(a => a.id === admin.id ? { ...a, is_active: isActive } : a));
+        logActivity(isActive ? "admin_activated" : "admin_deactivated", { email: admin.email, name: admin.full_name });
+        toast(isActive ? `${name} activated.` : `${name} deactivated.`, isActive ? "success" : "warning");
+      },
+    });
+  };
+
+  const removeAdmin = (admin) => {
+    const name = admin.full_name || admin.email;
+    setConfirm({
+      title: "Remove Admin Access",
+      message: `Remove ${name}'s admin access? They will no longer be able to sign in to the admin panel. Their account and activity history are kept.`,
+      confirmLabel: "Remove Access",
+      danger: true,
+      onConfirm: async () => {
+        setConfirm(null); setAdminBusy(admin.id);
+        const { error } = await callManageAdmins({ action: "remove", user_id: admin.id });
+        setAdminBusy(null);
+        if (error) { toast(error, "error"); return; }
+        logActivity("admin_access_removed", { email: admin.email, name: admin.full_name });
+        toast(`${name} is no longer an admin.`, "success");
+        loadUsers();
+      },
+    });
+  };
 
   const toggleMasterlistActive = async (entry) => {
     const newVal = !(entry.is_active !== false);
@@ -736,10 +1233,16 @@ export default function StudentsPage() {
           <div style={s.title}><i className="bi bi-people me-1"/> User Management</div>
           <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{users.length} users in the masterlist</div>
         </div>
-        <button onClick={() => setShowAdd(true)}
-          style={{ padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-          <i className="bi bi-person-plus"/> Add User
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setShowImport(true)}
+            style={{ padding: "9px 16px", background: "#fff", color: G.mid, border: `1.5px solid ${G.mid}`, borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="bi bi-file-earmark-arrow-up"/> Import CSV
+          </button>
+          <button onClick={() => setShowAdd(true)}
+            style={{ padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+            <i className="bi bi-person-plus"/> Add User
+          </button>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
@@ -938,21 +1441,26 @@ export default function StudentsPage() {
       {/* ── Admins Tab ── */}
       {mainTab === "admins" && (
         <div>
-          <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "12px 16px", fontSize: 13, color: "#c2410c", marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <i className="bi bi-exclamation-triangle-fill" style={{ flexShrink: 0, marginTop: 2 }}/>
-            <div><strong>Administrator accounts</strong> have full access to this admin panel. Manage these accounts with care. Role assignments require database-level changes.</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 13, color: "#888" }}>
+              Administrators have full access to this admin panel. {activeAdminCount} active admin{activeAdminCount !== 1 ? "s" : ""}.
+            </div>
+            <button onClick={() => setShowAddAdmin(true)}
+              style={{ padding: "9px 18px", background: G.dark, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+              <i className="bi bi-shield-plus"/> Add Administrator
+            </button>
           </div>
           <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #DDE8DD", overflow: "hidden" }}>
             <table style={s.table}>
               <thead>
                 <tr>
                   <th style={s.th}>Administrator</th><th style={s.th}>Email</th>
-                  <th style={s.th}>Role</th><th style={s.th}>Status</th><th style={s.th}>Last Active</th>
+                  <th style={s.th}>Role</th><th style={s.th}>Status</th><th style={s.th}>Last Active</th><th style={s.th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {admins.length === 0
-                  ? <tr><td colSpan={5} style={{ ...s.td, textAlign: "center", color: "#aaa" }}>No admin accounts found</td></tr>
+                  ? <tr><td colSpan={6} style={{ ...s.td, textAlign: "center", color: "#aaa" }}>No admin accounts found</td></tr>
                   : admins.map(a => (
                     <tr key={a.id}>
                       <td style={s.td}>
@@ -962,12 +1470,12 @@ export default function StudentsPage() {
                           </div>
                           <div>
                             <div style={{ fontWeight: 600, color: G.dark }}>{a.full_name || "—"}</div>
-                            <div style={{ fontSize: 11, color: "#aaa" }}>System Admin</div>
+                            <div style={{ fontSize: 11, color: "#aaa" }}>{a.id === myId ? "You" : "Administrator"}</div>
                           </div>
                         </div>
                       </td>
                       <td style={s.td}>{a.email || "—"}</td>
-                      <td style={s.td}><RoleBadge role={userRoles[a.id] || "admin"} /></td>
+                      <td style={s.td}><RoleBadge role="admin" /></td>
                       <td style={s.td}>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: a.is_active !== false ? "#dcfce7" : "#fee2e2", color: a.is_active !== false ? "#16a34a" : "#dc2626" }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.is_active !== false ? "#16a34a" : "#dc2626", display: "inline-block" }}/>
@@ -976,6 +1484,22 @@ export default function StudentsPage() {
                       </td>
                       <td style={{ ...s.td, fontSize: 12, color: "#888" }}>
                         {a.last_sign_in_at ? new Date(a.last_sign_in_at).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "Never"}
+                      </td>
+                      <td style={s.td}>
+                        {a.id === myId ? (
+                          <span style={{ fontSize: 12, color: "#aaa" }}>—</span>
+                        ) : (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button disabled={adminBusy === a.id} onClick={() => setAdminActive(a, a.is_active === false)}
+                              style={{ padding: "5px 12px", border: "1px solid #DDE8DD", borderRadius: 6, background: "#fff", color: G.dark, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                              {a.is_active === false ? "Activate" : "Deactivate"}
+                            </button>
+                            <button disabled={adminBusy === a.id} onClick={() => removeAdmin(a)} title="Remove admin access"
+                              style={{ padding: "5px 10px", border: "none", borderRadius: 6, background: "#fee2e2", color: "#dc2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                              <i className="bi bi-person-x"/> Remove
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -1151,6 +1675,18 @@ export default function StudentsPage() {
       )}
 
       {showAdd && <AddUserModal onCreated={handleUserCreated} onClose={() => setShowAdd(false)} />}
+      {showAddAdmin && (
+        <AddAdminModal
+          onCreated={async () => { setShowAddAdmin(false); setMainTab("admins"); await loadUsers(); }}
+          onClose={() => setShowAddAdmin(false)}
+        />
+      )}
+      {showImport && (
+        <ImportCsvModal
+          onImported={async () => { setMainTab("masterlist"); await loadUsers(); }}
+          onClose={() => setShowImport(false)}
+        />
+      )}
       {editUser && <EditProfileModal user={editUser} role={userRoles[editUser.id] || "student"} onSaved={handleProfileSaved} onClose={() => setEditUser(null)} />}
       {confirm && <ConfirmModal title={confirm.title} message={confirm.message} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.onConfirm} onCancel={() => setConfirm(null)} />}
       {alertModal && <AlertModal title={alertModal.title} message={alertModal.message} onClose={() => setAlertModal(null)} />}

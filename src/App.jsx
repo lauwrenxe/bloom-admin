@@ -168,9 +168,11 @@ const GLOBAL_CSS = `
   .stat-card { border-top: 3px solid transparent; }
   .stat-value { font-size: 2rem; font-weight: 800; line-height: 1; }
 
-  /* ── Page animation ── */
-  @keyframes pageIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
-  .page-enter { animation: pageIn .18s ease forwards; }
+  /* ── Page animation ──
+     Fade only. A transform here would make every pop-up window (position: fixed)
+     appear in the middle of the page instead of the middle of the screen. */
+  @keyframes pageIn { from { opacity:0; } to { opacity:1; } }
+  .page-enter { animation: pageIn .18s ease; }
 
   /* ── Skeleton ── */
   @keyframes shimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
@@ -460,6 +462,7 @@ function LoginPage({ onLogin, onBack }) {
   const [loading,  setLoading]  = useState(false);
   const [emailErr, setEmailErr] = useState(false);
   const [passErr,  setPassErr]  = useState(false);
+  const [showPass, setShowPass] = useState(false);
 
   const submit = async () => {
     setError(""); setEmailErr(false); setPassErr(false);
@@ -529,10 +532,18 @@ function LoginPage({ onLogin, onBack }) {
             </div>
             <div className="mb-3">
               <label className="form-label fw-semibold" style={{ fontSize:12 }}>Password</label>
-              <input className={`form-control ${passErr?"is-invalid":""}`} type="password"
-                value={password} onChange={e=>{setPassword(e.target.value);if(e.target.value)setPassErr(false);}}
-                placeholder="Enter your password" onKeyDown={e=>e.key==="Enter"&&submit()}/>
-              {passErr&&<div className="invalid-feedback">This field is required</div>}
+              <div style={{ position:"relative" }}>
+                <input className={`form-control ${passErr?"is-invalid":""}`} type={showPass?"text":"password"}
+                  value={password} onChange={e=>{setPassword(e.target.value);if(e.target.value)setPassErr(false);}}
+                  placeholder="Enter your password" onKeyDown={e=>e.key==="Enter"&&submit()}
+                  autoComplete="current-password" style={{ paddingRight:40, backgroundImage:"none" }}/>
+                <button type="button" onClick={()=>setShowPass(v=>!v)}
+                  title={showPass?"Hide password":"Show password"} aria-label={showPass?"Hide password":"Show password"}
+                  style={{ position:"absolute", right:6, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:"#888", cursor:"pointer", padding:"4px 6px", fontSize:15, lineHeight:1 }}>
+                  <i className={`bi ${showPass?"bi-eye-slash":"bi-eye"}`}/>
+                </button>
+              </div>
+              {passErr&&<div className="invalid-feedback d-block">This field is required</div>}
             </div>
             {error && (
               <div className="alert alert-danger d-flex align-items-center gap-2 py-2" style={{ fontSize:13,borderRadius:8 }}>
@@ -683,6 +694,16 @@ function AdminShell({ onLogout, user, onDeactivated }) {
   const [pageLoading, setPageLoading] = useState(false);
   const [collapsed,   setCollapsed]   = useState(false);
   const [showSignOut, setShowSignOut] = useState(false);
+  const [me,          setMe]          = useState({ full_name: "", avatar_url: "" });
+
+  // Admin's own name + profile photo (refreshed when the profile window closes)
+  const loadMe = useCallback(async () => {
+    if (!user?.id) return;
+    const { data } = await supabase.from("profiles")
+      .select("full_name, avatar_url").eq("id", user.id).maybeSingle();
+    if (data) setMe({ full_name: data.full_name || "", avatar_url: data.avatar_url || "" });
+  }, [user?.id]);
+  useEffect(() => { loadMe(); }, [loadMe]);
 
   useEffect(() => {
     loadCSS(INTER_CSS); loadCSS(BI_CSS);
@@ -739,7 +760,14 @@ function AdminShell({ onLogout, user, onDeactivated }) {
     setTimeout(() => setPageLoading(false), 300);
   };
 
-  const initials = (user?.email ?? "A").slice(0,1).toUpperCase();
+  const displayName = me.full_name || "GADRC Admin";
+  const initials = (me.full_name
+    ? me.full_name.split(" ").filter(Boolean).map(w => w[0]).slice(0,2).join("")
+    : (user?.email ?? "A").slice(0,1)).toUpperCase();
+  const avatarImg = (size) => me.avatar_url
+    ? <img src={me.avatar_url} alt="" style={{ width:size, height:size, borderRadius:"50%", objectFit:"cover", display:"block" }}
+        onError={() => setMe(m => ({ ...m, avatar_url: "" }))}/>
+    : initials;
   const page     = ALL_NAV.find(n => n.id === active);
 
   return (
@@ -796,10 +824,10 @@ function AdminShell({ onLogout, user, onDeactivated }) {
                   onClick={()=>setShowProfile(true)}>
                   <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold text-white flex-shrink-0"
                     style={{ width:30,height:30,background:"linear-gradient(135deg,#2D6A2D,#4CAF50)",fontSize:12 }}>
-                    {initials}
+                    {avatarImg(30)}
                   </div>
                   <div className="overflow-hidden">
-                    <div className="fw-semibold text-truncate" style={{ fontSize:12,color:"rgba(255,255,255,.88)" }}>GADRC Admin</div>
+                    <div className="fw-semibold text-truncate" style={{ fontSize:12,color:"rgba(255,255,255,.88)" }}>{displayName}</div>
                     <div className="text-truncate" style={{ fontSize:10,color:"rgba(255,255,255,.38)" }}>{user?.email}</div>
                   </div>
                 </div>
@@ -816,7 +844,7 @@ function AdminShell({ onLogout, user, onDeactivated }) {
                 <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold text-white"
                   style={{ width:30,height:30,background:"linear-gradient(135deg,#2D6A2D,#4CAF50)",fontSize:11,cursor:"pointer" }}
                   onClick={()=>setShowProfile(true)}>
-                  {initials}
+                  {avatarImg(30)}
                 </div>
                 <button onClick={()=>setShowSignOut(true)} title="Sign out"
                   className="btn btn-sm border-0 p-1"
@@ -840,17 +868,13 @@ function AdminShell({ onLogout, user, onDeactivated }) {
               <span className="text-muted" style={{ fontSize:12 }}>GADRC CvSU</span>
             </div>
             <div className="d-flex align-items-center gap-2">
-              <span className="badge bg-success-subtle text-success d-flex align-items-center gap-1" style={{ borderRadius:20,padding:"4px 10px" }}>
-                <span style={{ width:6,height:6,borderRadius:"50%",background:"#4CAF50",display:"inline-block" }}/>
-                Live
-              </span>
               <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold text-white"
                 style={{ width:32,height:32,background:"linear-gradient(135deg,#2D6A2D,#4CAF50)",fontSize:13,cursor:"pointer",
                   boxShadow:"0 1px 4px rgba(26,46,26,.2)",transition:"transform .12s" }}
                 onClick={()=>setShowProfile(true)}
                 onMouseEnter={e=>e.currentTarget.style.transform="scale(1.07)"}
                 onMouseLeave={e=>e.currentTarget.style.transform=""}>
-                {initials}
+                {avatarImg(32)}
               </div>
             </div>
           </header>
@@ -859,7 +883,7 @@ function AdminShell({ onLogout, user, onDeactivated }) {
             <div className="page-enter" key={active}>
               {pageLoading ? <PageSkeleton/> : (
                 <>
-                  {active==="dashboard"     && <DashboardPage/>}
+                  {active==="dashboard"     && <DashboardPage onNavigate={navigate}/>}
                   {active==="modules"       && <ModulesPage/>}
                   {active==="seminars"      && <SeminarsPage/>}
                   {active==="certificates"  && <CertificatesPage/>}
@@ -884,7 +908,7 @@ function AdminShell({ onLogout, user, onDeactivated }) {
           onCancel={()=>setShowSignOut(false)}
         />
       )}
-      {showProfile && <AdminProfilePage user={user} onClose={()=>setShowProfile(false)}/>}
+      {showProfile && <AdminProfilePage user={user} onClose={()=>{ setShowProfile(false); loadMe(); }}/>}
     </>
   );
 }

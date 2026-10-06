@@ -1,43 +1,23 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { supabase } from "./lib/supabase.js";
 
-/* ─── Safe navigation helper ─────────────────────────────────
- * useNavigate() throws if called outside a <Router> context.
- * This hook wraps it so DashboardPage never crashes — it falls
- * back to window.history.pushState (same SPA behaviour, no reload)
- * or window.location.href as a last resort.
+/* ─── Navigation helper ──────────────────────────────────────
+ * The admin panel switches pages through the sidebar (App.jsx),
+ * not through React Router. App.jsx passes its page switcher in
+ * as `onNavigate`, so "View all →" opens the right page.
  */
-function useSafeNavigate() {
-  // We call useNavigate conditionally via a dynamic require so React's
-  // rules-of-hooks aren't violated at module level.  The try/catch
-  // swallows the "must be inside Router" invariant error.
-  let routerNavigate = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const { useNavigate } = require("react-router-dom");
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    routerNavigate = useNavigate();
-  } catch (_) {
-    // Not inside a Router context — fall through to the polyfill below
-  }
-
+function useSafeNavigate(onNavigate) {
   return useCallback((path) => {
-    if (routerNavigate) {
-      routerNavigate(path);
-    } else if (window.history?.pushState) {
-      window.history.pushState({}, "", path);
-      window.dispatchEvent(new PopStateEvent("popstate", { state: {} }));
-    } else {
-      window.location.href = path;
-    }
-  // routerNavigate identity is stable per render; this is intentional
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routerNavigate]);
+    const page = String(path || "").replace(/^\//, "");
+    if (onNavigate) onNavigate(page);
+  }, [onNavigate]);
 }
 
-/* ─── date helpers ────────────────────────────────────────── */
-const getToday    = () => new Date().toISOString().split("T")[0];
-const getMonthAgo = () => new Date(Date.now()-30*86400000).toISOString().split("T")[0];
+/* ─── date helpers (Philippine time) ─────────────────────── */
+const MANILA = "Asia/Manila";
+// "YYYY-MM-DD" in Philippine time (UTC+8), not UTC
+const getToday    = () => new Date().toLocaleDateString("en-CA", { timeZone: MANILA });
+const getMonthAgo = () => new Date(Date.now()-30*86400000).toLocaleDateString("en-CA", { timeZone: MANILA });
 
 function toISO(d, end=false) {
   if (!d) return null;
@@ -48,7 +28,7 @@ function fmt(iso) {
   if (!iso) return "—";
   try {
     return new Date(iso).toLocaleString("en-PH", {
-      timeZone:"Asia/Manila", month:"short", day:"numeric",
+      timeZone:MANILA, month:"short", day:"numeric",
       hour:"2-digit", minute:"2-digit", hour12:true,
     });
   } catch { return "—"; }
@@ -58,17 +38,18 @@ function fmtDate(iso) {
   if (!iso) return "—";
   try {
     return new Date(iso).toLocaleDateString("en-PH", {
-      timeZone:"Asia/Manila", month:"short", day:"numeric", year:"numeric",
+      timeZone:MANILA, month:"short", day:"numeric", year:"numeric",
     });
   } catch { return "—"; }
 }
 
 function toDateStr(iso) {
   if (!iso) return "";
+  // Plain dates ("YYYY-MM-DD") are already local dates — keep them as is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const d = new Date(iso);
-  if (isNaN(d)) return iso.slice(0,10);
-  const manila = new Date(d.toLocaleString("en-US", { timeZone:"Asia/Manila" }));
-  return `${manila.getFullYear()}-${String(manila.getMonth()+1).padStart(2,"0")}-${String(manila.getDate()).padStart(2,"0")}`;
+  if (isNaN(d)) return String(iso).slice(0,10);
+  return d.toLocaleDateString("en-CA", { timeZone: MANILA });
 }
 
 const PRESETS = [
@@ -200,10 +181,7 @@ const CSS = `
   @keyframes fadeIn  { from{opacity:0} to{opacity:1} }
   @keyframes slideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
   @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
-  .dash-animate { animation: fadeUp .25s ease forwards; }
-  .dash-animate:nth-child(2){animation-delay:.05s}
-  .dash-animate:nth-child(3){animation-delay:.10s}
-  .dash-animate:nth-child(4){animation-delay:.15s}
+  .dash-animate { animation: fadeUp .25s ease both; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   .refreshing-pulse { animation: pulse 1.2s ease-in-out infinite; }
   .skeleton {
@@ -219,58 +197,56 @@ const CSS = `
 `;
 
 /* ─── Calendar data fetchers ──────────────────────────────── */
+// Custom calendar events: read whatever date/colour/location columns the
+// events table uses (the Calendar page and Dashboard must agree).
+const normalizeEvent = (e) => {
+  const start = toDateStr(e.start_date ?? e.event_date ?? e.date ?? e.start_time ?? e.starts_at ?? null);
+  const end   = toDateStr(e.end_date ?? e.end_time ?? e.ends_at ?? null) || start;
+  return {
+    ...e,
+    start_date:  start,
+    end_date:    end < start ? start : end,
+    location:    e.location ?? e.venue ?? "",
+    description: e.description ?? "",
+    color_hex:   e.color_hex ?? e.color ?? "#2D6A2D",
+    event_type:  e.event_type ?? e.type ?? e.category ?? "event",
+    _source:     "event",
+  };
+};
 /**
- * Fetches events, seminars, and announcements merged for a calendar month
- * window.  monthFrom / monthTo are plain "YYYY-MM-DD" strings.
- *
- * FIXES:
- * 1. Upper-bound uses "YYYY-MM-DDT23:59:59" — works for both `date` and
- *    `timestamptz` Postgres columns (a bare date string can sort BEFORE a
- *    timestamp on the same day, silently excluding same-day records).
- * 2. `events` rows are tagged with _source:"event" so the calendar dot,
- *    badge renderer, and "This Month" counters can distinguish them.
- * 3. Each source is fetched via Promise.allSettled so a single table
- *    error never silences data from the other tables.
- * 4. `start_date` / `end_date` on events are normalised through toDateStr
- *    so timestamptz values are converted to plain local date strings before
- *    the calendar dayMap lookup.
+ * Events, seminars, and announcements for a calendar window.
+ * monthFrom / monthTo are plain "YYYY-MM-DD" strings (Philippine dates).
+ * Each source is fetched separately so one failing table never hides the others.
  */
 async function fetchMergedCalendarEvents(monthFrom, monthTo) {
-  const toEnd = (d) => `${d}T23:59:59`;
-
   const [evRes, semRes, annRes] = await Promise.allSettled([
-    supabase
-      .from("events")
-      .select("id,title,start_date,end_date,description,location,color_hex,event_type")
-      .gte("start_date", monthFrom)
-      .lte("start_date", toEnd(monthTo)),
+    supabase.from("events").select("*").limit(1000),
 
     supabase
       .from("seminars")
       .select("id,title,scheduled_start,scheduled_end,status,venue,description")
-      .gte("scheduled_start", monthFrom)
-      .lte("scheduled_start", toEnd(monthTo)),
+      .gte("scheduled_start", toISO(monthFrom))
+      .lte("scheduled_start", toISO(monthTo, true)),
 
     supabase
       .from("announcements")
       .select("id,title,body,content,published_at,is_pinned")
       .not("published_at", "is", null)
-      .gte("published_at", monthFrom)
-      .lte("published_at", toEnd(monthTo)),
+      .gte("published_at", toISO(monthFrom))
+      .lte("published_at", toISO(monthTo, true)),
   ]);
 
-  const evData  = evRes.status  === "fulfilled" ? (evRes.value.data  || []) : (console.error("[Cal] events:",  evRes.reason),  []);
-  const semData = semRes.status === "fulfilled" ? (semRes.value.data || []) : (console.error("[Cal] seminars:", semRes.reason), []);
-  const annData = annRes.status === "fulfilled" ? (annRes.value.data || []) : (console.error("[Cal] announce:", annRes.reason), []);
+  const pick = (res, label) => {
+    if (res.status !== "fulfilled") { console.error(`[Cal] ${label}:`, res.reason); return []; }
+    if (res.value.error) { console.error(`[Cal] ${label}:`, res.value.error.message); return []; }
+    return res.value.data || [];
+  };
+  const evData  = pick(evRes,  "events");
+  const semData = pick(semRes, "seminars");
+  const annData = pick(annRes, "announcements");
 
-  // Normalise events: toDateStr handles both plain-date and timestamptz values;
-  // _source:"event" distinguishes them from seminars in dot/badge/counter logic.
-  const evNorm = evData.map(e => ({
-    ...e,
-    start_date: toDateStr(e.start_date),
-    end_date:   toDateStr(e.end_date || e.start_date),
-    _source:    "event",
-  }));
+  const evNorm = evData.map(normalizeEvent)
+    .filter(e => e.start_date && e.start_date <= monthTo && e.end_date >= monthFrom);
 
   const semNorm = semData.map(s => ({
     id:              `sem_${s.id}`,
@@ -282,7 +258,7 @@ async function fetchMergedCalendarEvents(monthFrom, monthTo) {
     scheduled_end:   s.scheduled_end,
     description:     s.description || "",
     location:        s.venue || "",
-    color_hex:       "#2D6A2D",
+    color_hex:       "#2563EB",
     event_type:      "seminar",
     _source:         "seminar",
     _status:         s.status,
@@ -307,43 +283,47 @@ async function fetchMergedCalendarEvents(monthFrom, monthTo) {
 
 
 /**
- * Fetches upcoming events, seminars, and announcements for the
- * "Upcoming Events & Seminars" widget.
- *
- * FIXES:
- * 1. `events` rows are tagged _source:"event" (were missing _source entirely).
- * 2. `events` dates run through toDateStr so timestamptz values compare
- *    correctly against the plain-date todayStr filter.
- * 3. Uses Promise.allSettled so one failing table never silences the others.
+ * Upcoming (and still-running) events and seminars for the
+ * "Upcoming Events & Seminars" widget. Cancelled/completed seminars are excluded.
  */
 async function fetchUpcomingMerged() {
-  const todayStr = getToday(); // "YYYY-MM-DD"
+  const todayStr = getToday();           // Philippine date
+  const now      = Date.now();
+  // Look back 30 days so seminars that started earlier but are still running are included
+  const lookback = new Date(now - 30*86400000).toISOString();
 
   const [evRes, semRes] = await Promise.allSettled([
-    supabase
-      .from("events")
-      .select("id,title,start_date,end_date,description,location,color_hex,event_type")
-      .gte("end_date", todayStr)
-      .order("start_date", { ascending: true })
-      .limit(50),
+    supabase.from("events").select("*").limit(1000),
 
     supabase
       .from("seminars")
       .select("id,title,scheduled_start,scheduled_end,status,venue,description")
-      .gte("scheduled_start", todayStr)
+      .gte("scheduled_start", lookback)
       .order("scheduled_start", { ascending: true })
-      .limit(50),
+      .limit(100),
   ]);
 
-  const evData  = evRes.status  === "fulfilled" ? (evRes.value.data  || []) : (console.error("[Upcoming] events:",   evRes.reason),  []);
-  const semData = semRes.status === "fulfilled" ? (semRes.value.data || []) : (console.error("[Upcoming] seminars:", semRes.reason), []);
+  // One failing source shouldn't hide the other — only fail if both fail
+  let failures = 0;
+  const pick = (res, label) => {
+    if (res.status !== "fulfilled") { console.error(`[Upcoming] ${label}:`, res.reason); failures++; return []; }
+    if (res.value.error) { console.error(`[Upcoming] ${label}:`, res.value.error.message); failures++; return []; }
+    return res.value.data || [];
+  };
+  const evData  = pick(evRes,  "events");
+  const semData = pick(semRes, "seminars")
+    // still upcoming or currently running, and not cancelled/completed
+    .filter(s => {
+      const status = (s.status || "").toLowerCase();
+      if (status === "cancelled" || status === "completed") return false;
+      const endsAt = new Date(s.scheduled_end || s.scheduled_start).getTime();
+      return status === "ongoing" || endsAt >= now || toDateStr(s.scheduled_start) >= todayStr;
+    });
+  if (failures === 2) throw new Error("Failed to load events");
 
-  const evNorm = evData.map(e => ({
-    ...e,
-    start_date: toDateStr(e.start_date),
-    end_date:   toDateStr(e.end_date || e.start_date),
-    _source:    "event",
-  }));
+  // Custom events that haven't ended yet
+  const evNorm = evData.map(normalizeEvent)
+    .filter(e => e.start_date && e.end_date >= todayStr);
 
   const semNorm = semData.map(s => ({
     id:              `sem_${s.id}`,
@@ -355,14 +335,14 @@ async function fetchUpcomingMerged() {
     scheduled_end:   s.scheduled_end,
     description:     s.description || "",
     location:        s.venue || "",
-    color_hex:       "#2D6A2D",
+    color_hex:       "#2563EB",
     event_type:      "seminar",
     _source:         "seminar",
     _status:         s.status,
   }));
 
   return [...evNorm, ...semNorm]
-    .sort((a, b) => (a.start_date || "").localeCompare(b.start_date || ""));
+    .sort((a, b) => (a.scheduled_start || a.start_date || "").localeCompare(b.scheduled_start || b.start_date || ""));
 }
 
 
@@ -393,11 +373,7 @@ function StatCard({icon, label, value, sub, color}) {
   );
 }
 
-/**
- * Section header.
- * FIX (Issue 2): replaced <a href> with a button that calls useNavigate,
- * enabling proper SPA routing without full page reloads.
- */
+/** Section header with an optional "View all →" button. */
 function SH({title, icon, badge, action, onAction, linkTo, onLinkClick}) {
   return (
     <div className="section-header-line">
@@ -418,7 +394,6 @@ function SH({title, icon, badge, action, onAction, linkTo, onLinkClick}) {
             {action}
           </button>
         )}
-        {/* FIX: use button + onLinkClick (navigate) instead of <a href> */}
         {linkTo && onLinkClick && (
           <button
             className="dash-viewall-btn"
@@ -438,7 +413,7 @@ function MBar({label, value, max, color, sub}) {
     <div className="mb-3">
       <div className="d-flex justify-content-between mb-1">
         <span className="text-truncate fw-semibold"
-          style={{fontSize:12,color:"var(--bloom-dark)",maxWidth:180}}>
+          style={{fontSize:12,color:"var(--bloom-dark)",maxWidth:180}} title={label}>
           {label}
         </span>
         <span className="fw-bold ms-2"
@@ -480,7 +455,6 @@ function ErrorState({msg, onRetry}) {
 function SourceBadge({ev}) {
   if (ev._source === "seminar")      return <span className="badge ev-badge-seminar"      style={{fontSize:9,fontWeight:700}}>Seminar</span>;
   if (ev._source === "announcement") return <span className="badge ev-badge-announcement" style={{fontSize:9,fontWeight:700}}>Announcement</span>;
-  // _source === "event" or any other value
   const label = ev.event_type ? ev.event_type.charAt(0).toUpperCase()+ev.event_type.slice(1) : "Event";
   return <span className="badge ev-badge-event" style={{fontSize:9,fontWeight:700}}>{label}</span>;
 }
@@ -498,14 +472,14 @@ function DayEventsModal({date, events, onClose}) {
           <div>
             <div style={{fontWeight:700,fontSize:16,color:"var(--bloom-dark)"}}>{label}</div>
             <div style={{fontSize:12,color:"#888",marginTop:2}}>
-              {events.length} event{events.length!==1?"s":""}
+              {events.length} item{events.length!==1?"s":""}
             </div>
           </div>
           <button className="btn btn-sm btn-outline-secondary py-0 px-2" onClick={onClose}>✕</button>
         </div>
         <div className="p-4">
           {events.length === 0 ? (
-            <Empty icon="bi-calendar-x" msg="No events on this date"/>
+            <Empty icon="bi-calendar-x" msg="Nothing scheduled on this date"/>
           ) : (
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               {events.map(ev => (
@@ -518,7 +492,7 @@ function DayEventsModal({date, events, onClose}) {
                   <div className="d-flex align-items-center justify-content-between mb-2">
                     <SourceBadge ev={ev}/>
                     {ev._status && (
-                      <span className="badge bg-light text-secondary" style={{fontSize:9}}>{ev._status}</span>
+                      <span className="badge bg-light text-secondary" style={{fontSize:9,textTransform:"uppercase"}}>{ev._status}</span>
                     )}
                   </div>
                   <div style={{fontWeight:700,color:"var(--bloom-dark)",fontSize:14,marginBottom:4}}>
@@ -540,7 +514,7 @@ function DayEventsModal({date, events, onClose}) {
                     </div>
                   )}
                   {ev.description && (
-                    <div style={{fontSize:12,color:"#555",lineHeight:1.5,marginTop:6}}>
+                    <div style={{fontSize:12,color:"#555",lineHeight:1.5,marginTop:6,whiteSpace:"pre-wrap"}}>
                       {ev.description}
                     </div>
                   )}
@@ -624,7 +598,7 @@ function EventDetailModal({ev, onClose}) {
               <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>
                 Description
               </div>
-              <div style={{fontSize:13,color:"#444",lineHeight:1.6}}>{ev.description}</div>
+              <div style={{fontSize:13,color:"#444",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{ev.description}</div>
             </div>
           )}
           {ev.is_pinned && (
@@ -650,7 +624,7 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
   const month     = date.getMonth();
   const firstDay  = new Date(year, month, 1).getDay();
   const daysInMo  = new Date(year, month+1, 0).getDate();
-  const today     = new Date();
+  const todayStr  = getToday(); // Philippine date
 
   const dayMap = useMemo(() => {
     const map = {};
@@ -680,14 +654,14 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
   return (
     <div style={{userSelect:"none"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-        <button onClick={()=>setDate(new Date(year,month-1,1))}
+        <button onClick={()=>setDate(new Date(year,month-1,1))} aria-label="Previous month"
           style={{background:"none",border:"none",cursor:"pointer",color:"var(--bloom-dark)",fontSize:18,padding:"2px 8px",borderRadius:6,lineHeight:1}}>
           ‹
         </button>
         <div style={{fontWeight:700,fontSize:13,color:"var(--bloom-dark)"}}>
           {date.toLocaleDateString("en-PH",{month:"long",year:"numeric"})}
         </div>
-        <button onClick={()=>setDate(new Date(year,month+1,1))}
+        <button onClick={()=>setDate(new Date(year,month+1,1))} aria-label="Next month"
           style={{background:"none",border:"none",cursor:"pointer",color:"var(--bloom-dark)",fontSize:18,padding:"2px 8px",borderRadius:6,lineHeight:1}}>
           ›
         </button>
@@ -704,21 +678,20 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
         {cells.map((d,i) => {
           if (!d) return <div key={`e${i}`}/>;
-          const isToday   = d===today.getDate() && month===today.getMonth() && year===today.getFullYear();
-          const dayEvents = dayMap[d] || [];
+          const dateStr    = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+          const isToday    = dateStr === todayStr;
+          const dayEvents  = dayMap[d] || [];
           const hasEvent   = dayEvents.some(ev => ev._source==="event");
           const hasSeminar = dayEvents.some(ev => ev._source==="seminar");
           const hasAnn     = dayEvents.some(ev => ev._source==="announcement");
           const hasAny     = dayEvents.length > 0;
-
-          const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
 
           return (
             <div
               key={d}
               className="cal-cell"
               onClick={() => onDayClick(dateStr, dayEvents)}
-              title={hasAny ? `${dayEvents.length} event${dayEvents.length>1?"s":""}` : ""}
+              title={hasAny ? `${dayEvents.length} item${dayEvents.length>1?"s":""}` : ""}
               style={{
                 textAlign:"center",padding:"5px 2px",borderRadius:6,fontSize:12,
                 fontWeight:isToday?800:400,
@@ -728,11 +701,11 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
                 border: hasAny && !isToday ? "1px solid #C8E6C9" : "1px solid transparent",
               }}>
               {d}
-              {!isToday && hasAny && (
+              {hasAny && (
                 <div style={{display:"flex",justifyContent:"center",gap:2,marginTop:2,flexWrap:"wrap"}}>
-                  {hasEvent   && <div style={{width:4,height:4,borderRadius:"50%",background:"var(--bloom-mid)"}}/>}
-                  {hasSeminar && <div style={{width:4,height:4,borderRadius:"50%",background:"#2563EB"}}/>}
-                  {hasAnn     && <div style={{width:4,height:4,borderRadius:"50%",background:"#f59e0b"}}/>}
+                  {hasEvent   && <div style={{width:4,height:4,borderRadius:"50%",background:isToday?"#fff":"var(--bloom-mid)"}}/>}
+                  {hasSeminar && <div style={{width:4,height:4,borderRadius:"50%",background:isToday?"#fff":"#2563EB"}}/>}
+                  {hasAnn     && <div style={{width:4,height:4,borderRadius:"50%",background:isToday?"#fff":"#f59e0b"}}/>}
                 </div>
               )}
             </div>
@@ -762,8 +735,9 @@ function MiniCalendar({date, setDate, calEvents, onDayClick}) {
 function BarCanvas({data, version}) {
   const ref=useRef(null), chart=useRef(null);
   useEffect(() => {
+    let cancelled = false;
     loadChart().then(() => {
-      if (!ref.current||!window.Chart) return;
+      if (cancelled || !ref.current || !window.Chart) return;
       if (chart.current) chart.current.destroy();
       chart.current = new window.Chart(ref.current, {
         type:"bar",
@@ -777,25 +751,27 @@ function BarCanvas({data, version}) {
         },
         options:{
           responsive:true, maintainAspectRatio:false,
-          plugins:{legend:{display:false}, tooltip:{callbacks:{label:(c)=>`${c.raw} actions`}}},
+          plugins:{legend:{display:false}, tooltip:{callbacks:{label:(c)=>`${c.raw} action${c.raw===1?"":"s"}`}}},
           scales:{
-            y:{beginAtZero:true,grid:{color:"rgba(0,0,0,.04)"},ticks:{font:{size:10},color:"#9E9E9E"}},
+            y:{beginAtZero:true,grid:{color:"rgba(0,0,0,.04)"},ticks:{font:{size:10},color:"#9E9E9E",precision:0}},
             x:{grid:{display:false},ticks:{font:{size:10},color:"#9E9E9E"}},
           },
         },
       });
     });
-    return () => { if (chart.current) chart.current.destroy(); };
+    return () => { cancelled = true; if (chart.current) { chart.current.destroy(); chart.current = null; } };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
-  return <canvas ref={ref} style={{maxHeight:160}}/>;
+  return <div style={{position:"relative",height:180}}><canvas ref={ref}/></div>;
 }
 
 function DonutCanvas({segments, version}) {
   const ref=useRef(null), chart=useRef(null);
   useEffect(() => {
     if (!segments.length) return;
+    let cancelled = false;
     loadChart().then(() => {
-      if (!ref.current||!window.Chart) return;
+      if (cancelled || !ref.current || !window.Chart) return;
       if (chart.current) chart.current.destroy();
       const total = segments.reduce((s,g)=>s+g.value, 0);
       chart.current = new window.Chart(ref.current, {
@@ -804,7 +780,7 @@ function DonutCanvas({segments, version}) {
           labels:segments.map(s=>s.label),
           datasets:[{
             data:segments.map(s=>s.value),
-            backgroundColor:["#2D6A2D","#4CAF50","#81C784","#A5D6A7"],
+            backgroundColor:["#2D6A2D","#4CAF50","#81C784","#A5D6A7","#C8E6C9"],
             borderWidth:3, borderColor:"#fff",
           }],
         },
@@ -812,14 +788,15 @@ function DonutCanvas({segments, version}) {
           responsive:true, maintainAspectRatio:false, cutout:"70%",
           plugins:{
             legend:{position:"bottom",labels:{font:{size:11},boxWidth:10,padding:12,color:"#616161"}},
-            tooltip:{callbacks:{label:(c)=>`${c.label}: ${c.raw} (${Math.round((c.raw/total)*100)}%)`}},
+            tooltip:{callbacks:{label:(c)=>`${c.label}: ${c.raw} (${total?Math.round((c.raw/total)*100):0}%)`}},
           },
         },
       });
     });
-    return () => { if (chart.current) chart.current.destroy(); };
+    return () => { cancelled = true; if (chart.current) { chart.current.destroy(); chart.current = null; } };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
-  return <canvas ref={ref} style={{maxHeight:180}}/>;
+  return <div style={{position:"relative",height:180}}><canvas ref={ref}/></div>;
 }
 
 /* ─── Skeleton ────────────────────────────────────────────── */
@@ -856,8 +833,8 @@ function DashboardSkeleton() {
 /* ═══════════════════════════════════════════════════════════
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════ */
-export default function DashboardPage() {
-  const navigate = useSafeNavigate(); // FIX: safe — works inside or outside a <Router>
+export default function DashboardPage({ onNavigate }) {
+  const navigate = useSafeNavigate(onNavigate);
 
   /* ── state ── */
   const [loading,    setLoading]    = useState(true);
@@ -870,6 +847,7 @@ export default function DashboardPage() {
 
   // stats
   const [stats,       setStats]       = useState({});
+  const [adminName,   setAdminName]   = useState("");
   const [modStats,    setModStats]    = useState([]);
   const [semStats,    setSemStats]    = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
@@ -894,20 +872,7 @@ export default function DashboardPage() {
   // Realtime channel refs
   const channelsRef = useRef([]);
 
-  /* ── calendar month window helper ── */
-  const getCalWindow = useCallback((d) => {
-    const y = d.getFullYear(), m = d.getMonth();
-    // Extend one month either side so dots appear for adjacent month days
-    return {
-      from: `${y}-${String(m).padStart(2,"0") || "12"}-01`.replace(
-        /(\d{4})-00-/,
-        `${y-1}-12-`
-      ),
-      to: new Date(y, m+2, 0).toISOString().split("T")[0],
-    };
-  }, []);
-
-  /* ── FIX: simpler, correct month window ── */
+  /* ── Calendar window: previous month → end of next month ── */
   const getMonthWindow = useCallback((d) => {
     const y = d.getFullYear(), m = d.getMonth();
     const prev = new Date(y, m-1, 1);
@@ -919,8 +884,6 @@ export default function DashboardPage() {
   }, []);
 
   /* ── [C] fetch calendar events ── */
-  // FIX: accepts date as param instead of closing over calDate state,
-  // so it always uses the freshest value passed to it.
   const refreshCalEvents = useCallback(async (forDate) => {
     const { from, to } = getMonthWindow(forDate);
     try {
@@ -932,18 +895,18 @@ export default function DashboardPage() {
   }, [getMonthWindow]);
 
   /* ── [D] fetch upcoming events ── */
-  // FIX: standalone function with no stale closure risk
   const refreshUpcoming = useCallback(async () => {
     try {
       const merged = await fetchUpcomingMerged();
       setUpcomingEvents(merged);
+      setErrors(prev => { const { upcoming, ...rest } = prev; return rest; });
     } catch(e) {
       console.error("[Dashboard] upcoming:", e);
-      setErrors(prev => ({...prev, events:"Failed to load events"}));
+      setErrors(prev => ({...prev, upcoming:"Failed to load events"}));
     }
   }, []);
 
-  /* ── stat fetchers ── */
+  /* ── stat cards: all-time totals + how many were added in the selected period ── */
   const fetchStats = useCallback(async (from, to) => {
     const f = toISO(from), t = toISO(to, true);
     const rng = (q, col="created_at") => {
@@ -951,25 +914,47 @@ export default function DashboardPage() {
       if (t) q = q.lte(col, t);
       return q;
     };
-    const results = await Promise.allSettled([
-      rng(supabase.from("modules").select("*",{count:"exact",head:true})),
-      rng(supabase.from("modules").select("*",{count:"exact",head:true}).eq("status","published")),
-      rng(supabase.from("assessments").select("*",{count:"exact",head:true})),
-      rng(supabase.from("seminars").select("*",{count:"exact",head:true})),
-      rng(supabase.from("seminars").select("*",{count:"exact",head:true}).eq("status","upcoming")),
-      rng(supabase.from("certificates").select("*",{count:"exact",head:true}).eq("is_revoked",false),"issued_at"),
-      rng(supabase.from("student_badges").select("*",{count:"exact",head:true}),"awarded_at"),
-      rng(supabase.from("assessment_attempts").select("*",{count:"exact",head:true}),"submitted_at"),
-      supabase.from("user_roles")
-        .select("user_id, roles!inner(name)",{count:"exact",head:true})
-        .eq("roles.name","student"),
-    ]);
-    const get = i => results[i].status==="fulfilled" ? (results[i].value.count ?? 0) : 0;
+    const count = (table) => supabase.from(table).select("*",{count:"exact",head:true});
+    const nowIso = new Date().toISOString();
+
+    const queries = [
+      // all-time totals
+      count("modules"),
+      count("modules").eq("status","published"),
+      count("assessments"),
+      count("seminars"),
+      count("seminars").gte("scheduled_start", nowIso).not("status","in","(cancelled,completed)"),
+      count("certificates").eq("is_revoked",false),
+      count("student_badges"),
+      count("assessment_attempts"),
+      supabase.from("user_roles").select("user_id, roles!inner(name)",{count:"exact",head:true}).eq("roles.name","student"),
+      // added in the selected period
+      rng(count("modules")),
+      rng(count("assessments")),
+      rng(count("seminars")),
+      rng(count("certificates").eq("is_revoked",false),"issued_at"),
+      rng(count("student_badges"),"awarded_at"),
+      rng(count("assessment_attempts"),"submitted_at"),
+      rng(supabase.from("user_roles").select("user_id, roles!inner(name)",{count:"exact",head:true}).eq("roles.name","student"),"assigned_at"),
+    ];
+    const results = await Promise.allSettled(queries);
+    const get = i => (results[i].status==="fulfilled" && !results[i].value.error) ? (results[i].value.count ?? 0) : null;
+    if (get(0) === null && get(3) === null && get(8) === null) throw new Error("Could not load statistics");
+
     setStats({
       totalMods:get(0), pubMods:get(1), totalAssess:get(2),
       totalSems:get(3), upcomingSems:get(4), totalCerts:get(5),
       totalBadges:get(6), totalAttempts:get(7), students:get(8),
+      newMods:get(9), newAssess:get(10), newSems:get(11), newCerts:get(12),
+      newBadges:get(13), newAttempts:get(14), newStudents:get(15),
     });
+
+    // Signed-in admin's name for the greeting
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: me } = await supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle();
+      setAdminName((me?.full_name || "").trim());
+    }
   }, []);
 
   const fetchModStats = useCallback(async () => {
@@ -997,7 +982,7 @@ export default function DashboardPage() {
     const map = {};
     (data??[]).forEach((r,i)=>{
       const uid = r.user_id??`u${i}`;
-      if (!map[uid]) map[uid]={uid,name:r.profiles?.full_name??"—",count:0};
+      if (!map[uid]) map[uid]={uid,name:r.profiles?.full_name||"—",count:0};
       map[uid].count++;
     });
     setLeaderboard(Object.values(map).sort((a,b)=>b.count-a.count).slice(0,5));
@@ -1009,10 +994,14 @@ export default function DashboardPage() {
     if (to)   q = q.lte("issued_at", toISO(to, true));
     const { data, error } = await q;
     if (error) throw new Error("Certificate stats failed");
-    if (!data) return;
-    const byType={}, valid=data.filter(c=>!c.is_revoked).length;
-    data.forEach(c=>{const t=c.reference_type??"manual"; byType[t]=(byType[t]??0)+1;});
-    setCertStats({byType,valid,revoked:data.length-valid,total:data.length});
+    const rows = data ?? [];
+    const byType={}, valid=rows.filter(c=>!c.is_revoked).length;
+    rows.filter(c=>!c.is_revoked).forEach(c=>{
+      const t=(c.reference_type??"manual");
+      const label=t.charAt(0).toUpperCase()+t.slice(1);
+      byType[label]=(byType[label]??0)+1;
+    });
+    setCertStats({byType,valid,revoked:rows.length-valid,total:rows.length});
     setChartDonutVer(v=>v+1);
   }, []);
 
@@ -1024,7 +1013,8 @@ export default function DashboardPage() {
     if (error) throw new Error("Assessment stats failed");
     if (!data||!data.length) { setAssessStats({}); return; }
     const passed = data.filter(a=>a.passed).length;
-    const avg    = Math.round(data.reduce((s,a)=>s+(a.score??0),0)/data.length);
+    const scored = data.filter(a=>typeof a.score==="number");
+    const avg    = scored.length ? Math.round(scored.reduce((s,a)=>s+a.score,0)/scored.length) : null;
     setAssessStats({total:data.length,passed,failed:data.length-passed,avg,passRate:Math.round((passed/data.length)*100)});
   }, []);
 
@@ -1038,35 +1028,42 @@ export default function DashboardPage() {
     setRecentMods(data??[]);
   }, []);
 
+  /* ── Activity chart: the 7 days ending on the "To" date (Philippine time) ── */
   const fetchWeeklyAct = useCallback(async (to) => {
-    const endDate   = to ? new Date(to) : new Date();
-    const startDate = new Date(endDate);
-    startDate.setDate(startDate.getDate()-6);
-    startDate.setHours(0,0,0,0);
-    endDate.setHours(23,59,59,999);
-    const { data } = await supabase.from("activity_logs")
-      .select("created_at")
-      .gte("created_at", startDate.toISOString())
-      .lte("created_at", endDate.toISOString());
-    const DAYS    = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-    const buckets = {};
+    const endStr = to || getToday();
+    const end    = new Date(`${endStr}T00:00:00+08:00`);
+    const days   = [];
     for (let i=6; i>=0; i--) {
-      const d = new Date(endDate); d.setDate(d.getDate()-i);
-      buckets[d.toDateString()] = {label:DAYS[d.getDay()], value:0};
+      const d = new Date(end.getTime() - i*86400000);
+      days.push(d.toLocaleDateString("en-CA", { timeZone: MANILA }));
     }
+    const { data, error } = await supabase.from("activity_logs")
+      .select("created_at")
+      .gte("created_at", toISO(days[0]))
+      .lte("created_at", toISO(days[6], true));
+    if (error) throw new Error("Activity chart failed");
+
+    const buckets = {};
+    days.forEach(ds => {
+      const label = new Date(`${ds}T12:00:00+08:00`).toLocaleDateString("en-PH", { timeZone: MANILA, weekday:"short" });
+      buckets[ds] = { label, value: 0 };
+    });
     (data??[]).forEach(r=>{
-      const key = new Date(r.created_at).toDateString();
+      const key = new Date(r.created_at).toLocaleDateString("en-CA", { timeZone: MANILA });
       if (buckets[key]) buckets[key].value++;
     });
-    setWeeklyAct(Object.values(buckets));
+    setWeeklyAct(days.map(ds => buckets[ds]));
     setChartBarVer(v=>v+1);
   }, []);
+
+  /* ── Ref to always hold the latest calDate (avoids stale closures) ── */
+  const calDateRef = useRef(calDate);
+  useEffect(() => { calDateRef.current = calDate; }, [calDate]);
 
   /* ── fetchAll orchestrator ── */
   const fetchAll = useCallback(async (from, to, isRefresh=false) => {
     isRefresh ? setRefreshing(true) : setLoading(true);
     setErrors({});
-    // Capture calDate at call time so we don't rely on stale closure
     const currentCalDate = calDateRef.current;
     const run = async (key, fn) => {
       try { await fn(); }
@@ -1084,21 +1081,15 @@ export default function DashboardPage() {
       run("assessStats", ()=>fetchAssessStats(from,to)),
       run("recentMods",  ()=>fetchRecentMods(from,to)),
       run("weeklyAct",   ()=>fetchWeeklyAct(to)),
-      // FIX: pass currentCalDate explicitly so we never use stale state
       run("calEvents",   ()=>refreshCalEvents(currentCalDate)),
-      run("upcoming",    ()=>refreshUpcoming()),
+      refreshUpcoming(),
     ]);
     isRefresh ? setRefreshing(false) : setLoading(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     fetchStats, fetchModStats, fetchSemStats, fetchLeaderboard,
     fetchCertStats, fetchAssessStats, fetchRecentMods, fetchWeeklyAct,
     refreshCalEvents, refreshUpcoming,
   ]);
-
-  /* ── Ref to always hold the latest calDate (avoids stale closures) ── */
-  const calDateRef = useRef(calDate);
-  useEffect(() => { calDateRef.current = calDate; }, [calDate]);
 
   /* ── Initial load ── */
   useEffect(() => {
@@ -1108,48 +1099,28 @@ export default function DashboardPage() {
     fetchAll(monthAgo, today);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ── FIX (Issue 1): Realtime subscriptions with stable refresh callbacks ──
-   * The previous implementation captured stale `calDate` in the realtime
-   * handlers because the effect only ran once. Now we use calDateRef so the
-   * handlers always see the current calendar month.
-   */
+  /* ── Realtime: keep calendar and upcoming list fresh ── */
   useEffect(() => {
-    // Clean up any existing channels
     channelsRef.current.forEach(ch => supabase.removeChannel(ch));
     channelsRef.current = [];
 
-    // These handlers use refs so they're always fresh, never stale
-    const handleCalChange = () => {
-      refreshCalEvents(calDateRef.current);
-    };
-    const handleUpcomingChange = () => {
-      refreshUpcoming();
-    };
-    const handleBothChange = () => {
-      refreshCalEvents(calDateRef.current);
-      refreshUpcoming();
-    };
+    const handleCalChange  = () => { refreshCalEvents(calDateRef.current); };
+    const handleBothChange = () => { refreshCalEvents(calDateRef.current); refreshUpcoming(); };
 
     const evCh = supabase
       .channel("dash-events-v4")
-      .on("postgres_changes", {event:"*", schema:"public", table:"events"},      handleBothChange)
-      .subscribe((status) => {
-        if (status === "CHANNEL_ERROR") console.warn("[Dashboard] events channel error");
-      });
+      .on("postgres_changes", {event:"*", schema:"public", table:"events"},        handleBothChange)
+      .subscribe((status) => { if (status === "CHANNEL_ERROR") console.warn("[Dashboard] events channel error"); });
 
     const semCh = supabase
       .channel("dash-seminars-v4")
-      .on("postgres_changes", {event:"*", schema:"public", table:"seminars"},    handleBothChange)
-      .subscribe((status) => {
-        if (status === "CHANNEL_ERROR") console.warn("[Dashboard] seminars channel error");
-      });
+      .on("postgres_changes", {event:"*", schema:"public", table:"seminars"},      handleBothChange)
+      .subscribe((status) => { if (status === "CHANNEL_ERROR") console.warn("[Dashboard] seminars channel error"); });
 
     const annCh = supabase
       .channel("dash-announcements-v4")
       .on("postgres_changes", {event:"*", schema:"public", table:"announcements"}, handleCalChange)
-      .subscribe((status) => {
-        if (status === "CHANNEL_ERROR") console.warn("[Dashboard] announcements channel error");
-      });
+      .subscribe((status) => { if (status === "CHANNEL_ERROR") console.warn("[Dashboard] announcements channel error"); });
 
     channelsRef.current = [evCh, semCh, annCh];
 
@@ -1157,13 +1128,9 @@ export default function DashboardPage() {
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  // FIX: refreshCalEvents/refreshUpcoming are stable (useCallback with no
-  // changing deps), so this effect runs once and the handlers stay live.
   }, [refreshCalEvents, refreshUpcoming]);
 
-  /* ── FIX: Re-fetch calendar dots when the month navigation changes ──
-   * Uses the freshest calDate value from state, not from a stale closure.
-   */
+  /* ── Re-fetch calendar dots when the month changes ── */
   useEffect(() => {
     refreshCalEvents(calDate);
   }, [calDate, refreshCalEvents]);
@@ -1175,10 +1142,7 @@ export default function DashboardPage() {
     let from;
     if      (p.days===-1) from = "2020-01-01";
     else if (p.days===0)  from = today;
-    else {
-      const d = new Date(); d.setDate(d.getDate()-p.days);
-      from = d.toISOString().split("T")[0];
-    }
+    else from = new Date(Date.now() - p.days*86400000).toLocaleDateString("en-CA", { timeZone: MANILA });
     setFromDate(from); setToDate(today);
     fetchAll(from, today, true);
   }, [fetchAll]);
@@ -1189,10 +1153,14 @@ export default function DashboardPage() {
   }, []);
 
   /* ── derived ── */
-  const certSegs   = Object.entries(certStats.byType??{}).map(([t,v])=>({label:t,value:v}));
-  const draftCount = (stats.totalMods??0)-(stats.pubMods??0);
-  const hour       = new Date().getHours();
-  const greeting   = hour<12?"Good morning":hour<17?"Good afternoon":"Good evening";
+  const certSegs    = Object.entries(certStats.byType??{}).map(([t,v])=>({label:t,value:v}));
+  const draftCount  = Math.max(0, (stats.totalMods??0)-(stats.pubMods??0));
+  const hour        = Number(new Date().toLocaleString("en-US", { timeZone: MANILA, hour:"numeric", hour12:false })) % 24;
+  const greeting    = hour<12?"Good morning":hour<18?"Good afternoon":"Good evening";
+  const firstName   = adminName ? adminName.split(" ")[0] : "Admin";
+  const periodLabel = preset === "Custom" ? "this period" : preset === "All Time" ? "all time" : preset.toLowerCase();
+  const plus        = (n) => n == null ? null : `+${n} ${periodLabel}`;
+  const show        = (n) => n == null ? "—" : n;
 
   if (loading) return <DashboardSkeleton/>;
 
@@ -1208,7 +1176,7 @@ export default function DashboardPage() {
         <div className="d-flex align-items-start justify-content-between mb-4 flex-wrap gap-3">
           <div>
             <h4 className="fw-bold mb-1" style={{color:"var(--bloom-dark)",fontSize:22}}>
-              {greeting}, Admin
+              {greeting}, {firstName}
               {refreshing && (
                 <span className="ms-2 refreshing-pulse"
                   style={{fontSize:13,color:"var(--bloom-mid)",fontWeight:400}}>
@@ -1225,7 +1193,7 @@ export default function DashboardPage() {
           <div className="d-flex align-items-center gap-2 flex-wrap">
             <div className="btn-group btn-group-sm" role="group">
               {PRESETS.map(p=>(
-                <button key={p.label} type="button" onClick={()=>applyPreset(p)}
+                <button key={p.label} type="button" onClick={()=>applyPreset(p)} disabled={refreshing}
                   className={`btn ${preset===p.label?"btn-primary":"btn-outline-secondary"}`}
                   style={{fontSize:11,fontWeight:preset===p.label?700:400}}>
                   {p.label}
@@ -1237,12 +1205,12 @@ export default function DashboardPage() {
               <input type="date" className="border-0 p-0 bg-transparent"
                 style={{fontSize:11,width:110,outline:"none",color:"var(--bloom-dark)",colorScheme:"light"}}
                 value={fromDate} max={toDate}
-                onChange={e=>{const v=e.target.value;setFromDate(v);setPreset("Custom");fetchAll(v,toDate,true);}}/>
+                onChange={e=>{const v=e.target.value; if(!v||v>toDate) return; setFromDate(v);setPreset("Custom");fetchAll(v,toDate,true);}}/>
               <span className="text-muted" style={{fontSize:12}}>—</span>
               <input type="date" className="border-0 p-0 bg-transparent"
                 style={{fontSize:11,width:110,outline:"none",color:"var(--bloom-dark)",colorScheme:"light"}}
                 value={toDate} min={fromDate} max={getToday()}
-                onChange={e=>{const v=e.target.value;setToDate(v);setPreset("Custom");fetchAll(fromDate,v,true);}}/>
+                onChange={e=>{const v=e.target.value; if(!v||v<fromDate) return; setToDate(v);setPreset("Custom");fetchAll(fromDate,v,true);}}/>
             </div>
             <button className="btn btn-sm btn-outline-secondary"
               style={{fontSize:11}} disabled={refreshing}
@@ -1253,17 +1221,17 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Row 1: 8 stat cards ── */}
+        {/* ── Row 1: 8 stat cards (all-time totals, with what was added in the period) ── */}
         <div className="row g-3 mb-4">
           {[
-            {icon:"bi-mortarboard",     label:"Students",      value:stats.students??0,                                                         color:"#1A2E1A"},
-            {icon:"bi-book",            label:"Modules",       value:stats.totalMods??0,    sub:`${stats.pubMods??0} pub · ${draftCount} draft`, color:"#2D6A2D"},
-            {icon:"bi-clipboard-check", label:"Assessments",   value:stats.totalAssess??0,                                                      color:"#2563EB"},
-            {icon:"bi-people",          label:"Seminars",      value:stats.totalSems??0,    sub:`${stats.upcomingSems??0} upcoming`,              color:"#7C3AED"},
-            {icon:"bi-award",           label:"Badges",        value:stats.totalBadges??0,                                                      color:"#D97706"},
-            {icon:"bi-patch-check",     label:"Certificates",  value:stats.totalCerts??0,                                                       color:"#059669"},
-            {icon:"bi-pencil-square",   label:"Quiz Attempts", value:stats.totalAttempts??0,                                                    color:"#0891B2"},
-            {icon:"bi-graph-up-arrow",  label:"Pass Rate",     value:assessStats.passRate!=null?`${assessStats.passRate}%`:"—",                  color:"#DC2626"},
+            {icon:"bi-mortarboard",     label:"Students",      value:show(stats.students),      sub:plus(stats.newStudents),                                               color:"#1A2E1A"},
+            {icon:"bi-book",            label:"Modules",       value:show(stats.totalMods),     sub:`${stats.pubMods??0} published · ${draftCount} draft`,                 color:"#2D6A2D"},
+            {icon:"bi-clipboard-check", label:"Assessments",   value:show(stats.totalAssess),   sub:plus(stats.newAssess),                                                 color:"#2563EB"},
+            {icon:"bi-people",          label:"Seminars",      value:show(stats.totalSems),     sub:`${stats.upcomingSems??0} upcoming`,                                   color:"#7C3AED"},
+            {icon:"bi-award",           label:"Badges Earned", value:show(stats.totalBadges),   sub:plus(stats.newBadges),                                                 color:"#D97706"},
+            {icon:"bi-patch-check",     label:"Certificates",  value:show(stats.totalCerts),    sub:plus(stats.newCerts),                                                  color:"#059669"},
+            {icon:"bi-pencil-square",   label:"Quiz Attempts", value:show(stats.totalAttempts), sub:plus(stats.newAttempts),                                               color:"#0891B2"},
+            {icon:"bi-graph-up-arrow",  label:"Pass Rate",     value:assessStats.passRate!=null?`${assessStats.passRate}%`:"—", sub:`quiz attempts, ${periodLabel}`, color:"#DC2626"},
           ].map((c,i)=>(
             <div key={i} className="col-xl-3 col-md-4 col-6 dash-animate"
               style={{animationDelay:`${i*0.04}s`}}>
@@ -1288,16 +1256,16 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <h5 className="fw-bold text-white mb-2" style={{fontSize:18}}>
-                  Welcome back,<br/>GADRC Admin!
+                  Welcome back,<br/>{adminName || "GADRC Admin"}!
                 </h5>
                 <p style={{fontSize:12,color:"rgba(255,255,255,.7)",lineHeight:1.7,marginBottom:20}}>
                   Manage GAD learning modules, track student progress, run seminars, and issue certificates — all from one dashboard.
                 </p>
                 <div className="row g-2">
                   {[
-                    {label:"Total Students",  value:stats.students??0,     icon:"bi-people"},
-                    {label:"Published Mods",  value:stats.pubMods??0,      icon:"bi-book"},
-                    {label:"Upcoming Sems",   value:stats.upcomingSems??0,  icon:"bi-calendar3"},
+                    {label:"Total Students",  value:show(stats.students),     icon:"bi-people"},
+                    {label:"Published Mods",  value:show(stats.pubMods),      icon:"bi-book"},
+                    {label:"Upcoming Sems",   value:show(stats.upcomingSems), icon:"bi-calendar3"},
                   ].map(s=>(
                     <div key={s.label} className="col-4">
                       <div className="text-center p-2 rounded-3"
@@ -1318,27 +1286,32 @@ export default function DashboardPage() {
           <div className="col-lg-8">
             <div className="card dash-chart-card">
               <div className="card-body p-3">
-                <div className="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-                  <SH title="System Activity This Week" icon="bi-bar-chart-line"/>
-                  <div className="d-flex gap-3">
-                    {[
-                      {label:"Attempts",  value:assessStats.total??0,                             color:"#2563EB"},
-                      {label:"Passed",    value:assessStats.passed??0,                            color:"#059669"},
-                      {label:"Failed",    value:assessStats.failed??0,                            color:"#DC2626"},
-                      {label:"Avg Score", value:assessStats.avg!=null?`${assessStats.avg}%`:"—",  color:"#2D6A2D"},
-                    ].map(s=>(
-                      <div key={s.label} className="text-center">
-                        <div className="fw-bold" style={{fontSize:15,color:s.color}}>{s.value}</div>
-                        <small className="text-muted" style={{fontSize:9,textTransform:"uppercase",letterSpacing:.4}}>{s.label}</small>
-                      </div>
-                    ))}
+                <div className="d-flex align-items-start justify-content-between mb-3 flex-wrap gap-2">
+                  <SH title="System Activity (Last 7 Days)" icon="bi-bar-chart-line"/>
+                  <div>
+                    <div className="text-end mb-1" style={{fontSize:9,color:"#999",textTransform:"uppercase",letterSpacing:.4,fontWeight:700}}>
+                      Quiz results · {periodLabel}
+                    </div>
+                    <div className="d-flex gap-3">
+                      {[
+                        {label:"Attempts",  value:assessStats.total??0,                             color:"#2563EB"},
+                        {label:"Passed",    value:assessStats.passed??0,                            color:"#059669"},
+                        {label:"Failed",    value:assessStats.failed??0,                            color:"#DC2626"},
+                        {label:"Avg Score", value:assessStats.avg!=null?`${assessStats.avg}%`:"—",  color:"#2D6A2D"},
+                      ].map(s=>(
+                        <div key={s.label} className="text-center">
+                          <div className="fw-bold" style={{fontSize:15,color:s.color}}>{s.value}</div>
+                          <small className="text-muted" style={{fontSize:9,textTransform:"uppercase",letterSpacing:.4}}>{s.label}</small>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
                 {errors.weeklyAct
-                  ? <ErrorState msg={errors.weeklyAct} onRetry={()=>fetchWeeklyAct(toDate)}/>
-                  : weeklyAct.length>0
+                  ? <ErrorState msg={errors.weeklyAct} onRetry={()=>fetchWeeklyAct(toDate).catch(()=>{})}/>
+                  : weeklyAct.length>0 && weeklyAct.some(d=>d.value>0)
                     ? <BarCanvas data={weeklyAct} version={chartBarVer}/>
-                    : <Empty icon="bi-bar-chart" msg="No activity data"/>
+                    : <Empty icon="bi-bar-chart" msg="No activity in these 7 days"/>
                 }
               </div>
             </div>
@@ -1352,7 +1325,7 @@ export default function DashboardPage() {
               <div className="card-body p-3">
                 <SH title="Module Completion Rate" icon="bi-book"/>
                 {errors.modStats
-                  ? <ErrorState msg={errors.modStats} onRetry={fetchModStats}/>
+                  ? <ErrorState msg={errors.modStats} onRetry={()=>fetchModStats().then(()=>setErrors(p=>{const{modStats,...r}=p;return r;})).catch(()=>{})}/>
                   : modStats.length===0
                     ? <Empty icon="bi-book" msg="No data yet"/>
                     : <div className="dash-scroll-body flex-grow-1">
@@ -1373,13 +1346,13 @@ export default function DashboardPage() {
           <div className="col-lg-4">
             <div className="card dash-chart-card dash-fixed-card">
               <div className="card-body p-3">
-                <SH title="Certificates" icon="bi-patch-check"/>
+                <SH title={`Certificates Issued · ${periodLabel}`} icon="bi-patch-check"/>
                 {errors.certStats
-                  ? <ErrorState msg={errors.certStats} onRetry={()=>fetchCertStats(fromDate,toDate)}/>
+                  ? <ErrorState msg={errors.certStats} onRetry={()=>fetchCertStats(fromDate,toDate).catch(()=>{})}/>
                   : !certStats.total
-                    ? <Empty icon="bi-patch-check" msg="None in this period"/>
+                    ? <Empty icon="bi-patch-check" msg="None issued in this period"/>
                     : <>
-                        <DonutCanvas segments={certSegs} version={chartDonutVer}/>
+                        {certSegs.length>0 && <DonutCanvas segments={certSegs} version={chartDonutVer}/>}
                         <div className="row g-2 mt-2">
                           <div className="col-6">
                             <div className="rounded-3 text-center py-2" style={{background:"#DFF6DD"}}>
@@ -1403,11 +1376,11 @@ export default function DashboardPage() {
           <div className="col-lg-4">
             <div className="card dash-chart-card dash-fixed-card">
               <div className="card-body p-3">
-                <SH title="Badge Leaderboard" icon="bi-trophy"/>
+                <SH title={`Badge Leaderboard · ${periodLabel}`} icon="bi-trophy"/>
                 {errors.leaderboard
-                  ? <ErrorState msg={errors.leaderboard} onRetry={()=>fetchLeaderboard(fromDate,toDate)}/>
+                  ? <ErrorState msg={errors.leaderboard} onRetry={()=>fetchLeaderboard(fromDate,toDate).catch(()=>{})}/>
                   : leaderboard.length===0
-                    ? <Empty icon="bi-award" msg="No badges yet"/>
+                    ? <Empty icon="bi-award" msg="No badges earned in this period"/>
                     : <div className="dash-scroll-body flex-grow-1">
                         {leaderboard.map((r,i)=>(
                           <div key={r.uid}
@@ -1419,7 +1392,7 @@ export default function DashboardPage() {
                             </div>
                             <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold text-white flex-shrink-0"
                               style={{width:32,height:32,background:"linear-gradient(135deg,#2D6A2D,#4CAF50)",fontSize:12}}>
-                              {r.name.slice(0,1).toUpperCase()}
+                              {(r.name||"?").slice(0,1).toUpperCase()}
                             </div>
                             <span className="flex-grow-1 text-truncate fw-semibold" style={{fontSize:12}}>{r.name}</span>
                             <span className="badge rounded-pill" style={{background:"#FEF3C7",color:"#D97706",fontSize:11}}>
@@ -1449,14 +1422,18 @@ export default function DashboardPage() {
                 />
                 <div className="mt-3 pt-3" style={{borderTop:"1px solid #E8F5E9"}}>
                   <div style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>
-                    This month
+                    {calDate.toLocaleDateString("en-PH",{month:"long",year:"numeric"})}
                   </div>
                   <div className="d-flex gap-2 flex-wrap">
-                    {[
-                      {label:"Events",        count:calEvents.filter(e=>e._source==="event").length,                 color:"var(--bloom-mid)"},
-                      {label:"Seminars",      count:calEvents.filter(e=>e._source==="seminar").length,      color:"#2563EB"},
-                      {label:"Announcements", count:calEvents.filter(e=>e._source==="announcement").length, color:"#f59e0b"},
-                    ].map(s=>(
+                    {(() => {
+                      const ym = `${calDate.getFullYear()}-${String(calDate.getMonth()+1).padStart(2,"0")}`;
+                      const inMonth = calEvents.filter(e => (e.start_date||"").startsWith(ym) || ((e.start_date||"") < ym && (e.end_date||"") >= ym));
+                      return [
+                        {label:"Events",        count:inMonth.filter(e=>e._source==="event").length,        color:"var(--bloom-mid)"},
+                        {label:"Seminars",      count:inMonth.filter(e=>e._source==="seminar").length,      color:"#2563EB"},
+                        {label:"Announcements", count:inMonth.filter(e=>e._source==="announcement").length, color:"#f59e0b"},
+                      ];
+                    })().map(s=>(
                       <div key={s.label} className="text-center px-2 py-1 rounded-2"
                         style={{background:"#F5F7F5",minWidth:64}}>
                         <div style={{fontWeight:800,fontSize:16,color:s.color}}>{s.count}</div>
@@ -1469,7 +1446,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Upcoming Events — FIX (Issue 2): "View all →" uses navigate("/calendar") */}
           <div className="col-lg-8">
             <div className="card dash-chart-card dash-fixed-card-lg">
               <div className="card-body p-3">
@@ -1486,18 +1462,16 @@ export default function DashboardPage() {
                     ? <Empty icon="bi-calendar-x" msg="No upcoming events — add one from the Calendar page"/>
                     : <div className="dash-scroll-body flex-grow-1" style={{paddingRight:4}}>
                         {upcomingEvents.slice(0,12).map(ev=>{
-                          const dt = ev.scheduled_start
-                            ? new Date(ev.scheduled_start)
-                            : ev.start_date
-                              ? new Date(ev.start_date+"T00:00:00")
-                              : null;
-                          const today0  = new Date(); today0.setHours(0,0,0,0);
-                          const isToday    = dt && dt.toDateString()===today0.toDateString();
-                          const isTomorrow = dt && new Date(today0.getTime()+86400000).toDateString()===dt.toDateString();
+                          const evDateStr = ev.scheduled_start ? toDateStr(ev.scheduled_start) : ev.start_date;
+                          const dt        = evDateStr ? new Date(`${evDateStr}T12:00:00+08:00`) : null;
+                          const todayStr  = getToday();
+                          const tomorrow  = new Date(new Date(`${todayStr}T12:00:00+08:00`).getTime()+86400000).toLocaleDateString("en-CA",{timeZone:MANILA});
+                          const isToday    = evDateStr===todayStr;
+                          const isTomorrow = evDateStr===tomorrow;
                           const dayLabel   = isToday?"Today":isTomorrow?"Tomorrow"
-                            : dt ? dt.toLocaleDateString("en-PH",{month:"short",day:"numeric",weekday:"short"}) : "—";
+                            : dt ? dt.toLocaleDateString("en-PH",{timeZone:MANILA,month:"short",day:"numeric",weekday:"short"}) : "—";
                           const timeLabel  = ev.scheduled_start
-                            ? new Date(ev.scheduled_start).toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit",hour12:true})
+                            ? new Date(ev.scheduled_start).toLocaleTimeString("en-PH",{timeZone:MANILA,hour:"2-digit",minute:"2-digit",hour12:true})
                             : "";
                           const borderColor = ev.color_hex || "#2D6A2D";
                           return (
@@ -1518,10 +1492,10 @@ export default function DashboardPage() {
                                 borderRadius:8,padding:"6px 4px",flexShrink:0,
                               }}>
                                 <div style={{fontSize:11,fontWeight:800,color:isToday?"#fff":"#666",textTransform:"uppercase",letterSpacing:.5}}>
-                                  {dt?dt.toLocaleDateString("en-PH",{month:"short"}):"—"}
+                                  {dt?dt.toLocaleDateString("en-PH",{timeZone:MANILA,month:"short"}):"—"}
                                 </div>
                                 <div style={{fontSize:20,fontWeight:900,color:isToday?"#fff":"var(--bloom-dark)",lineHeight:1}}>
-                                  {dt?dt.getDate():"—"}
+                                  {dt?Number(dt.toLocaleDateString("en-PH",{timeZone:MANILA,day:"numeric"})):"—"}
                                 </div>
                               </div>
                               <div style={{flex:1,minWidth:0}}>
@@ -1565,9 +1539,9 @@ export default function DashboardPage() {
           <div className="col-lg-6">
             <div className="card dash-chart-card dash-fixed-card">
               <div className="card-body p-3">
-                <SH title="Seminar Attendance" icon="bi-people"/>
+                <SH title="Seminar Attendance (Latest 5)" icon="bi-people"/>
                 {errors.semStats
-                  ? <ErrorState msg={errors.semStats} onRetry={fetchSemStats}/>
+                  ? <ErrorState msg={errors.semStats} onRetry={()=>fetchSemStats().then(()=>setErrors(p=>{const{semStats,...r}=p;return r;})).catch(()=>{})}/>
                   : semStats.length===0
                     ? <Empty icon="bi-people" msg="No seminars yet"/>
                     : <div className="dash-scroll-body flex-grow-1">
@@ -1585,20 +1559,19 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* FIX (Issue 2): "View all →" navigates to /modules via React Router */}
           <div className="col-lg-6">
             <div className="card dash-chart-card dash-fixed-card">
               <div className="card-body p-3">
                 <SH
-                  title="Recent Modules"
+                  title={`Modules Added · ${periodLabel}`}
                   icon="bi-clock-history"
                   linkTo="/modules"
                   onLinkClick={() => navigate("/modules")}
                 />
                 {errors.recentMods
-                  ? <ErrorState msg={errors.recentMods} onRetry={()=>fetchRecentMods(fromDate,toDate)}/>
+                  ? <ErrorState msg={errors.recentMods} onRetry={()=>fetchRecentMods(fromDate,toDate).catch(()=>{})}/>
                   : recentMods.length===0
-                    ? <Empty icon="bi-book" msg="No modules"/>
+                    ? <Empty icon="bi-book" msg="No modules added in this period"/>
                     : <div className="dash-scroll-body flex-grow-1">
                         {recentMods.map(m=>(
                           <div key={m.id} className="d-flex align-items-center gap-2 py-2"

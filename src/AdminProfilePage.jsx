@@ -28,13 +28,13 @@ function Btn({ children, onClick, variant = "primary", small, disabled, style = 
   return <button onClick={onClick} disabled={disabled} style={{ ...base, ...variants[variant] }}>{children}</button>;
 }
 
-function Input({ label, value, onChange, type = "text", placeholder, disabled, hint }) {
+function Input({ label, value, onChange, type = "text", placeholder, disabled, hint, maxLength }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {label && <label style={{ fontSize: 12, fontWeight: 600, color: G.mid, letterSpacing: ".04em" }}>{label}</label>}
       <input
         type={type} value={value ?? ""} onChange={e => onChange?.(e.target.value)}
-        placeholder={placeholder} disabled={disabled}
+        placeholder={placeholder} disabled={disabled} maxLength={maxLength}
         style={{
           border: "1px solid #DDE8DD", borderRadius: 6, padding: "9px 12px",
           fontSize: 13, fontFamily: "'Inter', sans-serif",
@@ -43,9 +43,43 @@ function Input({ label, value, onChange, type = "text", placeholder, disabled, h
           transition: "border .15s",
         }}
         onFocus={e => { if (!disabled) e.target.style.borderColor = G.base; }}
-        onBlur={e  => { e.target.style.borderColor = G.pale; }}
+        onBlur={e  => { e.target.style.borderColor = "#DDE8DD"; }}
       />
       {hint && <div style={{ fontSize: 11, color: G.light }}>{hint}</div>}
+    </div>
+  );
+}
+
+// Password field with a show/hide (eye) button
+function PasswordInput({ label, value, onChange, placeholder }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {label && <label style={{ fontSize: 12, fontWeight: 600, color: G.mid, letterSpacing: ".04em" }}>{label}</label>}
+      <div style={{ position: "relative" }}>
+        <input
+          type={show ? "text" : "password"} value={value ?? ""} onChange={e => onChange?.(e.target.value)}
+          placeholder={placeholder} autoComplete="new-password"
+          style={{
+            width: "100%", boxSizing: "border-box",
+            border: "1px solid #DDE8DD", borderRadius: 6, padding: "9px 40px 9px 12px",
+            fontSize: 13, fontFamily: "'Inter', sans-serif",
+            background: G.white, color: G.dark, outline: "none", transition: "border .15s",
+          }}
+          onFocus={e => { e.target.style.borderColor = G.base; }}
+          onBlur={e  => { e.target.style.borderColor = "#DDE8DD"; }}
+        />
+        <button type="button" onClick={() => setShow(v => !v)}
+          title={show ? "Hide password" : "Show password"}
+          aria-label={show ? "Hide password" : "Show password"}
+          style={{
+            position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
+            background: "none", border: "none", cursor: "pointer", color: "#888",
+            padding: "4px 6px", fontSize: 15, lineHeight: 1,
+          }}>
+          <i className={`bi ${show ? "bi-eye-slash" : "bi-eye"}`}/>
+        </button>
+      </div>
     </div>
   );
 }
@@ -73,18 +107,18 @@ function SectionTitle({ children, sub }) {
 function Alert({ message, type = "error" }) {
   if (!message) return null;
   const styles = {
-    error:   { bg: "#fef2f2", border: "#fecaca", color: "#c0392b", icon: "" },
-    success: { bg: G.wash,    border: G.pale,    color: G.dark,    icon: "" },
-    info:    { bg: "#e8f0fe", border: "#bfdbfe", color: "#1a56a8", icon: "ℹ️" },
+    error:   { bg: "#fef2f2", border: "#fecaca", color: "#c0392b", icon: "bi-exclamation-circle" },
+    success: { bg: G.wash,    border: G.pale,    color: G.dark,    icon: "bi-check-circle" },
+    info:    { bg: "#e8f0fe", border: "#bfdbfe", color: "#1a56a8", icon: "bi-info-circle" },
   };
   const s = styles[type];
   return (
     <div style={{
       background: s.bg, border: `1px solid ${s.border}`, borderRadius: 6,
-      padding: "10px 14px", fontSize: 12.5, color: s.color,
+      padding: "10px 14px", fontSize: 12.5, color: s.color, marginTop: 14,
       display: "flex", alignItems: "center", gap: 8,
     }}>
-      <span>{s.icon}</span> {message}
+      <i className={`bi ${s.icon}`}/> {message}
     </div>
   );
 }
@@ -92,7 +126,15 @@ function Alert({ message, type = "error" }) {
 function fmtShort(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-PH", {
-    month: "short", day: "numeric", year: "numeric",
+    timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric",
+  });
+}
+
+function fmtDateTime(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-PH", {
+    timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
   });
 }
 
@@ -117,16 +159,41 @@ function AvatarCircle({ name, photoUrl, size = 80 }) {
   );
 }
 
-// ── Activity icon ─────────────────────────────────────────────────
-function activityIcon(type) {
-  const icons = {
-    module: "bi-book", assessment: "bi-clipboard-check", seminar: "bi-people",
-    certificate: "bi-patch-check", calendar: "bi-calendar3", student: "bi-mortarboard",
-    announcement: "bi-megaphone", analytics: "bi-bar-chart", login: "bi-key",
-    profile: "bi-person", password: "bi-lock",
-  };
-  const icon = icons[type] ?? "bi-pin-angle";
-  return icon;
+// ── Activity helpers (real entries from activity_logs) ────────────
+function activityIcon(action = "") {
+  const a = action.toLowerCase();
+  if (a.includes("login") || a.includes("sign"))        return "bi-key";
+  if (a.includes("module"))                              return "bi-book";
+  if (a.includes("assessment") || a.includes("question")) return "bi-clipboard-check";
+  if (a.includes("seminar") || a.includes("meeting") || a.includes("attendance")) return "bi-people";
+  if (a.includes("certificate") || a.includes("template")) return "bi-patch-check";
+  if (a.includes("badge"))                               return "bi-award";
+  if (a.includes("event") || a.includes("calendar"))     return "bi-calendar3";
+  if (a.includes("announcement"))                        return "bi-megaphone";
+  if (a.includes("admin"))                               return "bi-shield-lock";
+  if (a.includes("user") || a.includes("masterlist") || a.includes("student") || a.includes("role")) return "bi-person";
+  if (a.includes("password"))                            return "bi-lock";
+  if (a.includes("profile"))                             return "bi-person-circle";
+  if (a.includes("delete") || a.includes("remove"))      return "bi-trash";
+  return "bi-pin-angle";
+}
+
+function activityLabel(action = "") {
+  if (!action) return "Action performed";
+  const text = action.replace(/_/g, " ").trim();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// Pick a short, human-readable detail from the log's metadata
+function activityDetails(meta) {
+  if (!meta || typeof meta !== "object") return "";
+  const keys = ["title", "name", "seminar", "module", "email", "file"];
+  for (const k of keys) {
+    if (meta[k] && typeof meta[k] === "string") return meta[k];
+  }
+  if (typeof meta.count === "number") return `${meta.count} item(s)`;
+  if (typeof meta.added === "number") return `${meta.added} added`;
+  return "";
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -139,15 +206,19 @@ export default function AdminProfilePage({ user, onClose }) {
   const [saving,       setSaving]       = useState(false);
   const [profileForm,  setProfileForm]  = useState({});
   const [profileMsg,   setProfileMsg]   = useState(null);
+  const [photoMsg,     setPhotoMsg]     = useState(null);
+  const [uploading,    setUploading]    = useState(false);
   const [pwForm,       setPwForm]       = useState({ current: "", newPw: "", confirm: "" });
   const [pwMsg,        setPwMsg]        = useState(null);
   const [pwSaving,     setPwSaving]     = useState(false);
   const [activity,     setActivity]     = useState([]);
+  const [activityErr,  setActivityErr]  = useState("");
   const [stats,        setStats]        = useState({});
   const fileRef = useRef();
 
   useEffect(() => {
     fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchAll = async () => {
@@ -158,111 +229,147 @@ export default function AdminProfilePage({ user, onClose }) {
 
   // ── Fetch profile ─────────────────────────────────────────────
   const fetchProfile = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("profiles").select("*").eq("id", user.id).single();
-      if (error) { setProfile({}); setProfileForm({}); return; }
-      setProfile(data ?? {});
-      setProfileForm({
-        full_name:  data?.full_name  ?? data?.name ?? "",
-        phone:      data?.phone      ?? data?.phone_number ?? "",
-        department: data?.department ?? "",
-        position:   data?.position   ?? data?.role ?? "",
-        bio:        data?.bio        ?? data?.about ?? "",
-      });
-    } catch {
-      setProfile({});
-      setProfileForm({});
-    }
+    const { data, error } = await supabase
+      .from("profiles").select("*").eq("id", user.id).maybeSingle();
+    if (error || !data) { setProfile({}); setProfileForm({}); return; }
+    setProfile(data);
+    setProfileForm({
+      full_name:      data.full_name      ?? "",
+      contact_number: data.contact_number ?? "",
+      department:     data.department     ?? "",
+      position:       data.position       ?? "",
+      bio:            data.bio            ?? "",
+    });
   };
 
-  // ── Fetch admin stats ─────────────────────────────────────────
+  // ── System totals shown in the header ─────────────────────────
   const fetchStats = async () => {
-    const [
-      { count: modules },
-      { count: seminars },
-      { count: certs },
-      { count: announcements },
-    ] = await Promise.all([
+    const [m, s, c, a] = await Promise.all([
       supabase.from("modules").select("*",       { count: "exact", head: true }),
       supabase.from("seminars").select("*",      { count: "exact", head: true }),
-      supabase.from("certificates").select("*",  { count: "exact", head: true }),
+      supabase.from("certificates").select("*",  { count: "exact", head: true }).eq("is_revoked", false),
       supabase.from("announcements").select("*", { count: "exact", head: true }),
     ]);
-    setStats({ modules: modules ?? 0, seminars: seminars ?? 0, certs: certs ?? 0, announcements: announcements ?? 0 });
+    setStats({ modules: m.count ?? 0, seminars: s.count ?? 0, certs: c.count ?? 0, announcements: a.count ?? 0 });
   };
 
-  // ── Fetch recent activity (audit_logs or fallback) ────────────
+  // ── Real recent activity of THIS admin (activity_logs) ────────
   const fetchActivity = async () => {
-    // audit_logs table may not exist — use synthesized fallback silently
-    const now = new Date().toISOString();
-    setActivity([
-      { id: 1, action: "Logged in",            type: "login",    created_at: now },
-      { id: 2, action: "Viewed Analytics",     type: "analytics",created_at: now },
-      { id: 3, action: "Opened Admin Profile", type: "profile",  created_at: now },
-    ]);
+    setActivityErr("");
+    const { data, error } = await supabase
+      .from("activity_logs")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (error) { setActivity([]); setActivityErr("Could not load your activity."); return; }
+    setActivity(data ?? []);
   };
 
   // ── Save profile ──────────────────────────────────────────────
   const saveProfile = async () => {
-    setSaving(true); setProfileMsg(null);
-    // Only send columns that already exist in the profile row
-    const base = { id: user.id };
-    if (profile && "full_name"  in profile) base.full_name  = profileForm.full_name?.trim()  || null;
-    if (profile && "phone"      in profile) base.phone      = profileForm.phone?.trim()      || null;
-    if (profile && "department" in profile) base.department = profileForm.department?.trim() || null;
-    if (profile && "position"   in profile) base.position   = profileForm.position?.trim()   || null;
-    if (profile && "bio"        in profile) base.bio        = profileForm.bio?.trim()        || null;
-    if (profile && "updated_at" in profile) base.updated_at = new Date().toISOString();
-    // Fallback: try full_name at minimum
-    if (!("full_name" in base) && profileForm.full_name) base.full_name = profileForm.full_name.trim();
-    const { error } = await supabase.from("profiles").update(base).eq("id", user.id);
+    setProfileMsg(null);
+    const name = profileForm.full_name?.trim() ?? "";
+    if (name.length < 2) { setProfileMsg({ type: "error", text: "Full name is required." }); return; }
+    const phone = profileForm.contact_number?.trim() ?? "";
+    if (phone && !/^[0-9+\-\s()]{7,20}$/.test(phone)) {
+      setProfileMsg({ type: "error", text: "Please enter a valid phone number." }); return;
+    }
+
+    setSaving(true);
+    const { data, error } = await supabase.from("profiles").update({
+      full_name:      name,
+      contact_number: phone || null,
+      department:     profileForm.department?.trim() || null,
+      position:       profileForm.position?.trim()   || null,
+      bio:            profileForm.bio?.trim()        || null,
+      updated_at:     new Date().toISOString(),
+    }).eq("id", user.id).select("id");
     setSaving(false);
-    if (error) { setProfileMsg({ type: "error", text: error.message }); return; }
+
+    if (error) {
+      const missing = /column .* does not exist|Could not find the '(\w+)' column/i.test(error.message);
+      setProfileMsg({ type: "error", text: missing
+        ? "Your database is missing a profile column (phone, position, or bio). Run the profile SQL update, then try again."
+        : "Could not save your profile: " + error.message });
+      return;
+    }
+    if (!data || data.length === 0) {
+      setProfileMsg({ type: "error", text: "Your profile could not be saved (no permission to update it)." });
+      return;
+    }
     setProfileMsg({ type: "success", text: "Profile updated successfully." });
     fetchProfile();
   };
 
-  // ── Change password ───────────────────────────────────────────
+  // ── Change password (current password required) ───────────────
   const changePassword = async () => {
     setPwMsg(null);
-    if (!pwForm.newPw) { setPwMsg({ type: "error", text: "New password is required." }); return; }
-    if (pwForm.newPw.length < 8) { setPwMsg({ type: "error", text: "Password must be at least 8 characters." }); return; }
-    if (pwForm.newPw !== pwForm.confirm) { setPwMsg({ type: "error", text: "Passwords do not match." }); return; }
+    if (!pwForm.current) { setPwMsg({ type: "error", text: "Please enter your current password." }); return; }
+    if (!pwForm.newPw)   { setPwMsg({ type: "error", text: "New password is required." }); return; }
+    if (pwForm.newPw.length < 8) { setPwMsg({ type: "error", text: "New password must be at least 8 characters." }); return; }
+    if (pwForm.newPw !== pwForm.confirm) { setPwMsg({ type: "error", text: "New passwords do not match." }); return; }
+    if (pwForm.newPw === pwForm.current) { setPwMsg({ type: "error", text: "New password must be different from your current password." }); return; }
+
     setPwSaving(true);
+    // 1. Confirm the current password is correct
+    const { error: checkErr } = await supabase.auth.signInWithPassword({ email: user.email, password: pwForm.current });
+    if (checkErr) {
+      setPwSaving(false);
+      setPwMsg({ type: "error", text: "Your current password is incorrect." });
+      return;
+    }
+    // 2. Set the new password
     const { error } = await supabase.auth.updateUser({ password: pwForm.newPw });
     setPwSaving(false);
     if (error) { setPwMsg({ type: "error", text: error.message }); return; }
     setPwMsg({ type: "success", text: "Password changed successfully." });
     setPwForm({ current: "", newPw: "", confirm: "" });
+    supabase.from("activity_logs").insert({
+      user_id: user.id, action_type: "password_changed", created_at: new Date().toISOString(),
+    }).then(() => fetchActivity(), () => {});
   };
 
   // ── Avatar upload ─────────────────────────────────────────────
   const uploadAvatar = async (e) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) { setProfileMsg({ type: "error", text: "Image must be under 2MB." }); return; }
-    setProfileMsg({ type: "info", text: "Uploading photo…" });
+    if (!/^image\/(png|jpe?g|webp|gif)$/i.test(file.type)) { setPhotoMsg({ type: "error", text: "Please choose a PNG, JPG, WEBP, or GIF image." }); return; }
+    if (file.size > 2 * 1024 * 1024) { setPhotoMsg({ type: "error", text: "Image must be under 2 MB." }); return; }
+
+    setUploading(true);
+    setPhotoMsg({ type: "info", text: "Uploading photo…" });
     try {
-      const ext  = file.name.split(".").pop();
+      const ext  = (file.name.split(".").pop() || "png").toLowerCase();
       const path = `avatars/${user.id}.${ext}`;
       const { error: upErr } = await supabase.storage
-        .from("avatars").upload(path, file, { upsert: true });
-      if (upErr) throw upErr;
+        .from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+      if (upErr) throw new Error(/bucket/i.test(upErr.message)
+        ? 'The "avatars" storage bucket does not exist yet.'
+        : upErr.message);
+
+      // Add a version so the browser shows the NEW photo instead of a cached one
       const { data: { publicUrl } } = supabase.storage.from("avatars").getPublicUrl(path);
-      await supabase.from("profiles").upsert({ id: user.id, avatar_url: publicUrl });
-      setProfile(p => ({ ...p, avatar_url: publicUrl }));
-      setProfileMsg({ type: "success", text: "Photo updated successfully." });
+      const versionedUrl = `${publicUrl}?v=${Date.now()}`;
+
+      const { data, error: saveErr } = await supabase.from("profiles")
+        .update({ avatar_url: versionedUrl }).eq("id", user.id).select("id");
+      if (saveErr) throw new Error(saveErr.message);
+      if (!data || data.length === 0) throw new Error("no permission to update your profile.");
+
+      setProfile(p => ({ ...p, avatar_url: versionedUrl }));
+      setPhotoMsg({ type: "success", text: "Photo updated successfully." });
     } catch (err) {
-      setProfileMsg({ type: "error", text: "Upload failed: " + err.message });
+      setPhotoMsg({ type: "error", text: "Upload failed: " + err.message });
     }
+    setUploading(false);
   };
 
   const TABS = [
-    { id: "profile",  label: "Profile",          icon: "" },
-    { id: "security", label: "Security",          icon: "" },
-    { id: "activity", label: "Recent Activity",   icon: "" },
-    { id: "settings", label: "Account Settings",  icon: "" },
+    { id: "profile",  label: "Profile" },
+    { id: "security", label: "Security" },
+    { id: "activity", label: "Recent Activity" },
   ];
 
   // ════════════════════════════════════════════════════════════════
@@ -296,17 +403,18 @@ export default function AdminProfilePage({ user, onClose }) {
 
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
             <div style={{ position: "relative" }}>
-              <AvatarCircle name={profile?.full_name ?? user?.email} photoUrl={profile?.avatar_url} size={72} />
+              <AvatarCircle name={profile?.full_name || user?.email} photoUrl={profile?.avatar_url} size={72} />
               <button
-                onClick={() => fileRef.current?.click()}
+                onClick={() => !uploading && fileRef.current?.click()}
+                title="Change photo"
                 style={{
                   position: "absolute", bottom: 0, right: 0,
                   background: G.base, border: "2px solid #fff", borderRadius: "50%",
-                  width: 26, height: 26, cursor: "pointer", fontSize: 12,
+                  width: 26, height: 26, cursor: uploading ? "wait" : "pointer", fontSize: 12, color: "#fff",
                   display: "flex", alignItems: "center", justifyContent: "center",
                 }}
-              ><i className="bi bi-camera me-1"/></button>
-              <input ref={fileRef} type="file" accept="image/*"
+              ><i className={`bi ${uploading ? "bi-hourglass-split" : "bi-camera"}`}/></button>
+              <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
                 onChange={uploadAvatar} style={{ display: "none" }} />
             </div>
             <div>
@@ -317,7 +425,7 @@ export default function AdminProfilePage({ user, onClose }) {
               <div style={{ fontSize: 13, color: "rgba(255,255,255,.65)", marginTop: 2 }}>
                 {user?.email}
               </div>
-              <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
                 {[
                   { label: "Modules",       value: stats.modules       ?? 0 },
                   { label: "Seminars",      value: stats.seminars      ?? 0 },
@@ -330,6 +438,7 @@ export default function AdminProfilePage({ user, onClose }) {
                       textTransform: "uppercase", letterSpacing: ".06em" }}>{s.label}</div>
                   </div>
                 ))}
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,.4)", paddingBottom: 2 }}>· system totals</div>
               </div>
             </div>
           </div>
@@ -345,7 +454,7 @@ export default function AdminProfilePage({ user, onClose }) {
                 fontSize: 12, fontWeight: 600, fontFamily: "'Inter', sans-serif",
                 transition: "all .15s",
               }}>
-                {t.icon} {t.label}
+                {t.label}
               </button>
             ))}
           </div>
@@ -353,6 +462,8 @@ export default function AdminProfilePage({ user, onClose }) {
 
         {/* ── Body ── */}
         <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
+
+          {photoMsg && <div style={{ marginTop: -14, marginBottom: 14 }}><Alert message={photoMsg.text} type={photoMsg.type} /></div>}
 
           {/* ── Profile Tab ── */}
           {tab === "profile" && (
@@ -362,50 +473,49 @@ export default function AdminProfilePage({ user, onClose }) {
                   Personal Information
                 </SectionTitle>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                  <Input label="Full Name" value={profileForm.full_name}
+                  <Input label="Full Name *" value={profileForm.full_name} maxLength={100}
                     onChange={v => setProfileForm(f => ({ ...f, full_name: v }))} />
                   <Input label="Email Address" value={user?.email} disabled
-                    hint="Contact your system administrator to change email." />
-                  <Input label="Phone Number" value={profileForm.phone}
-                    onChange={v => setProfileForm(f => ({ ...f, phone: v }))}
+                    hint="Contact another administrator to change your email." />
+                  <Input label="Phone Number" value={profileForm.contact_number} maxLength={20}
+                    onChange={v => setProfileForm(f => ({ ...f, contact_number: v }))}
                     placeholder="+63 9XX XXX XXXX" />
-                  <Input label="Department" value={profileForm.department}
+                  <Input label="Department" value={profileForm.department} maxLength={120}
                     onChange={v => setProfileForm(f => ({ ...f, department: v }))}
                     placeholder="e.g. GADRC" />
-                  <Input label="Position / Role" value={profileForm.position}
+                  <Input label="Position" value={profileForm.position} maxLength={100}
                     onChange={v => setProfileForm(f => ({ ...f, position: v }))}
-                    placeholder="e.g. System Administrator" style={{ gridColumn: "1 / -1" }} />
+                    placeholder="e.g. GAD Focal Person" />
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 14 }}>
                   <label style={{ fontSize: 12, fontWeight: 600, color: G.mid }}>Bio</label>
-                  <textarea value={profileForm.bio ?? ""}
+                  <textarea value={profileForm.bio ?? ""} maxLength={500}
                     onChange={e => setProfileForm(f => ({ ...f, bio: e.target.value }))}
                     placeholder="Write a short bio about yourself…" rows={3}
                     style={{ border: "1px solid #DDE8DD", borderRadius: 6, padding: "9px 12px",
                       fontSize: 13, fontFamily: "'Inter', sans-serif", background: "#FFFFFF",
                       color: G.dark, outline: "none", resize: "vertical" }}
                     onFocus={e => e.target.style.borderColor = G.base}
-                    onBlur={e  => e.target.style.borderColor = G.pale}
+                    onBlur={e  => e.target.style.borderColor = "#DDE8DD"}
                   />
+                  <div style={{ fontSize: 11, color: "#aaa", textAlign: "right" }}>{(profileForm.bio ?? "").length}/500</div>
                 </div>
                 {profileMsg && <Alert message={profileMsg.text} type={profileMsg.type} />}
                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-                  <Btn onClick={saveProfile} disabled={saving}>
+                  <Btn onClick={saveProfile} disabled={saving || loading}>
                     {saving ? "Saving…" : "Save Changes"}
                   </Btn>
                 </div>
               </Card>
 
               <Card>
-                <SectionTitle sub="Your account metadata.">Account Details</SectionTitle>
+                <SectionTitle sub="Your account information.">Account Details</SectionTitle>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   {[
-                    { label: "User ID",       value: user?.id?.slice(0, 18) + "…" },
-                    { label: "Role",          value: "Administrator" },
+                    { label: "Role",            value: "Administrator" },
                     { label: "Account Created", value: fmtShort(user?.created_at) },
-                    { label: "Last Sign In",    value: fmtShort(user?.last_sign_in_at) },
+                    { label: "Last Sign In",    value: fmtDateTime(user?.last_sign_in_at) },
                     { label: "Email Verified",  value: user?.email_confirmed_at ? "Verified" : "Not verified" },
-                    { label: "Auth Provider",   value: user?.app_metadata?.provider ?? "email" },
                   ].map(({ label, value }) => (
                     <div key={label} style={{
                       background: "#F5F7F5", borderRadius: 10, padding: "10px 14px",
@@ -424,40 +534,40 @@ export default function AdminProfilePage({ user, onClose }) {
           {tab === "security" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
               <Card>
-                <SectionTitle sub="Choose a strong password with at least 8 characters.">
+                <SectionTitle sub="Enter your current password, then choose a new one with at least 8 characters.">
                   Change Password
                 </SectionTitle>
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  <Input label="New Password" type="password" value={pwForm.newPw}
+                  <PasswordInput label="Current Password" value={pwForm.current}
+                    onChange={v => setPwForm(f => ({ ...f, current: v }))}
+                    placeholder="Enter your current password" />
+                  <PasswordInput label="New Password" value={pwForm.newPw}
                     onChange={v => setPwForm(f => ({ ...f, newPw: v }))}
                     placeholder="Enter new password" />
-                  <Input label="Confirm New Password" type="password" value={pwForm.confirm}
+                  <PasswordInput label="Confirm New Password" value={pwForm.confirm}
                     onChange={v => setPwForm(f => ({ ...f, confirm: v }))}
                     placeholder="Re-enter new password" />
 
                   {/* Password strength */}
-                  {pwForm.newPw && (
-                    <div>
-                      <div style={{ fontSize: 11, color: G.light, marginBottom: 4 }}>Password strength</div>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        {["Weak", "Fair", "Good", "Strong"].map((s, i) => {
-                          const len = pwForm.newPw.length;
-                          const hasUpper = /[A-Z]/.test(pwForm.newPw);
-                          const hasNum   = /\d/.test(pwForm.newPw);
-                          const hasSpec  = /[^a-zA-Z0-9]/.test(pwForm.newPw);
-                          const score = (len >= 8 ? 1 : 0) + (hasUpper ? 1 : 0) + (hasNum ? 1 : 0) + (hasSpec ? 1 : 0);
-                          const colors = ["#e74c3c", "#e67e22", "#f1c40f", G.base];
-                          const active = i < score;
-                          return (
-                            <div key={s} style={{ flex: 1 }}>
-                              <div style={{ height: 4, borderRadius: 2,
-                                background: active ? colors[Math.min(score - 1, 3)] : G.wash }} />
-                            </div>
-                          );
-                        })}
+                  {pwForm.newPw && (() => {
+                    const pw = pwForm.newPw;
+                    const score = (pw.length >= 8 ? 1 : 0) + (/[A-Z]/.test(pw) ? 1 : 0) + (/\d/.test(pw) ? 1 : 0) + (/[^a-zA-Z0-9]/.test(pw) ? 1 : 0);
+                    const colors = ["#e74c3c", "#e67e22", "#f1c40f", G.base];
+                    const labels = ["Weak", "Fair", "Good", "Strong"];
+                    return (
+                      <div>
+                        <div style={{ fontSize: 11, color: G.light, marginBottom: 4 }}>
+                          Password strength: <strong style={{ color: score ? colors[score - 1] : "#e74c3c" }}>{score ? labels[score - 1] : "Weak"}</strong>
+                        </div>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {[0, 1, 2, 3].map(i => (
+                            <div key={i} style={{ flex: 1, height: 4, borderRadius: 2,
+                              background: i < score ? colors[Math.max(score - 1, 0)] : G.wash }} />
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {pwMsg && <Alert message={pwMsg.text} type={pwMsg.type} />}
                   <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -468,131 +578,54 @@ export default function AdminProfilePage({ user, onClose }) {
                 </div>
               </Card>
 
-              <Card>
-                <SectionTitle sub="Overview of your account security.">Security Status</SectionTitle>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {[
-                    { label: "Email Verified",    status: !!user?.email_confirmed_at,   ok: true  },
-                    { label: "Strong Password",   status: true,                          ok: true  },
-                    { label: "Two-Factor Auth",   status: false,                         ok: false },
-                    { label: "Active Session",    status: true,                          ok: true  },
-                  ].map(({ label, status }) => (
-                    <div key={label} style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "10px 14px", background: "#F5F7F5", borderRadius: 10,
-                    }}>
-                      <span style={{ fontSize: 13, color: G.dark }}>{label}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700,
-                        color: status ? G.base : "#e67e22" }}>
-                        {status ? "Active" : "Not set"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
             </div>
           )}
 
           {/* ── Activity Tab ── */}
           {tab === "activity" && (
             <Card>
-              <SectionTitle sub="Your 20 most recent actions in the admin panel.">
-                Recent Activity
-              </SectionTitle>
-              {activity.length === 0 ? (
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                <SectionTitle sub="Your 20 most recent actions in the admin panel.">
+                  Recent Activity
+                </SectionTitle>
+                <Btn small variant="ghost" onClick={fetchActivity}><i className="bi bi-arrow-clockwise me-1"/>Refresh</Btn>
+              </div>
+              {activityErr ? (
+                <Alert message={activityErr} type="error" />
+              ) : activity.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#aaa" }}>
-                  <div style={{ fontSize: 36, marginBottom: 8 }}><i className="bi bi-file-earmark-text me-1"/></div>
+                  <div style={{ fontSize: 36, marginBottom: 8 }}><i className="bi bi-clock-history"/></div>
                   No activity recorded yet.
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  {activity.map((a, i) => (
-                    <div key={a.id ?? i} style={{
-                      display: "flex", alignItems: "center", gap: 12,
-                      padding: "10px 12px", borderRadius: 10,
-                      background: i % 2 === 0 ? G.cream : "transparent",
-                    }}>
-                      <div className="icon-box-sm bg-primary-subtle d-flex align-items-center justify-content-center flex-shrink-0" style={{borderRadius:"50%"}}>
-                        <i className={`bi ${activityIcon(a.type ?? a.action_type)} text-primary`} style={{fontSize:13}}/>
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, color: G.dark, fontWeight: 500 }}>
-                          {a.action ?? a.description ?? "Action performed"}
+                  {activity.map((a, i) => {
+                    const action  = a.action_type ?? a.activity_type ?? "";
+                    const details = activityDetails(a.metadata);
+                    return (
+                      <div key={a.id ?? i} style={{
+                        display: "flex", alignItems: "center", gap: 12,
+                        padding: "10px 12px", borderRadius: 10,
+                        background: i % 2 === 0 ? G.cream : "transparent",
+                      }}>
+                        <div style={{ width: 30, height: 30, borderRadius: "50%", background: G.wash, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <i className={`bi ${activityIcon(action)}`} style={{ fontSize: 13, color: G.mid }}/>
                         </div>
-                        {a.details && (
-                          <div style={{ fontSize: 11, color: G.light, marginTop: 1 }}>{a.details}</div>
-                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, color: G.dark, fontWeight: 500 }}>{activityLabel(action)}</div>
+                          {details && (
+                            <div style={{ fontSize: 11, color: "#888", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{details}</div>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#aaa", flexShrink: 0 }}>
+                          {fmtDateTime(a.created_at)}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 11, color: "#aaa", flexShrink: 0 }}>
-                        {fmtShort(a.created_at)}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </Card>
-          )}
-
-          {/* ── Settings Tab ── */}
-          {tab === "settings" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-              <Card>
-                <SectionTitle sub="Manage your admin account preferences.">
-                  Account Settings
-                </SectionTitle>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {[
-                    { label: "Email Notifications",   sub: "Receive updates via email",         on: true  },
-                    { label: "Login Alerts",          sub: "Alert on new sign-in",               on: true  },
-                    { label: "Activity Digest",       sub: "Weekly summary of admin actions",    on: false },
-                    { label: "Dark Mode",             sub: "Coming soon",                        on: false, disabled: true },
-                  ].map(pref => (
-                    <div key={pref.label} style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "12px 16px", background: "#F5F7F5", borderRadius: 10,
-                      opacity: pref.disabled ? 0.5 : 1,
-                    }}>
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: G.dark }}>{pref.label}</div>
-                        <div style={{ fontSize: 11, color: G.light }}>{pref.sub}</div>
-                      </div>
-                      <div style={{
-                        width: 40, height: 22, borderRadius: 11,
-                        background: pref.on ? G.base : "#ddd",
-                        position: "relative", cursor: pref.disabled ? "default" : "pointer",
-                        transition: "background .2s",
-                      }}>
-                        <div style={{
-                          position: "absolute", top: 3,
-                          left: pref.on ? 20 : 3,
-                          width: 16, height: 16, borderRadius: "50%",
-                          background: "#fff", transition: "left .2s",
-                          boxShadow: "0 1px 3px rgba(0,0,0,.2)",
-                        }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-
-              <Card style={{ border: `1px solid #fecaca` }}>
-                <SectionTitle sub="Irreversible actions. Proceed with caution.">
-                  Danger Zone
-                </SectionTitle>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "12px 16px", background: "#fef2f2", borderRadius: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#c0392b" }}>Sign out all sessions</div>
-                    <div style={{ fontSize: 11, color: "#e74c3c" }}>Force logout from all devices</div>
-                  </div>
-                  <Btn small variant="danger" onClick={async () => {
-                    if (window.confirm("Sign out from all devices?")) {
-                      await supabase.auth.signOut({ scope: "global" });
-                    }
-                  }}>Sign Out All</Btn>
-                </div>
-              </Card>
-            </div>
           )}
         </div>
       </div>

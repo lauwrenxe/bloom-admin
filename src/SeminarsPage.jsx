@@ -1456,16 +1456,6 @@ function AttendanceReportTab({ seminar }) {
 
   return (
     <div>
-      <div style={{ background: G.wash, border: `1px solid ${G.pale}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18, fontSize: 13, color: G.dark, display: "flex", alignItems: "center", gap: 10 }}>
-        <i className="bi bi-info-circle-fill" style={{ color: G.base, flexShrink: 0 }}/>
-        <div>
-          Attendance is logged automatically when students join and leave the meeting. If a student disconnects and rejoins, their time is added together.
-          {totalMins > 0
-            ? <> The meeting lasted <strong>{totalMins} minutes</strong>. Participants who attended at least <strong>{neededMins} minutes</strong> (80%) are eligible for a certificate.</>
-            : <> Eligibility is set automatically when you end the meeting. You can also click <strong>Auto-Mark Eligible</strong>.</>}
-        </div>
-      </div>
-
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
           { label: "Total",    value: stats.total,   color: G.base    },
@@ -1573,11 +1563,6 @@ function AttendanceReportTab({ seminar }) {
                     <td style={{ ...s.td, fontSize: 12 }}>{fmtTime(l.leave_time)}</td>
                     <td style={s.td}>
                       <span style={{ fontWeight: 700, color: G.base }}>{fmtDuration(l.duration_minutes)}</span>
-                      {l.session_started_at && (
-                        <div style={{ fontSize: 10, color: "#16a34a", fontWeight: 700, marginTop: 2 }}>
-                          ● In call since {fmtTime(l.session_started_at)}
-                        </div>
-                      )}
                     </td>
                     <td style={s.td}>
                       <span style={s.tag(statusColor(l.attendance_status))}>
@@ -1949,4 +1934,4 @@ export default function SeminarsPage() {
       )}
     </div>
   );
-} 
+}
