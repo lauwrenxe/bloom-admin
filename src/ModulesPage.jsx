@@ -650,9 +650,9 @@ Rules: multiple_choice=4 options 1 correct; true_false=["True","False"] 1 correc
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: "llama-3.1-8b-instant",
+          model: "openai/gpt-oss-20b", reasoning_effort: "low",
           temperature: 0.4,
-          max_tokens: 3000,
+          max_tokens: 6000,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: `Module: "${module.title}"\n\nTopic/Content: ${aiPrompt.trim()}\n\nGenerate ${aiCount} ${aiType} questions.` },
@@ -1628,9 +1628,9 @@ Return ONLY the HTML content, no markdown, no explanation, no code blocks.`;
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
           body: JSON.stringify({
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b", reasoning_effort: "low",
             messages: [{ role: "user", content: prompt }],
-            temperature: 0.7, max_tokens: 2000,
+            temperature: 0.7, max_tokens: 6000,
           }),
         });
         if (!res.ok) throw new Error(`Groq API error: ${res.status}`);
@@ -1663,9 +1663,9 @@ Return ONLY a valid JSON array, no markdown, no explanation, no code blocks. For
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
           body: JSON.stringify({
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b", reasoning_effort: "low",
             messages: [{ role: "user", content: prompt }],
-            temperature: 0.7, max_tokens: 2000,
+            temperature: 0.7, max_tokens: 6000,
           }),
         });
         if (!res.ok) throw new Error(`Groq API error: ${res.status}`);

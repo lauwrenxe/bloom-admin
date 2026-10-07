@@ -211,6 +211,11 @@ export default function AdminProfilePage({ user, onClose }) {
   const [pwForm,       setPwForm]       = useState({ current: "", newPw: "", confirm: "" });
   const [pwMsg,        setPwMsg]        = useState(null);
   const [pwSaving,     setPwSaving]     = useState(false);
+  const [currentEmail, setCurrentEmail] = useState(user?.email || "");
+  const [pendingEmail, setPendingEmail] = useState("");
+  const [emForm,       setEmForm]       = useState({ newEmail: "", password: "" });
+  const [emMsg,        setEmMsg]        = useState(null);
+  const [emSaving,     setEmSaving]     = useState(false);
   const [activity,     setActivity]     = useState([]);
   const [activityErr,  setActivityErr]  = useState("");
   const [stats,        setStats]        = useState({});
@@ -229,9 +234,20 @@ export default function AdminProfilePage({ user, onClose }) {
 
   // ── Fetch profile ─────────────────────────────────────────────
   const fetchProfile = async () => {
+    // Fresh login info: shows the current email and any change waiting for confirmation
+    const { data: { user: fresh } } = await supabase.auth.getUser();
+    if (fresh) {
+      setCurrentEmail(fresh.email || "");
+      setPendingEmail(fresh.new_email || "");
+    }
     const { data, error } = await supabase
       .from("profiles").select("*").eq("id", user.id).maybeSingle();
     if (error || !data) { setProfile({}); setProfileForm({}); return; }
+    // A confirmed email change updates the login email — copy it to the profile too
+    if (fresh?.email && data.email !== fresh.email) {
+      await supabase.from("profiles").update({ email: fresh.email }).eq("id", user.id);
+      data.email = fresh.email;
+    }
     setProfile(data);
     setProfileForm({
       full_name:      data.full_name      ?? "",
@@ -303,6 +319,43 @@ export default function AdminProfilePage({ user, onClose }) {
   };
 
   // ── Change password (current password required) ───────────────
+  // ── Change email (current password required, confirmed by email) ──
+  const changeEmail = async () => {
+    setEmMsg(null);
+    const next = emForm.newEmail.trim().toLowerCase();
+    if (!next) { setEmMsg({ type: "error", text: "Please enter your new email address." }); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next)) { setEmMsg({ type: "error", text: "Please enter a valid email address." }); return; }
+    if (next === (currentEmail || "").toLowerCase()) { setEmMsg({ type: "error", text: "That is already your email address." }); return; }
+    if (!emForm.password) { setEmMsg({ type: "error", text: "Please enter your current password." }); return; }
+
+    setEmSaving(true);
+    const { error: checkErr } = await supabase.auth.signInWithPassword({ email: currentEmail, password: emForm.password });
+    if (checkErr) {
+      setEmSaving(false);
+      setEmMsg({ type: "error", text: "Your current password is incorrect." });
+      return;
+    }
+    const { error } = await supabase.auth.updateUser(
+      { email: next },
+      { emailRedirectTo: window.location.origin }
+    );
+    setEmSaving(false);
+    if (error) {
+      setEmMsg({ type: "error", text: /already|registered|exists/i.test(error.message)
+        ? "That email is already used by another account."
+        : /rate|too many|seconds/i.test(error.message)
+          ? "Too many requests. Please wait a minute and try again."
+          : "Could not change your email: " + error.message });
+      return;
+    }
+    setPendingEmail(next);
+    setEmForm({ newEmail: "", password: "" });
+    setEmMsg({ type: "success", text: `Almost done! We sent a confirmation link to ${next}. Your email changes after you open it. (If asked, also confirm from your current inbox.)` });
+    supabase.from("activity_logs").insert({
+      user_id: user.id, action_type: "email_change_requested", metadata: { new_email: next }, created_at: new Date().toISOString(),
+    }).then(() => fetchActivity(), () => {});
+  };
+
   const changePassword = async () => {
     setPwMsg(null);
     if (!pwForm.current) { setPwMsg({ type: "error", text: "Please enter your current password." }); return; }
@@ -475,8 +528,8 @@ export default function AdminProfilePage({ user, onClose }) {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                   <Input label="Full Name *" value={profileForm.full_name} maxLength={100}
                     onChange={v => setProfileForm(f => ({ ...f, full_name: v }))} />
-                  <Input label="Email Address" value={user?.email} disabled
-                    hint="Contact another administrator to change your email." />
+                  <Input label="Email Address" value={currentEmail} disabled
+                    hint={pendingEmail ? `Waiting for confirmation: ${pendingEmail}` : "To change your email, go to the Security tab."} />
                   <Input label="Phone Number" value={profileForm.contact_number} maxLength={20}
                     onChange={v => setProfileForm(f => ({ ...f, contact_number: v }))}
                     placeholder="+63 9XX XXX XXXX" />
@@ -533,6 +586,33 @@ export default function AdminProfilePage({ user, onClose }) {
           {/* ── Security Tab ── */}
           {tab === "security" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              <Card>
+                <SectionTitle sub="You'll sign in with your new email after you confirm it.">
+                  Change Email
+                </SectionTitle>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <Input label="Current Email" value={currentEmail} disabled />
+                  {pendingEmail && (
+                    <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 6, padding: "10px 14px", fontSize: 12.5, color: "#9a3412" }}>
+                      <i className="bi bi-hourglass-split me-1"/>
+                      Waiting for you to confirm <strong>{pendingEmail}</strong>. Open the link in that inbox to finish.
+                    </div>
+                  )}
+                  <Input label="New Email" type="email" value={emForm.newEmail} maxLength={254}
+                    onChange={v => setEmForm(f => ({ ...f, newEmail: v }))}
+                    placeholder="new.email@cvsu.edu.ph" />
+                  <PasswordInput label="Current Password" value={emForm.password}
+                    onChange={v => setEmForm(f => ({ ...f, password: v }))}
+                    placeholder="Enter your current password to confirm" />
+                  {emMsg && <Alert message={emMsg.text} type={emMsg.type} />}
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <Btn onClick={changeEmail} disabled={emSaving}>
+                      {emSaving ? "Sending…" : "Change Email"}
+                    </Btn>
+                  </div>
+                </div>
+              </Card>
+
               <Card>
                 <SectionTitle sub="Enter your current password, then choose a new one with at least 8 characters.">
                   Change Password

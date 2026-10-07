@@ -1021,6 +1021,8 @@ export default function StudentsPage() {
 
   useEffect(() => { supabase.auth.getUser().then(({ data }) => setMyId(data?.user?.id ?? null)); }, []);
   const [masterlist, setMasterlist] = useState([]);
+  const [mlSelected, setMlSelected] = useState(() => new Set());
+  const [mlDeleting, setMlDeleting] = useState(false);
   const [inactivityDays] = useState(30);
 
   const loadUsers = useCallback(async () => {
@@ -1110,6 +1112,54 @@ export default function StudentsPage() {
         logActivity("admin_access_removed", { email: admin.email, name: admin.full_name });
         toast(`${name} is no longer an admin.`, "success");
         loadUsers();
+      },
+    });
+  };
+
+  // Remove one or many people from the masterlist
+  const removeFromMasterlist = (entries) => {
+    if (!entries.length) return;
+    const registered = new Set(users.map(u => (u.email || "").toLowerCase()));
+    const signedUpCount = entries.filter(e => registered.has((e.cvsu_email || "").toLowerCase())).length;
+    const single = entries.length === 1;
+    const who = single ? (entries[0].full_name || entries[0].cvsu_email) : `${entries.length} people`;
+    setConfirm({
+      title: single ? "Remove from Masterlist" : `Remove ${entries.length} People from Masterlist`,
+      message: (
+        <>
+          Remove <strong>{who}</strong> from the masterlist? They will no longer be able to sign up in the BLOOM app.
+          {signedUpCount > 0 && (
+            <div style={{ marginTop: 10, background: "#fef3c7", borderRadius: 6, padding: "8px 10px", color: "#92400e" }}>
+              <i className="bi bi-exclamation-triangle me-1"/>
+              {single ? "This person already has an app account and" : `${signedUpCount} of them already have app accounts and`} will be <strong>signed out and blocked</strong> from the app.
+              Their records (attendance, certificates) are kept. To block someone temporarily instead, use the <strong>Allowed / Blocked</strong> button.
+            </div>
+          )}
+        </>
+      ),
+      confirmLabel: single ? "Remove" : `Remove ${entries.length}`,
+      danger: true,
+      onConfirm: async () => {
+        setConfirm(null); setMlDeleting(true);
+        const emails = entries.map(e => e.cvsu_email);
+        let removed = [];
+        let failedMsg = "";
+        for (let i = 0; i < emails.length; i += 200) {
+          const chunk = emails.slice(i, i + 200);
+          const { data, error } = await supabase.from("masterlist").delete().in("cvsu_email", chunk).select("cvsu_email");
+          if (error) { failedMsg = error.message; break; }
+          removed = removed.concat((data || []).map(d => d.cvsu_email));
+        }
+        setMlDeleting(false);
+        if (removed.length) {
+          const gone = new Set(removed);
+          setMasterlist(list => list.filter(m => !gone.has(m.cvsu_email)));
+          setMlSelected(sel => { const n = new Set(sel); removed.forEach(e => n.delete(e)); return n; });
+          logActivity("masterlist_entries_removed", { count: removed.length });
+          toast(`${removed.length} ${removed.length === 1 ? "person" : "people"} removed from the masterlist.`, "success");
+        }
+        if (failedMsg) toast("Could not remove: " + failedMsg, "error");
+        else if (removed.length < emails.length) toast("Some entries could not be removed (no permission).", "error");
       },
     });
   };
@@ -1392,6 +1442,29 @@ export default function StudentsPage() {
               <i className="bi bi-info-circle me-1"/>
               Only people in the masterlist can sign up in the BLOOM app. Use <strong>Add User</strong> to add non-academic staff or guests from outside CvSU.
             </div>
+            {(() => {
+              const visibleSelected = rows.filter(m => mlSelected.has(m.cvsu_email));
+              if (mlSelected.size === 0) return null;
+              return (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
+                  <strong style={{ color: "#9a3412" }}>{mlSelected.size} selected</strong>
+                  <button onClick={() => setMlSelected(new Set())}
+                    style={{ background: "none", border: "none", color: "#9a3412", textDecoration: "underline", cursor: "pointer", fontSize: 12 }}>
+                    Clear selection
+                  </button>
+                  <button disabled={mlDeleting}
+                    onClick={() => removeFromMasterlist(masterlist.filter(m => mlSelected.has(m.cvsu_email)))}
+                    style={{ marginLeft: "auto", padding: "7px 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: mlDeleting ? "wait" : "pointer", fontWeight: 700, fontSize: 12 }}>
+                    <i className="bi bi-trash me-1"/>{mlDeleting ? "Removing…" : `Remove ${mlSelected.size} from Masterlist`}
+                  </button>
+                  {visibleSelected.length < mlSelected.size && (
+                    <span style={{ width: "100%", fontSize: 11, color: "#9a3412" }}>
+                      {mlSelected.size - visibleSelected.length} selected {mlSelected.size - visibleSelected.length === 1 ? "person is" : "people are"} hidden by your current search or filter.
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
             {loading ? <div style={{ padding: 40, textAlign: "center", color: "#aaa" }}>Loading masterlist…</div>
               : rows.length === 0 ? (
                 <div style={s.emptyBox}>
@@ -1402,15 +1475,33 @@ export default function StudentsPage() {
                 <div style={{ overflowX: "auto" }}>
                   <table style={s.table}>
                     <thead><tr>
+                      <th style={{ ...s.th, width: 36 }}>
+                        <input type="checkbox" title="Select all shown"
+                          checked={rows.length > 0 && rows.every(m => mlSelected.has(m.cvsu_email))}
+                          ref={el => { if (el) el.indeterminate = rows.some(m => mlSelected.has(m.cvsu_email)) && !rows.every(m => mlSelected.has(m.cvsu_email)); }}
+                          onChange={e => setMlSelected(sel => {
+                            const n = new Set(sel);
+                            rows.forEach(m => e.target.checked ? n.add(m.cvsu_email) : n.delete(m.cvsu_email));
+                            return n;
+                          })}/>
+                      </th>
                       <th style={s.th}>Name</th><th style={s.th}>Email</th><th style={s.th}>Role</th>
-                      <th style={s.th}>Department / Organization</th><th style={s.th}>App Status</th><th style={s.th}>Can Sign Up</th>
+                      <th style={s.th}>Department / Organization</th><th style={s.th}>App Status</th><th style={s.th}>Can Sign Up</th><th style={s.th}></th>
                     </tr></thead>
                     <tbody>
                       {rows.map(m => {
                         const signedUp = registeredEmails.has((m.cvsu_email || "").toLowerCase());
                         const enabled  = m.is_active !== false;
                         return (
-                          <tr key={m.cvsu_email}>
+                          <tr key={m.cvsu_email} style={mlSelected.has(m.cvsu_email) ? { background: "#fff7ed" } : undefined}>
+                            <td style={{ ...s.td, width: 36 }}>
+                              <input type="checkbox" checked={mlSelected.has(m.cvsu_email)}
+                                onChange={e => setMlSelected(sel => {
+                                  const n = new Set(sel);
+                                  e.target.checked ? n.add(m.cvsu_email) : n.delete(m.cvsu_email);
+                                  return n;
+                                })}/>
+                            </td>
                             <td style={s.td}><div style={{ fontWeight: 600 }}>{m.full_name || "—"}</div>{m.contact_number && <div style={{ fontSize: 11, color: "#aaa" }}>{m.contact_number}</div>}</td>
                             <td style={s.td}>{m.cvsu_email}</td>
                             <td style={s.td}><RoleBadge role={m.role || "unknown"} /></td>
@@ -1425,6 +1516,12 @@ export default function StudentsPage() {
                                 style={{ padding: "5px 10px", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer", fontWeight: 600,
                                   background: enabled ? "#dcfce7" : "#fee2e2", color: enabled ? "#16a34a" : "#dc2626" }}>
                                 {enabled ? "Allowed" : "Blocked"}
+                              </button>
+                            </td>
+                            <td style={s.td}>
+                              <button onClick={() => removeFromMasterlist([m])} disabled={mlDeleting} title="Remove from masterlist"
+                                style={{ padding: "5px 9px", border: "none", borderRadius: 6, background: "#fee2e2", color: "#dc2626", cursor: "pointer", fontSize: 12 }}>
+                                <i className="bi bi-trash"/>
                               </button>
                             </td>
                           </tr>

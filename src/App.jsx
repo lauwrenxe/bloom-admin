@@ -455,7 +455,7 @@ function LandingPage({ onAdminClick }) {
 }
 
 /* ─── ADMIN LOGIN (reached only via the landing page's hidden button) ── */
-function LoginPage({ onLogin, onBack }) {
+function LoginPage({ onLogin, onBack, notice }) {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [error,    setError]    = useState("");
@@ -463,6 +463,29 @@ function LoginPage({ onLogin, onBack }) {
   const [emailErr, setEmailErr] = useState(false);
   const [passErr,  setPassErr]  = useState(false);
   const [showPass, setShowPass] = useState(false);
+  // Forgot password
+  const [mode,        setMode]        = useState("login"); // "login" | "forgot" | "sent"
+  const [resetEmail,  setResetEmail]  = useState("");
+  const [resetErr,    setResetErr]    = useState("");
+  const [resetSending,setResetSending]= useState(false);
+
+  const sendReset = async () => {
+    setResetErr("");
+    const clean = resetEmail.trim().toLowerCase();
+    if (!clean) { setResetErr("Please enter your email address."); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) { setResetErr("Please enter a valid email address."); return; }
+    setResetSending(true);
+    const { error: e } = await supabase.auth.resetPasswordForEmail(clean, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    setResetSending(false);
+    if (e && /rate|too many|seconds/i.test(e.message)) {
+      setResetErr("Too many requests. Please wait a minute before trying again.");
+      return;
+    }
+    // Don't reveal whether the email has an account — always show the same message
+    setMode("sent");
+  };
 
   const submit = async () => {
     setError(""); setEmailErr(false); setPassErr(false);
@@ -520,7 +543,55 @@ function LoginPage({ onLogin, onBack }) {
               <div style={{ fontSize:12,color:"rgba(255,255,255,.6)" }}>GADRC CvSU Admin Portal</div>
             </div>
           </div>
+          {mode === "forgot" && (
+            <div className="card-body p-4">
+              <h5 className="fw-bold mb-1" style={{ color:"#1A2E1A" }}>Reset your password</h5>
+              <p className="text-muted mb-4" style={{ fontSize:13 }}>Enter your admin email and we'll send you a link to set a new password.</p>
+              <div className="mb-3">
+                <label className="form-label fw-semibold" style={{ fontSize:12 }}>Email address</label>
+                <input className={`form-control ${resetErr?"is-invalid":""}`} type="email" autoFocus
+                  value={resetEmail} onChange={e=>{setResetEmail(e.target.value);setResetErr("");}}
+                  placeholder="admin@cvsu.edu.ph" onKeyDown={e=>e.key==="Enter"&&!resetSending&&sendReset()}/>
+                {resetErr&&<div className="invalid-feedback">{resetErr}</div>}
+              </div>
+              <button className="btn btn-primary w-100 d-flex align-items-center justify-content-center gap-2"
+                onClick={sendReset} disabled={resetSending} style={{ padding:"10px" }}>
+                {resetSending
+                  ? <><span className="spinner-border spinner-border-sm"/>Sending…</>
+                  : <><i className="bi bi-envelope"/>Send reset link</>}
+              </button>
+              <button className="btn btn-sm w-100 mt-2 border-0" style={{ color:"#5A7D5A", background:"transparent" }}
+                onClick={()=>{setMode("login");setResetErr("");}}>
+                <i className="bi bi-arrow-left me-1"/>Back to sign in
+              </button>
+            </div>
+          )}
+
+          {mode === "sent" && (
+            <div className="card-body p-4 text-center">
+              <div className="mx-auto mb-3 d-flex align-items-center justify-content-center"
+                style={{ width:56,height:56,borderRadius:14,background:"#E8F5E9" }}>
+                <i className="bi bi-envelope-check" style={{ fontSize:26,color:"#2D6A2D" }}/>
+              </div>
+              <h5 className="fw-bold mb-2" style={{ color:"#1A2E1A" }}>Check your email</h5>
+              <p className="text-muted mb-4" style={{ fontSize:13,lineHeight:1.6 }}>
+                If <strong>{resetEmail.trim()}</strong> belongs to a BLOOM account, a password reset link has been sent.
+                Open it on this device to set a new password. Check your spam folder if you don't see it within a few minutes.
+              </p>
+              <button className="btn btn-primary w-100" style={{ padding:"10px" }}
+                onClick={()=>{setMode("login");setEmail(resetEmail.trim());}}>
+                Back to sign in
+              </button>
+            </div>
+          )}
+
+          {mode === "login" && (
           <div className="card-body p-4">
+            {notice && (
+              <div className="alert alert-success d-flex align-items-center gap-2 py-2" style={{ fontSize:13,borderRadius:8 }}>
+                <i className="bi bi-check-circle-fill"/>{notice}
+              </div>
+            )}
             <h5 className="fw-bold mb-1" style={{ color:"#1A2E1A" }}>Sign in</h5>
             <p className="text-muted mb-4" style={{ fontSize:13 }}>Use your GADRC admin credentials</p>
             <div className="mb-3">
@@ -544,6 +615,13 @@ function LoginPage({ onLogin, onBack }) {
                 </button>
               </div>
               {passErr&&<div className="invalid-feedback d-block">This field is required</div>}
+              <div className="text-end mt-1">
+                <button type="button" className="btn btn-link p-0 border-0"
+                  style={{ fontSize:12,color:"#2D6A2D",fontWeight:600,textDecoration:"none" }}
+                  onClick={()=>{setResetEmail(email.trim());setResetErr("");setMode("forgot");}}>
+                  Forgot password?
+                </button>
+              </div>
             </div>
             {error && (
               <div className="alert alert-danger d-flex align-items-center gap-2 py-2" style={{ fontSize:13,borderRadius:8 }}>
@@ -561,6 +639,7 @@ function LoginPage({ onLogin, onBack }) {
               Admin access only · Contact GADRC IT for support
             </p>
           </div>
+          )}
         </div>
 
         {onBack && (
@@ -570,6 +649,109 @@ function LoginPage({ onLogin, onBack }) {
           </button>
         )}
 
+      </div>
+    </div>
+  );
+}
+
+/* ─── SET NEW PASSWORD (opened from the reset email link) ──────── */
+function ResetPasswordView({ onDone, onCancel }) {
+  const [pw,       setPw]       = useState("");
+  const [confirm,  setConfirm]  = useState("");
+  const [show,     setShow]     = useState(false);
+  const [error,    setError]    = useState("");
+  const [saving,   setSaving]   = useState(false);
+
+  const save = async () => {
+    setError("");
+    if (pw.length < 8)  { setError("Password must be at least 8 characters."); return; }
+    if (pw !== confirm) { setError("Passwords do not match."); return; }
+    setSaving(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      setSaving(false);
+      setError("This reset link is invalid or has expired. Please request a new one.");
+      return;
+    }
+    const { error: e } = await supabase.auth.updateUser({ password: pw });
+    setSaving(false);
+    if (e) {
+      setError(/same|different/i.test(e.message)
+        ? "Your new password must be different from your old password."
+        : "Could not update your password: " + e.message);
+      return;
+    }
+    await supabase.auth.signOut();
+    onDone();
+  };
+
+  const strength = (() => {
+    let n = 0;
+    if (pw.length >= 8) n++;
+    if (/[A-Z]/.test(pw)) n++;
+    if (/\d/.test(pw)) n++;
+    if (/[^a-zA-Z0-9]/.test(pw)) n++;
+    return n;
+  })();
+  const sColors = ["#e74c3c","#e67e22","#f1c40f","#2D6A2D"];
+  const sLabels = ["Weak","Fair","Good","Strong"];
+
+  const field = (label, value, setValue, auto) => (
+    <div className="mb-3">
+      <label className="form-label fw-semibold" style={{ fontSize:12 }}>{label}</label>
+      <div style={{ position:"relative" }}>
+        <input className="form-control" type={show?"text":"password"} value={value} autoComplete={auto}
+          onChange={e=>{setValue(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&!saving&&save()}
+          style={{ paddingRight:40 }}/>
+        <button type="button" onClick={()=>setShow(v=>!v)} aria-label={show?"Hide password":"Show password"}
+          style={{ position:"absolute", right:6, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:"#888", cursor:"pointer", padding:"4px 6px", fontSize:15, lineHeight:1 }}>
+          <i className={`bi ${show?"bi-eye-slash":"bi-eye"}`}/>
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-vh-100 d-flex align-items-center justify-content-center"
+      style={{ background:"linear-gradient(135deg,#F1F8F1 0%,#E8F5E9 50%,#D7EED7 100%)" }}>
+      <div className="card border-0 shadow-lg overflow-hidden" style={{ width:420, borderRadius:14 }}>
+        <div className="p-4 d-flex align-items-center gap-3" style={{ background:"linear-gradient(135deg,#2D6A2D,#1A2E1A)" }}>
+          <div className="icon-box bg-white bg-opacity-10 text-white" style={{ width:48,height:48,borderRadius:12,fontSize:22 }}>
+            <i className="bi bi-shield-lock"/>
+          </div>
+          <div>
+            <div className="fw-bold text-white" style={{ fontSize:18 }}>BLOOM GAD</div>
+            <div style={{ fontSize:12,color:"rgba(255,255,255,.6)" }}>Set a new password</div>
+          </div>
+        </div>
+        <div className="card-body p-4">
+          <h5 className="fw-bold mb-1" style={{ color:"#1A2E1A" }}>Create a new password</h5>
+          <p className="text-muted mb-4" style={{ fontSize:13 }}>Use at least 8 characters. A mix of uppercase letters, numbers, and symbols is stronger.</p>
+          {field("New password", pw, setPw, "new-password")}
+          {pw && (
+            <div className="mb-3" style={{ marginTop:-6 }}>
+              <div className="d-flex gap-1">
+                {[0,1,2,3].map(i=>(
+                  <div key={i} style={{ flex:1,height:4,borderRadius:2,background:i<strength?sColors[Math.max(strength-1,0)]:"#E8F5E9" }}/>
+                ))}
+              </div>
+              <div style={{ fontSize:11,color:"#888",marginTop:4 }}>Strength: <strong style={{ color:strength?sColors[strength-1]:"#e74c3c" }}>{strength?sLabels[strength-1]:"Weak"}</strong></div>
+            </div>
+          )}
+          {field("Confirm new password", confirm, setConfirm, "new-password")}
+          {error && (
+            <div className="alert alert-danger d-flex align-items-center gap-2 py-2" style={{ fontSize:13,borderRadius:8 }}>
+              <i className="bi bi-exclamation-triangle-fill"/>{error}
+            </div>
+          )}
+          <button className="btn btn-primary w-100 d-flex align-items-center justify-content-center gap-2"
+            onClick={save} disabled={saving} style={{ padding:"10px" }}>
+            {saving ? <><span className="spinner-border spinner-border-sm"/>Saving…</> : <><i className="bi bi-check-lg"/>Save new password</>}
+          </button>
+          <button className="btn btn-sm w-100 mt-2 border-0" style={{ color:"#5A7D5A", background:"transparent" }} onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -940,6 +1122,20 @@ export default function App() {
   const [userRole,          setUserRole]          = useState(null);
   const [showDeactivated,   setShowDeactivated]   = useState(false);
   const [showAdminLogin,    setShowAdminLogin]    = useState(false); // gate: landing page vs admin login form
+  // Password reset link (from the email) → show the "set new password" screen
+  const [recoveryMode,      setRecoveryMode]      = useState(
+    window.location.pathname === "/reset-password" || /type=recovery/.test(window.location.hash)
+  );
+  const [loginNotice,       setLoginNotice]       = useState("");
+  const recoveryRef = useRef(recoveryMode);
+  useEffect(() => { recoveryRef.current = recoveryMode; }, [recoveryMode]);
+
+  const leaveRecovery = (notice) => {
+    window.history.replaceState({}, "", "/");
+    setRecoveryMode(false);
+    setLoginNotice(notice || "");
+    setShowAdminLogin(true);
+  };
   const [isSuperAdminRoute, setIsSuperAdminRoute] = useState(
     window.location.pathname === "/super-admin" || window.location.hash === "#super-admin"
   );
@@ -962,6 +1158,8 @@ export default function App() {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       clearTimeout(timeout);
       try {
+        // Opened from a password-reset email: don't log in, let them set a new password
+        if (recoveryRef.current) { setChecking(false); return; }
         if (session) {
           const role = await checkRole(session.user.id);
           const isSA = window.location.hash === "#super-admin";
@@ -989,6 +1187,10 @@ export default function App() {
     }).catch(() => { clearTimeout(timeout); setChecking(false); });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setRecoveryMode(true);
+        return;
+      }
       if (event === "SIGNED_OUT") {
         setUser(null); setLoggedIn(false); setUserRole(null);
       }
@@ -1040,7 +1242,12 @@ export default function App() {
       {/* Deactivation modal — shown on top of everything */}
       {showDeactivated && <DeactivationModal onOk={handleDeactivationOk}/>}
 
-      {loggedIn && userRole === "super_admin"
+      {recoveryMode
+        ? <ResetPasswordView
+            onDone={() => leaveRecovery("Your password has been updated. Please sign in with your new password.")}
+            onCancel={async () => { await supabase.auth.signOut(); leaveRecovery(""); }}
+          />
+        : loggedIn && userRole === "super_admin"
         ? <SuperAdminPage superUser={user} onLogout={handleLogout} db={supabaseSA}/>
         : isSuperAdminRoute && userRole !== "admin"
         ? <SuperAdminLoginPage onLogin={(u, role) => { setUser(u); setUserRole(role); setLoggedIn(true); }}/>
@@ -1050,7 +1257,8 @@ export default function App() {
         ? <AdminShell onLogout={handleLogout} user={user} onDeactivated={handleDeactivated}/>
         : showAdminLogin
         ? <LoginPage
-            onBack={()=>setShowAdminLogin(false)}
+            notice={loginNotice}
+            onBack={()=>{ setShowAdminLogin(false); setLoginNotice(""); }}
             onLogin={(u, role) => { setUser(u); setUserRole(role); setLoggedIn(true); }}
           />
         : <LandingPage onAdminClick={()=>setShowAdminLogin(true)}/>
